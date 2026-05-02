@@ -1,0 +1,16 @@
+{
+  "name": "bearbrowser-runtime-adapters",
+  "version": "0.1.0-overlay",
+  "private": true,
+  "type": "module",
+  "description": "BearBrowser governed automation adapter runtime dependencies and scripts.",
+  "license": "MPL-2.0",
+  "scripts": {
+    "bearbrowser:playwright:smoke": "node runtime/playwright-smoke.mjs",
+    "bearbrowser:stagehand:check": "node runtime/stagehand-check.mjs"
+  },
+  "dependencies": {
+    "@browserbasehq/stagehand": "^2.5.0",
+    "playwright": "^1.51.0"
+  }
+}
