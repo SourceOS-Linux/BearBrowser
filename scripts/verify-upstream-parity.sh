@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="${SOURCEOS_LIBREWOLF_MIRROR_REPO:-SourceOS-Linux/librewolf-source-mirror}"
-dst="${SOURCEOS_LIBREWOLF_MIRROR_DST:-git@github.com:${repo}.git}"
+dst="${SOURCEOS_LIBREWOLF_MIRROR_DST:-https://github.com/${repo}.git}"
 
 branches="$(git ls-remote --heads "$dst" | wc -l | tr -d ' ')"
 tags="$(git ls-remote --tags "$dst" | wc -l | tr -d ' ')"
