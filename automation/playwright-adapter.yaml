@@ -1,0 +1,37 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BrowserAutomationAdapter
+metadata:
+  name: bearbrowser-playwright
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/adapter: playwright
+spec:
+  capability: browser.playwright
+  controlPlane: deterministic
+  runtimeModes:
+    - human-secure
+    - agent-runtime
+  policy:
+    mediatedBy: PolicyFabric
+    remoteDebuggingDefault: denied
+    requireSessionToken: true
+    requireEphemeralPort: true
+    denyCredentialExport: true
+  events:
+    required:
+      - browser.session.started
+      - browser.navigation.requested
+      - browser.navigation.completed
+      - browser.capture.created
+      - browser.download.created
+      - browser.policy.violation
+      - browser.session.ended
+  captures:
+    screenshots: policyMediated
+    domSnapshots: policyMediated
+    pdfExports: policyMediated
+    traces: policyMediated
+  notes:
+    - Playwright is the deterministic control plane.
+    - Playwright actions do not grant authority; PolicyFabric grants authority.
+    - Browserbase/cloud browser CDP compatibility should map through the same policy and provenance envelope.
