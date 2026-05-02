@@ -5,7 +5,27 @@ profile="agent-runtime"
 ref="latest"
 dry_run="false"
 workspace_root="build/workspaces"
-mirror="${SOURCEOS_LIBREWOLF_MIRROR_DST:-https://github.com/SourceOS-Linux/librewolf-source-mirror.git}"
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+manifest_file="$repo_root/manifests/upstream.json"
+
+mirror_from_manifest() {
+  if [ -f "$manifest_file" ]; then
+    python3 - <<PY
+import json
+from pathlib import Path
+p = Path('$manifest_file')
+data = json.loads(p.read_text())
+mirror = data.get('sourceos_mirror') or 'https://github.com/SourceOS-Linux/librewolf-source-mirror.git'
+if mirror.startswith('git@github.com:'):
+    mirror = 'https://github.com/' + mirror.split(':', 1)[1]
+print(mirror)
+PY
+  else
+    echo "https://github.com/SourceOS-Linux/librewolf-source-mirror.git"
+  fi
+}
+
+mirror="${SOURCEOS_LIBREWOLF_MIRROR_DST:-$(mirror_from_manifest)}"
 
 usage() {
   cat <<USAGE
@@ -60,7 +80,7 @@ case "$profile" in
     ;;
 esac
 
-profile_dir="settings/profiles/${profile}"
+profile_dir="$repo_root/settings/profiles/${profile}"
 if [ ! -d "$profile_dir" ]; then
   echo "ERROR: missing profile directory: $profile_dir" >&2
   exit 1
@@ -85,8 +105,8 @@ if [ -z "$resolved_ref" ]; then
 fi
 
 safe_ref="$(printf '%s' "$resolved_ref" | tr '/:@' '---')"
-workspace="${workspace_root}/${profile}-${safe_ref}"
-manifest="${workspace}/bearbrowser-overlay-manifest.json"
+workspace="$repo_root/${workspace_root}/${profile}-${safe_ref}"
+manifest="$workspace/bearbrowser-overlay-manifest.json"
 
 echo "BearBrowser overlay plan"
 echo "mirror=$mirror"
@@ -102,25 +122,22 @@ if [ "$dry_run" = "true" ]; then
 fi
 
 rm -rf "$workspace"
-mkdir -p "$workspace_root"
+mkdir -p "$(dirname "$workspace")"
 
 git clone "$mirror" "$workspace/source"
-cd "$workspace/source"
-git checkout "$resolved_ref"
+git -C "$workspace/source" checkout "$resolved_ref"
 
 patch_count=0
-if compgen -G "../../../patches/*.patch" >/dev/null; then
-  for patch in ../../../patches/*.patch; do
+if compgen -G "$repo_root/patches/*.patch" >/dev/null; then
+  for patch in "$repo_root"/patches/*.patch; do
     echo "Applying patch: $patch"
-    git apply "$patch"
+    git -C "$workspace/source" apply "$patch"
     patch_count=$((patch_count + 1))
   done
 fi
 
-mkdir -p ../overlay/settings
-cp -R "../../../${profile_dir}/." ../overlay/settings/
-
-cd - >/dev/null
+mkdir -p "$workspace/overlay/settings"
+cp -R "$profile_dir/." "$workspace/overlay/settings/"
 
 cat > "$manifest" <<EOF_MANIFEST
 {
