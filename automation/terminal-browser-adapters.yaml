@@ -1,0 +1,69 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BrowserAutomationAdapterSet
+metadata:
+  name: bearbrowser-terminal-browsers
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/adapter-class: terminal-browser
+spec:
+  controlPlane: terminal-browser
+  policy:
+    mediatedBy: PolicyFabric
+    defaultDecision: denyUnlessGranted
+    denyCredentialExport: true
+    denyAmbientHostFilesystem: true
+    requireProvenanceEvents: true
+  adapters:
+    - name: carbonyl
+      capability: browser.terminal.carbonyl
+      fidelity: chromium-terminal
+      bestFor:
+        - high-fidelity terminal browsing
+        - ssh browser sessions
+        - chromium-class web API compatibility
+      runtimeRequirement: externalBinary
+      policyMediated: true
+    - name: browsh
+      capability: browser.terminal.browsh
+      fidelity: firefox-backed-terminal
+      bestFor:
+        - low-bandwidth remote browsing
+        - firefox-backed terminal rendering
+        - ssh and server-side browsing
+      runtimeRequirement: externalBinaryAndFirefox
+      policyMediated: true
+    - name: elinks
+      capability: browser.terminal.elinks
+      fidelity: advanced-text-mode
+      bestFor:
+        - text-first navigation
+        - tables and frames
+        - scriptable terminal workflows
+      runtimeRequirement: externalBinary
+      policyMediated: true
+    - name: lynx
+      capability: browser.terminal.lynx
+      fidelity: baseline-text-mode
+      bestFor:
+        - minimal text browsing
+        - recovery shells
+        - accessibility and alt-text inspection
+      runtimeRequirement: externalBinary
+      policyMediated: true
+    - name: w3m-links
+      capability: browser.terminal.text-browser-fallback
+      fidelity: fallback-text-mode
+      bestFor:
+        - pragmatic fallback navigation
+        - package-manager available terminal browsing
+        - simple HTML inspection
+      runtimeRequirement: externalBinary
+      policyMediated: true
+  events:
+    required:
+      - browser.session.started
+      - browser.navigation.requested
+      - browser.navigation.completed
+      - browser.download.created
+      - browser.policy.violation
+      - browser.session.ended
