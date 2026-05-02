@@ -1,0 +1,30 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BrowserPolicyContract
+metadata:
+  name: sourceos-browser
+spec:
+  modes:
+    humanSecure:
+      profilePersistence: persistent
+      automation: disabledByDefault
+      downloads:
+        governed: true
+        mountClass: user-downloads
+      credentials:
+        sharedWithAgents: false
+    agentRuntime:
+      profilePersistence: ephemeralByDefault
+      automation: policyMediated
+      downloads:
+        governed: true
+        mountClass: agent-downloads
+      captures:
+        screenshots: policyMediated
+        domSnapshots: policyMediated
+        provenanceLog: required
+      network:
+        policyRequired: true
+      filesystem:
+        policyRequired: true
+      credentials:
+        sharedWithHumanProfile: false

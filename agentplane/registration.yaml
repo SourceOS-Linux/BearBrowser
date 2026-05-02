@@ -1,0 +1,19 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: AgentPlaneCapability
+metadata:
+  name: sourceos-browser-runtime
+spec:
+  capability: browser.runtime
+  provider: sourceos-browser
+  modes:
+    - human-secure
+    - agent-runtime
+  governedResources:
+    - network
+    - filesystem
+    - downloads
+    - screenshots
+    - domSnapshots
+    - cookies
+    - credentials
+    - nativeMessaging

@@ -1,0 +1,16 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: WorkspaceSurface
+metadata:
+  name: sourceos-browser
+spec:
+  surfaceType: browser
+  displayName: SourceOS Browser
+  modes:
+    - human-secure
+    - agent-runtime
+  workspaceEvents:
+    - browser.session.started
+    - browser.session.ended
+    - browser.download.created
+    - browser.capture.created
+    - browser.policy.violation

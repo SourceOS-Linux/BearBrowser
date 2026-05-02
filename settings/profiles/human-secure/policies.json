@@ -1,0 +1,10 @@
+{
+  "policies": {
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DisableFirefoxAccounts": false,
+    "DontCheckDefaultBrowser": true,
+    "OfferToSaveLogins": false
+  }
+}

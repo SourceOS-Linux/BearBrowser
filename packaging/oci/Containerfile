@@ -1,0 +1,4 @@
+# Placeholder for SourceOS Agent Browser Runtime OCI image.
+# This must become a hardened browser runtime image with explicit mounts,
+# no ambient credentials, and policy-mediated egress.
+FROM scratch

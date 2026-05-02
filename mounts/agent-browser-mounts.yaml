@@ -1,0 +1,21 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BrowserMountPlan
+metadata:
+  name: sourceos-agent-browser-mounts
+spec:
+  mounts:
+    - name: downloads
+      purpose: controlled browser downloads
+      defaultPath: /workspace/downloads
+      mode: readWrite
+      governed: true
+    - name: profile
+      purpose: ephemeral browser profile state
+      defaultPath: /workspace/browser-profile
+      mode: readWrite
+      governed: true
+    - name: captures
+      purpose: screenshots, DOM exports, and provenance artifacts
+      defaultPath: /workspace/browser-captures
+      mode: readWrite
+      governed: true
