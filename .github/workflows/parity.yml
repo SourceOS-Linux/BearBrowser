@@ -1,0 +1,23 @@
+name: BearBrowser parity
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  upstream-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout BearBrowser
+        uses: actions/checkout@v4
+
+      - name: Verify LibreWolf mirror parity
+        run: ./scripts/verify-upstream-parity.sh
+
+      - name: Validate overlay dry runs
+        run: |
+          ./scripts/apply-sourceos-overlays.sh --profile human-secure --ref latest --dry-run
+          ./scripts/apply-sourceos-overlays.sh --profile agent-runtime --ref latest --dry-run
