@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: '17 9 * * 1'
   workflow_dispatch:
 
 jobs:
