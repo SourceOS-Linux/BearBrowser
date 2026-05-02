@@ -2,9 +2,24 @@
 
 BearBrowser is designed to be easy to install, update, and diagnose.
 
-## Homebrew Formula: tooling and runtime control
+## Immediate Homebrew install path
 
-Install:
+Until the SourceOS tap repository is promoted, install the Formula directly from this repo:
+
+```bash
+brew install --formula https://raw.githubusercontent.com/SourceOS-Linux/BearBrowser/main/packaging/homebrew/Formula/bearbrowser.rb
+```
+
+Update the direct Formula install:
+
+```bash
+brew update
+brew reinstall --formula https://raw.githubusercontent.com/SourceOS-Linux/BearBrowser/main/packaging/homebrew/Formula/bearbrowser.rb
+```
+
+## Target Homebrew install path
+
+After `SourceOS-Linux/homebrew-tap` exists and the Formula is promoted:
 
 ```bash
 brew install SourceOS-Linux/tap/bearbrowser
@@ -47,7 +62,7 @@ brew upgrade --cask SourceOS-Linux/tap/bearbrowser
 
 ## Tap requirement
 
-The short install commands require this public tap repository:
+The polished short install commands require this public tap repository:
 
 ```text
 SourceOS-Linux/homebrew-tap
