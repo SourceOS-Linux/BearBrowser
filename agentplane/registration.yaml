@@ -1,19 +1,67 @@
 apiVersion: sourceos.dev/v1alpha1
 kind: AgentPlaneCapability
 metadata:
-  name: sourceos-browser-runtime
+  name: bearbrowser-runtime
+  labels:
+    sourceos.dev/product: BearBrowser
 spec:
   capability: browser.runtime
-  provider: sourceos-browser
+  provider: BearBrowser
   modes:
     - human-secure
     - agent-runtime
+  automationSurfaces:
+    - name: playwright
+      capability: browser.playwright
+      controlPlane: deterministic
+      policyMediated: true
+      remoteDebuggingDefault: denied
+    - name: stagehand
+      capability: browser.stagehand
+      controlPlane: ai-assisted
+      policyMediated: true
+      requiresObservationEvents: true
+    - name: carbonyl
+      capability: browser.terminal.carbonyl
+      controlPlane: terminal-browser
+      policyMediated: true
+    - name: browsh
+      capability: browser.terminal.browsh
+      controlPlane: terminal-browser
+      policyMediated: true
+    - name: elinks
+      capability: browser.terminal.elinks
+      controlPlane: terminal-browser
+      policyMediated: true
+    - name: lynx
+      capability: browser.terminal.lynx
+      controlPlane: terminal-browser
+      policyMediated: true
+    - name: w3m-links
+      capability: browser.terminal.text-browser-fallback
+      controlPlane: terminal-browser
+      policyMediated: true
   governedResources:
     - network
     - filesystem
     - downloads
     - screenshots
     - domSnapshots
+    - pdfExports
+    - harFiles
     - cookies
     - credentials
     - nativeMessaging
+    - extensions
+    - clipboard
+    - mediaDevices
+    - remoteDebugging
+  provenanceEvents:
+    - browser.session.started
+    - browser.session.ended
+    - browser.navigation.requested
+    - browser.navigation.completed
+    - browser.download.created
+    - browser.capture.created
+    - browser.policy.violation
+    - browser.credential.boundary
