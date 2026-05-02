@@ -1,4 +1,37 @@
-# Placeholder for SourceOS Agent Browser Runtime OCI image.
-# This must become a hardened browser runtime image with explicit mounts,
-# no ambient credentials, and policy-mediated egress.
-FROM scratch
+# BearBrowser Agent Runtime OCI scaffold.
+#
+# This image is intentionally a runtime scaffold, not the final browser build image.
+# The final implementation should copy a built BearBrowser agent-runtime package
+# from a dedicated builder stage and run it as a non-root user with governed mounts.
+
+FROM debian:stable-slim AS runtime
+
+LABEL org.opencontainers.image.title="BearBrowser Agent Runtime"
+LABEL org.opencontainers.image.description="Governed SourceOS browser runtime for agents"
+LABEL org.opencontainers.image.source="https://github.com/SourceOS-Linux/BearBrowser"
+
+RUN useradd --system --create-home --home-dir /home/bearbrowser --shell /usr/sbin/nologin bearbrowser \
+  && mkdir -p \
+    /workspace/downloads \
+    /workspace/browser-profile \
+    /workspace/browser-captures \
+    /workspace/browser-cache \
+    /workspace/input \
+    /run/sourceos/policy \
+    /run/sourceos/provenance \
+  && chown -R bearbrowser:bearbrowser /workspace /run/sourceos
+
+USER bearbrowser
+WORKDIR /workspace
+
+ENV BEARBROWSER_MODE=agent-runtime
+ENV BEARBROWSER_POLICY_PATH=/run/sourceos/policy
+ENV BEARBROWSER_PROVENANCE_PATH=/run/sourceos/provenance
+ENV BEARBROWSER_DOWNLOADS_PATH=/workspace/downloads
+ENV BEARBROWSER_PROFILE_PATH=/workspace/browser-profile
+ENV BEARBROWSER_CAPTURES_PATH=/workspace/browser-captures
+
+VOLUME ["/workspace/downloads", "/workspace/browser-profile", "/workspace/browser-captures", "/workspace/browser-cache", "/workspace/input", "/run/sourceos/policy", "/run/sourceos/provenance"]
+
+ENTRYPOINT ["/bin/sh", "-lc"]
+CMD ["echo BearBrowser agent-runtime package not installed in this scaffold yet; exit 64"]
