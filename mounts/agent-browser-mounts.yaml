@@ -1,21 +1,92 @@
 apiVersion: sourceos.dev/v1alpha1
 kind: BrowserMountPlan
 metadata:
-  name: sourceos-agent-browser-mounts
+  name: bearbrowser-agent-mounts
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/runtime: agent-browser
 spec:
+  defaultIsolation: session
+  noAmbientHostMounts: true
+  cleanupOnExit: true
   mounts:
     - name: downloads
-      purpose: controlled browser downloads
+      mountClass: agent-downloads
+      purpose: Controlled browser downloads created by an agent session.
       defaultPath: /workspace/downloads
       mode: readWrite
       governed: true
+      required: true
+      persistByDefault: true
+      provenance:
+        emitOnCreate: browser.download.created
+        requireSha256: true
     - name: profile
-      purpose: ephemeral browser profile state
+      mountClass: agent-profile
+      purpose: Ephemeral browser profile state, cookies, local storage, extension state, and browser cache partition metadata.
       defaultPath: /workspace/browser-profile
       mode: readWrite
       governed: true
+      required: true
+      persistByDefault: false
+      cleanupOnExit: true
+      restrictions:
+        shareWithHumanProfile: false
+        shareAcrossAgents: false
     - name: captures
-      purpose: screenshots, DOM exports, and provenance artifacts
+      mountClass: agent-captures
+      purpose: Screenshots, DOM snapshots, PDFs, HAR files, and provenance-adjacent capture artifacts.
       defaultPath: /workspace/browser-captures
       mode: readWrite
       governed: true
+      required: true
+      persistByDefault: true
+      provenance:
+        emitOnCreate: browser.capture.created
+        requireSha256: true
+    - name: cache
+      mountClass: agent-cache
+      purpose: Disposable network and browser build/runtime cache.
+      defaultPath: /workspace/browser-cache
+      mode: readWrite
+      governed: true
+      required: false
+      persistByDefault: false
+      cleanupOnExit: true
+    - name: workspace-input
+      mountClass: workspace-input-readonly
+      purpose: Read-only user/workspace files explicitly granted to the browser session.
+      defaultPath: /workspace/input
+      mode: readOnly
+      governed: true
+      required: false
+      persistByDefault: false
+      restrictions:
+        requireExplicitGrant: true
+        denySymlinkEscape: true
+        denyDeviceFiles: true
+    - name: policy
+      mountClass: policy-runtime-readonly
+      purpose: Runtime policy bundle injected by PolicyFabric.
+      defaultPath: /run/sourceos/policy
+      mode: readOnly
+      governed: true
+      required: true
+      persistByDefault: false
+    - name: provenance
+      mountClass: provenance-writeonly
+      purpose: Append-only local event buffer before AgentPlane/PolicyFabric ingestion.
+      defaultPath: /run/sourceos/provenance
+      mode: writeOnly
+      governed: true
+      required: true
+      persistByDefault: false
+  forbiddenHostPaths:
+    - $HOME
+    - ~/.ssh
+    - ~/.aws
+    - ~/.azure
+    - ~/.config/gh
+    - ~/.kube
+    - /var/run/docker.sock
+    - /var/run/podman/podman.sock
