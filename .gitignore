@@ -1,0 +1,11 @@
+# BearBrowser generated workspaces
+build/
+dist/
+out/
+.cache/
+*.log
+
+# Local editor/system files
+.DS_Store
+.idea/
+.vscode/
