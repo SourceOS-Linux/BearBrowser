@@ -1,30 +1,136 @@
 apiVersion: sourceos.dev/v1alpha1
 kind: BrowserPolicyContract
 metadata:
-  name: sourceos-browser
+  name: bearbrowser
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/runtime: browser
 spec:
+  defaultMode: humanSecure
+  defaultDecision: deny
   modes:
     humanSecure:
+      description: Privacy-first human browser profile derived from LibreWolf with SourceOS workspace integration.
       profilePersistence: persistent
       automation: disabledByDefault
       downloads:
         governed: true
         mountClass: user-downloads
+        defaultDecision: allowWithinWorkspace
+        requireProvenanceEvent: true
+      captures:
+        screenshots: userInitiatedOnly
+        domSnapshots: disabledByDefault
+        provenanceLog: optional
+      network:
+        policyRequired: true
+        defaultDecision: allowPublicWeb
+        denyPrivateNetworkByDefault: false
+        requireEgressAttribution: true
+      filesystem:
+        policyRequired: true
+        defaultDecision: denyHostFilesystem
+        allowedMountClasses:
+          - user-downloads
+          - workspace-documents
       credentials:
         sharedWithAgents: false
+        source: humanProfileOnly
+        export: denied
+      nativeMessaging:
+        defaultDecision: deny
+        allowlistRequired: true
+      clipboard:
+        defaultDecision: userMediated
+      mediaDevices:
+        camera: userMediated
+        microphone: userMediated
+        screenShare: userMediated
     agentRuntime:
+      description: Governed browser execution surface for local, cloud, and fog agents.
       profilePersistence: ephemeralByDefault
       automation: policyMediated
+      defaultDecision: deny
+      session:
+        requireSessionId: true
+        requireAgentId: true
+        requireWorkspaceId: true
+        maxDefaultTtlMinutes: 120
+        cleanupOnExit: true
       downloads:
         governed: true
         mountClass: agent-downloads
+        defaultDecision: denyOutsideMount
+        requireProvenanceEvent: true
+        requireContentHash: true
       captures:
         screenshots: policyMediated
         domSnapshots: policyMediated
+        pdfExports: policyMediated
         provenanceLog: required
+        defaultDecision: denyUnlessGranted
       network:
         policyRequired: true
+        defaultDecision: denyUnlessGranted
+        denyPrivateNetworkByDefault: true
+        denyLoopbackByDefault: true
+        denyMetadataServices: true
+        requireEgressAttribution: true
+        allowedByPolicy:
+          - publicWeb
+          - explicitDomainAllowlist
+          - workspaceApprovedEndpoints
       filesystem:
         policyRequired: true
+        defaultDecision: denyHostFilesystem
+        noAmbientHomeAccess: true
+        noAmbientSshAccess: true
+        noAmbientCloudCredentialAccess: true
+        allowedMountClasses:
+          - agent-downloads
+          - agent-profile
+          - agent-captures
+          - agent-cache
+          - workspace-input-readonly
       credentials:
         sharedWithHumanProfile: false
+        sharedWithAgents: false
+        source: policyBrokerOnly
+        export: denied
+        persistence: sessionScoped
+        requireCredentialBoundaryEvents: true
+      nativeMessaging:
+        defaultDecision: deny
+        allowlistRequired: true
+        allowedHosts: []
+      extensions:
+        defaultDecision: deny
+        install: policyMediated
+        allowlistRequired: true
+      clipboard:
+        defaultDecision: deny
+        policyMediated: true
+      mediaDevices:
+        camera: denied
+        microphone: denied
+        screenShare: policyMediated
+      devtools:
+        defaultDecision: policyMediated
+        remoteDebugging:
+          defaultDecision: deny
+          bindAddress: 127.0.0.1
+          requireEphemeralPort: true
+          requireSessionToken: true
+  audit:
+    requiredEvents:
+      - browser.session.started
+      - browser.session.ended
+      - browser.navigation.requested
+      - browser.navigation.completed
+      - browser.download.created
+      - browser.capture.created
+      - browser.policy.violation
+      - browser.credential.boundary
+    eventSink: AgentPlane
+    policyDecisionSink: PolicyFabric
+    workspaceVisibilitySink: ProphetWorkspace
