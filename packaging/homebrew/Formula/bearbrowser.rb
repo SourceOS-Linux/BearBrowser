@@ -12,34 +12,20 @@ class Bearbrowser < Formula
   def install
     libexec.install Dir["*"]
 
-    (bin/"bearbrowser").write <<~EOS
-      #!/usr/bin/env bash
-      set -euo pipefail
-      exec bash "#{libexec}/scripts/apply-sourceos-overlays.sh" "$@"
-    EOS
+    (bin/"bearbrowser").write wrapper_for("apply-sourceos-overlays.sh")
+    (bin/"bearbrowser-verify-upstream").write wrapper_for("verify-upstream-parity.sh")
+    (bin/"bearbrowser-doctor").write wrapper_for("bearbrowser-doctor.sh")
+    (bin/"bearbrowser-update").write wrapper_for("bearbrowser-update.sh")
+    (bin/"bearbrowser-automation-surfaces").write wrapper_for("bearbrowser-automation-surfaces.sh")
+    (bin/"bearbrowser-playwright").write wrapper_for("bearbrowser-playwright.sh")
+    (bin/"bearbrowser-terminal").write wrapper_for("bearbrowser-terminal.sh")
+  end
 
-    (bin/"bearbrowser-verify-upstream").write <<~EOS
+  def wrapper_for(script)
+    <<~EOS
       #!/usr/bin/env bash
       set -euo pipefail
-      exec bash "#{libexec}/scripts/verify-upstream-parity.sh" "$@"
-    EOS
-
-    (bin/"bearbrowser-doctor").write <<~EOS
-      #!/usr/bin/env bash
-      set -euo pipefail
-      exec bash "#{libexec}/scripts/bearbrowser-doctor.sh" "$@"
-    EOS
-
-    (bin/"bearbrowser-update").write <<~EOS
-      #!/usr/bin/env bash
-      set -euo pipefail
-      exec bash "#{libexec}/scripts/bearbrowser-update.sh" "$@"
-    EOS
-
-    (bin/"bearbrowser-automation-surfaces").write <<~EOS
-      #!/usr/bin/env bash
-      set -euo pipefail
-      exec bash "#{libexec}/scripts/bearbrowser-automation-surfaces.sh" "$@"
+      exec bash "#{libexec}/scripts/#{script}" "$@"
     EOS
   end
 
@@ -53,6 +39,8 @@ class Bearbrowser < Formula
         bearbrowser-doctor
         bearbrowser-update
         bearbrowser-automation-surfaces
+        bearbrowser-playwright --dry-run
+        bearbrowser-terminal --dry-run
 
       Future GUI app distribution will use:
         brew install --cask SourceOS-Linux/tap/bearbrowser
