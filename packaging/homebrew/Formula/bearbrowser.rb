@@ -35,6 +35,12 @@ class Bearbrowser < Formula
       set -euo pipefail
       exec bash "#{libexec}/scripts/bearbrowser-update.sh" "$@"
     EOS
+
+    (bin/"bearbrowser-automation-surfaces").write <<~EOS
+      #!/usr/bin/env bash
+      set -euo pipefail
+      exec bash "#{libexec}/scripts/bearbrowser-automation-surfaces.sh" "$@"
+    EOS
   end
 
   def caveats
@@ -46,6 +52,7 @@ class Bearbrowser < Formula
         bearbrowser-verify-upstream
         bearbrowser-doctor
         bearbrowser-update
+        bearbrowser-automation-surfaces
 
       Future GUI app distribution will use:
         brew install --cask SourceOS-Linux/tap/bearbrowser
@@ -56,5 +63,6 @@ class Bearbrowser < Formula
     assert_match "BearBrowser overlay plan", shell_output("#{bin}/bearbrowser --profile agent-runtime --ref latest --dry-run")
     assert_match "hidden_refs=", shell_output("#{bin}/bearbrowser-verify-upstream")
     assert_match "BearBrowser doctor", shell_output("#{bin}/bearbrowser-doctor")
+    assert_match "browser.playwright", shell_output("#{bin}/bearbrowser-automation-surfaces")
   end
 end
