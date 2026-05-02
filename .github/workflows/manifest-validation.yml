@@ -1,0 +1,38 @@
+name: BearBrowser manifest validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  manifest-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout BearBrowser
+        uses: actions/checkout@v4
+
+      - name: Validate YAML manifests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import sys
+          import yaml
+
+          paths = [p for p in list(Path('.').glob('**/*.yaml')) + list(Path('.').glob('**/*.yml')) if '.git' not in p.parts]
+          failures = []
+          for path in paths:
+              try:
+                  yaml.safe_load(path.read_text())
+              except Exception as exc:
+                  failures.append((path, exc))
+
+          if failures:
+              for path, exc in failures:
+                  print(f'{path}: {exc}', file=sys.stderr)
+              sys.exit(1)
+
+          print(f'validated {len(paths)} YAML files')
+          PY
