@@ -1,0 +1,37 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BrowserAutomationAdapter
+metadata:
+  name: bearbrowser-stagehand
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/adapter: stagehand
+spec:
+  capability: browser.stagehand
+  controlPlane: ai-assisted
+  runtimeModes:
+    - agent-runtime
+  policy:
+    mediatedBy: PolicyFabric
+    requireObservationBeforeAction: true
+    requireActionRationale: true
+    requireStructuredExtractionPolicy: true
+    denyCredentialExport: true
+    denyPolicyBypass: true
+  events:
+    required:
+      - browser.session.started
+      - browser.navigation.requested
+      - browser.navigation.completed
+      - browser.capture.created
+      - browser.policy.violation
+      - browser.credential.boundary
+      - browser.session.ended
+  actions:
+    observe: policyMediated
+    act: policyMediated
+    extract: policyMediated
+    recover: policyMediated
+  notes:
+    - Stagehand is the AI-assisted action and extraction layer.
+    - Stagehand must sit above deterministic browser control and below PolicyFabric authority.
+    - Stagehand observations and actions must be reconstructable from provenance events.
