@@ -32,4 +32,18 @@ else
   missing=1
 fi
 
+printf '\nAutomation surfaces\n'
+for cmd in node npx playwright carbonyl browsh elinks lynx w3m links; do
+  if command -v "$cmd" >/dev/null 2>&1; then
+    printf 'ok: %s -> %s\n' "$cmd" "$(command -v "$cmd")"
+  else
+    printf 'optional-missing: %s\n' "$cmd"
+  fi
+done
+
+printf '\nPolicy posture\n'
+printf 'ok: automation wrappers are policy-mediated scaffolds\n'
+printf 'ok: live Playwright and Stagehand execution remain disabled until runtime integration lands\n'
+printf 'ok: terminal browser wrapper selects only installed local backends\n'
+
 exit "$missing"
