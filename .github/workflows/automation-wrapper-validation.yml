@@ -1,0 +1,27 @@
+name: BearBrowser automation wrapper validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  automation-wrapper-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout BearBrowser
+        uses: actions/checkout@v4
+
+      - name: Validate wrapper syntax
+        run: |
+          bash -n scripts/bearbrowser-playwright.sh
+          bash -n scripts/bearbrowser-terminal.sh
+          bash -n scripts/bearbrowser-stagehand.sh
+
+      - name: Validate dry-run commands
+        run: |
+          bash scripts/bearbrowser-playwright.sh --dry-run || test "$?" = "2"
+          bash scripts/bearbrowser-terminal.sh --dry-run || test "$?" = "2"
+          bash scripts/bearbrowser-stagehand.sh --dry-run || test "$?" = "2"
