@@ -18,6 +18,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-update").write wrapper_for("bearbrowser-update.sh")
     (bin/"bearbrowser-automation-surfaces").write wrapper_for("bearbrowser-automation-surfaces.sh")
     (bin/"bearbrowser-playwright").write wrapper_for("bearbrowser-playwright.sh")
+    (bin/"bearbrowser-stagehand").write wrapper_for("bearbrowser-stagehand.sh")
     (bin/"bearbrowser-terminal").write wrapper_for("bearbrowser-terminal.sh")
   end
 
@@ -40,6 +41,7 @@ class Bearbrowser < Formula
         bearbrowser-update
         bearbrowser-automation-surfaces
         bearbrowser-playwright --dry-run
+        bearbrowser-stagehand --dry-run
         bearbrowser-terminal --dry-run
 
       Future GUI app distribution will use:
