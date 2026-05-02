@@ -1,0 +1,29 @@
+name: BearBrowser Homebrew packaging
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  validate-homebrew-packaging:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout BearBrowser
+        uses: actions/checkout@v4
+
+      - name: Validate Formula syntax
+        run: ruby -c packaging/homebrew/Formula/bearbrowser.rb
+
+      - name: Validate Cask syntax
+        run: ruby -c packaging/homebrew/Casks/bearbrowser.rb
+
+      - name: Validate tap promotion script syntax
+        run: bash -n packaging/homebrew/promote-to-tap.sh
+
+      - name: Check Homebrew style where possible
+        run: |
+          brew style --formula packaging/homebrew/Formula/bearbrowser.rb || true
+          brew style --cask packaging/homebrew/Casks/bearbrowser.rb || true
