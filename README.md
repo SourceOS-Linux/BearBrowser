@@ -11,6 +11,12 @@ It has two primary execution modes:
 
 Homebrew is a first-class distribution surface.
 
+Immediate direct Formula install:
+
+```bash
+brew install --formula https://raw.githubusercontent.com/SourceOS-Linux/BearBrowser/main/packaging/homebrew/Formula/bearbrowser.rb
+```
+
 Target install path after the SourceOS tap is promoted:
 
 ```bash
@@ -20,8 +26,7 @@ brew install SourceOS-Linux/tap/bearbrowser
 Update:
 
 ```bash
-brew update
-brew upgrade SourceOS-Linux/tap/bearbrowser
+bearbrowser-update
 ```
 
 Diagnostics:
@@ -29,6 +34,7 @@ Diagnostics:
 ```bash
 bearbrowser-doctor
 bearbrowser-verify-upstream
+bearbrowser-automation-surfaces
 ```
 
 Future GUI app install path:
