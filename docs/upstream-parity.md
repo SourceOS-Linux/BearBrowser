@@ -10,7 +10,7 @@ SourceOS clean mirror:
 
 SourceOS product overlay:
 
-- `SourceOS-Linux/sourceos-browser`
+- `SourceOS-Linux/BearBrowser`
 
 ## Operating model
 

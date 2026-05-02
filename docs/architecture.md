@@ -1,4 +1,4 @@
-# SourceOS Browser Architecture
+# BearBrowser Architecture
 
 ## Human Secure Browser
 

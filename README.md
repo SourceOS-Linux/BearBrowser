@@ -1,6 +1,6 @@
-# SourceOS Browser
+# BearBrowser
 
-SourceOS Browser is a LibreWolf-derived browser product for SourceOS.
+BearBrowser is a LibreWolf-derived browser product for SourceOS.
 
 It has two primary execution modes:
 

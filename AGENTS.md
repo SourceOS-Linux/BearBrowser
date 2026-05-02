@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This repo is the SourceOS Browser product overlay.
+This repo is the BearBrowser product overlay.
 
 Agents must preserve the upstream parity model:
 

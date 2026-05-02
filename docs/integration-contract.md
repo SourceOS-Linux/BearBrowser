@@ -1,6 +1,6 @@
 # Integration Contract
 
-SourceOS Browser integrates with:
+BearBrowser integrates with:
 
 - AgentPlane for runtime registration and capability discovery
 - PolicyFabric for network, file, credential, and capture policy

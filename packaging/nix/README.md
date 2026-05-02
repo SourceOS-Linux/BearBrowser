@@ -1,6 +1,6 @@
 # Nix Packaging
 
-This lane will package SourceOS Browser as a LibreWolf-derived build with SourceOS overlays.
+This lane will package BearBrowser as a LibreWolf-derived build with SourceOS overlays.
 
 Required outputs:
 

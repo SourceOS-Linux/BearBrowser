@@ -4,7 +4,7 @@ metadata:
   name: sourceos-browser
 spec:
   surfaceType: browser
-  displayName: SourceOS Browser
+  displayName: BearBrowser
   modes:
     - human-secure
     - agent-runtime
