@@ -15,13 +15,13 @@ class Bearbrowser < Formula
     (bin/"bearbrowser").write <<~EOS
       #!/usr/bin/env bash
       set -euo pipefail
-      exec "#{libexec}/scripts/apply-sourceos-overlays.sh" "$@"
+      exec bash "#{libexec}/scripts/apply-sourceos-overlays.sh" "$@"
     EOS
 
     (bin/"bearbrowser-verify-upstream").write <<~EOS
       #!/usr/bin/env bash
       set -euo pipefail
-      exec "#{libexec}/scripts/verify-upstream-parity.sh" "$@"
+      exec bash "#{libexec}/scripts/verify-upstream-parity.sh" "$@"
     EOS
   end
 
