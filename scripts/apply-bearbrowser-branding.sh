@@ -10,7 +10,7 @@ usage() {
   cat <<'USAGE'
 Usage: apply-bearbrowser-branding --workspace PATH [--dry-run]
 
-Applies BearBrowser product branding to a generated LibreWolf-derived source workspace.
+Applies BearBrowser product branding to a generated upstream-derived source workspace.
 
 This script changes product-facing application names, desktop metadata, appstream metadata,
 profile/branding strings, and icon assets. It intentionally avoids license and upstream
@@ -72,36 +72,37 @@ should_skip() {
 }
 
 replace_text_file() {
-  local file="$1"
-  if should_skip "$file"; then
+  local file_path="$1"
+  if should_skip "$file_path"; then
     return 0
   fi
 
-  if ! file "$file" | grep -Eqi 'text|json|xml|html|desktop|ini|script|source|yaml|toml|makefile'; then
+  if ! file "$file_path" | grep -Eqi 'text|json|xml|html|desktop|ini|script|source|yaml|toml|makefile'; then
     return 0
   fi
 
-  if ! grep -Iq . "$file"; then
+  if ! grep -Iq . "$file_path"; then
     return 0
   fi
 
-  if grep -Eqi 'LibreWolf|librewolf|Libre Wolf' "$file"; then
-    echo "branding-text: $file"
+  if grep -Eqi 'LibreWolf|librewolf|Libre Wolf' "$file_path"; then
+    echo "branding-text: $file_path"
     changed=$((changed + 1))
     if [ "$dry_run" != "true" ]; then
-      python3 - "$file" <<'PY'
+      python3 - "$file_path" <<'PY'
 from pathlib import Path
 import sys
 p = Path(sys.argv[1])
 text = p.read_text(errors='ignore')
 replacements = {
+    'LibreWolf Browser': 'BearBrowser',
+    'LibreWolf Web Browser': 'BearBrowser',
     'LibreWolf': 'BearBrowser',
     'Libre Wolf': 'BearBrowser',
     'librewolf': 'bearbrowser',
-    'LibreWolf Browser': 'BearBrowser',
-    'LibreWolf Web Browser': 'BearBrowser',
     'LibreWolf.desktop': 'BearBrowser.desktop',
     'io.gitlab.librewolf-community': 'dev.sourceos.BearBrowser',
+    'io.gitlab.librewolf-community.librewolf': 'dev.sourceos.BearBrowser',
 }
 for old, new in replacements.items():
     text = text.replace(old, new)
@@ -116,9 +117,11 @@ while IFS= read -r -d '' file_path; do
 done < <(find "$workspace" -type f -print0)
 
 # Common browser/app icon destinations. Copy our SVG where likely product icons exist.
+icon_dirs_seen=0
 while IFS= read -r -d '' icon_dir; do
   echo "branding-icon-dir: $icon_dir"
   changed=$((changed + 1))
+  icon_dirs_seen=$((icon_dirs_seen + 1))
   if [ "$dry_run" != "true" ]; then
     cp "$icon" "$icon_dir/bearbrowser.svg"
     for candidate in "$icon_dir"/librewolf*.svg "$icon_dir"/LibreWolf*.svg; do
@@ -126,7 +129,8 @@ while IFS= read -r -d '' icon_dir; do
       cp "$icon" "$candidate"
     done
   fi
-done < <(find "$workspace" -type d \( -iname '*icon*' -o -iname '*branding*' -o -iname '*browser*' \) -print0 | head -z -n 50)
+  [ "$icon_dirs_seen" -ge 50 ] && break
+done < <(find "$workspace" -type d \( -iname '*icon*' -o -iname '*branding*' -o -iname '*browser*' \) -print0)
 
 # Ensure a BearBrowser app id marker exists for downstream package steps.
 if [ "$dry_run" != "true" ]; then
