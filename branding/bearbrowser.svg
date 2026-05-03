@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="BearBrowser icon">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#3b2a1a"/>
+      <stop offset="1" stop-color="#8a5a2b"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#d8a15d"/>
+      <stop offset="1" stop-color="#9a632f"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <circle cx="158" cy="156" r="70" fill="#5c351d"/>
+  <circle cx="354" cy="156" r="70" fill="#5c351d"/>
+  <circle cx="158" cy="156" r="39" fill="#c98b4a"/>
+  <circle cx="354" cy="156" r="39" fill="#c98b4a"/>
+  <path d="M96 282c0-105 71-183 160-183s160 78 160 183c0 91-61 150-160 150S96 373 96 282Z" fill="url(#face)"/>
+  <path d="M172 285c0 20-13 36-29 36s-29-16-29-36 13-36 29-36 29 16 29 36Zm226 0c0 20-13 36-29 36s-29-16-29-36 13-36 29-36 29 16 29 36Z" fill="#1c1410"/>
+  <path d="M211 336c0-22 20-40 45-40s45 18 45 40-20 40-45 40-45-18-45-40Z" fill="#2a1912"/>
+  <path d="M232 399c17 12 31 12 48 0" fill="none" stroke="#2a1912" stroke-width="18" stroke-linecap="round"/>
+  <path d="M256 122c-74 0-134 64-134 143 0 66 34 112 86 132-36-24-56-67-56-118 0-73 47-132 104-132s104 59 104 132c0 51-20 94-56 118 52-20 86-66 86-132 0-79-60-143-134-143Z" fill="#f2c777" opacity="0.28"/>
+  <path d="M105 433h302" stroke="#f2c777" stroke-width="22" stroke-linecap="round" opacity="0.62"/>
+</svg>
