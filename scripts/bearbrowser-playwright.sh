@@ -4,6 +4,7 @@ set -euo pipefail
 mode="agent-runtime"
 dry_run="false"
 url="about:blank"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -11,9 +12,9 @@ Usage: bearbrowser-playwright [--mode agent-runtime|human-secure] [--url URL] [-
 
 Policy-mediated Playwright control surface for BearBrowser.
 
-This wrapper is intentionally conservative. It validates operator intent,
-reports the policy/provenance envelope, and refuses to imply authority outside
-PolicyFabric.
+Dry-run works by default. Live execution requires:
+  BEARBROWSER_ENABLE_LIVE_PLAYWRIGHT=1
+  BEARBROWSER_POLICY_DECISION_ID=<policy-decision-id>
 USAGE
 }
 
@@ -67,19 +68,20 @@ if ! command -v node >/dev/null 2>&1; then
   exit 2
 fi
 
-if ! command -v npx >/dev/null 2>&1; then
-  echo "missing: npx"
-  echo "Install npm/npx before enabling Playwright automation."
+if [ ! -d "$repo_root/node_modules/playwright" ]; then
+  echo "missing: playwright runtime dependency"
+  echo "Run npm install in the BearBrowser repo, or install a packaged runtime distribution."
+  if [ "$dry_run" = "true" ]; then
+    echo "Dry run dependency check complete."
+    exit 2
+  fi
   exit 2
 fi
 
+export BEARBROWSER_MODE="$mode"
+export BEARBROWSER_URL="$url"
 if [ "$dry_run" = "true" ]; then
-  echo "Dry run complete. Playwright launch would be policy-mediated."
-  exit 0
+  unset BEARBROWSER_ENABLE_LIVE_PLAYWRIGHT
 fi
 
-cat >&2 <<'EOF'
-ERROR: live Playwright launch is not enabled yet.
-Next step: wire this wrapper to a governed BrowserContext launcher that emits BearBrowser provenance events.
-EOF
-exit 64
+exec node "$repo_root/runtime/playwright-smoke.mjs"
