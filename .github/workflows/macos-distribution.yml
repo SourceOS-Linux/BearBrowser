@@ -16,6 +16,7 @@ jobs:
 
       - name: Validate macOS script syntax
         run: |
+          bash -n scripts/prepare-macos-app-bundle.sh
           bash -n scripts/package-macos-app.sh
           bash -n scripts/sign-notarize-macos-app.sh
           bash -n scripts/verify-macos-app.sh
@@ -23,3 +24,8 @@ jobs:
 
       - name: Validate Cask syntax
         run: ruby -c packaging/homebrew/Casks/bearbrowser.rb
+
+      - name: Validate plist templates
+        run: |
+          plutil -lint packaging/macos/Info.plist.template
+          plutil -lint packaging/macos/entitlements.plist
