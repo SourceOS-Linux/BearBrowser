@@ -10,37 +10,70 @@ spec:
   modes:
     - human-secure
     - agent-runtime
+  launchContract:
+    requiredFields:
+      - sessionId
+      - agentId
+      - workspaceId
+      - profileMode
+      - policyBundleId
+      - mountPlanId
+    optionalFields:
+      - initialUrl
+      - ttlMinutes
+      - automationSurface
+      - terminalBackend
+    defaultProfileMode: agent-runtime
+    defaultTtlMinutes: 120
+    requiresPolicyDecision: true
+    requiresProvenanceSink: true
+  sessionStates:
+    - requested
+    - policy-pending
+    - starting
+    - running
+    - blocked
+    - ending
+    - ended
+    - failed
   automationSurfaces:
     - name: playwright
       capability: browser.playwright
       controlPlane: deterministic
       policyMediated: true
       remoteDebuggingDefault: denied
+      wrapper: bearbrowser-playwright
     - name: stagehand
       capability: browser.stagehand
       controlPlane: ai-assisted
       policyMediated: true
       requiresObservationEvents: true
+      wrapper: bearbrowser-stagehand
     - name: carbonyl
       capability: browser.terminal.carbonyl
       controlPlane: terminal-browser
       policyMediated: true
+      wrapper: bearbrowser-terminal
     - name: browsh
       capability: browser.terminal.browsh
       controlPlane: terminal-browser
       policyMediated: true
+      wrapper: bearbrowser-terminal
     - name: elinks
       capability: browser.terminal.elinks
       controlPlane: terminal-browser
       policyMediated: true
+      wrapper: bearbrowser-terminal
     - name: lynx
       capability: browser.terminal.lynx
       controlPlane: terminal-browser
       policyMediated: true
+      wrapper: bearbrowser-terminal
     - name: w3m-links
       capability: browser.terminal.text-browser-fallback
       controlPlane: terminal-browser
       policyMediated: true
+      wrapper: bearbrowser-terminal
   governedResources:
     - network
     - filesystem
@@ -56,6 +89,10 @@ spec:
     - clipboard
     - mediaDevices
     - remoteDebugging
+  sinks:
+    policyDecisions: PolicyFabric
+    provenanceEvents: AgentPlane
+    workspaceState: ProphetWorkspace
   provenanceEvents:
     - browser.session.started
     - browser.session.ended
