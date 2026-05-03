@@ -47,9 +47,15 @@ Diagnostic command:
 bearbrowser-doctor
 ```
 
-## Required tap repository
+## Bootstrap tap repo
 
-Create this GitHub repo:
+Create and promote the SourceOS tap in one step:
+
+```bash
+packaging/homebrew/bootstrap-tap.sh
+```
+
+This script creates the public repo if needed:
 
 ```text
 SourceOS-Linux/homebrew-tap
@@ -57,14 +63,14 @@ SourceOS-Linux/homebrew-tap
 
 Homebrew maps `SourceOS-Linux/tap` to the GitHub repository `SourceOS-Linux/homebrew-tap`.
 
-## Files to promote into the tap
+## Files promoted into the tap
 
 ```text
 packaging/homebrew/Formula/bearbrowser.rb -> Formula/bearbrowser.rb
 packaging/homebrew/Casks/bearbrowser.rb  -> Casks/bearbrowser.rb
 ```
 
-Promotion command after `SourceOS-Linux/homebrew-tap` exists:
+Manual promotion command:
 
 ```bash
 packaging/homebrew/promote-to-tap.sh
@@ -78,6 +84,12 @@ The Formula installs useful BearBrowser overlay/runtime tooling before a full br
 - `bearbrowser-verify-upstream`
 - `bearbrowser-doctor`
 - `bearbrowser-update`
+- `bearbrowser-automation-surfaces`
+- `bearbrowser-install-runtime-deps`
+- `bearbrowser-lock-runtime-deps`
+- `bearbrowser-playwright`
+- `bearbrowser-stagehand`
+- `bearbrowser-terminal`
 
 The Cask is a scaffold for the future signed macOS `.app` release artifact.
 
