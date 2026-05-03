@@ -6,8 +6,8 @@ BearBrowser automation runtime dependencies are security-sensitive. They control
 
 ```json
 {
-  "playwright": "1.55.0",
-  "@browserbasehq/stagehand": "2.5.0"
+  "playwright": "1.55.1",
+  "@browserbasehq/stagehand": "3.3.0"
 }
 ```
 
@@ -20,21 +20,31 @@ BearBrowser automation runtime dependencies are security-sensitive. They control
 - Commit a lockfile before any release artifact depends on these packages.
 - Run dependency verification before promotion.
 
-## Why Stagehand is pinned conservatively
+## Audit-driven promotion rationale
 
-Stagehand public package and documentation signals can differ by major version and API surface. BearBrowser currently pins Stagehand to the v2 track until the v3 API, provider credential model, and PolicyFabric integration are reviewed.
+The first npm audit run against the conservative v2/v1.55.0 pins reported:
+
+- a high-severity Playwright advisory affecting versions below `1.55.1`,
+- transitive Stagehand v2 vulnerabilities through `ai` and `jsondiffpatch`,
+- npm's non-breaking remediation could not clear the Stagehand track without a major upgrade.
+
+BearBrowser therefore promotes:
+
+- Playwright to `1.55.1`, the minimum patched line for the reported advisory.
+- Stagehand to `3.3.0`, while keeping live Stagehand execution guarded until API/provider/PolicyFabric review is complete.
 
 ## Update procedure
 
 1. Check official npm metadata for `playwright` and `@browserbasehq/stagehand`.
 2. Read upstream changelogs and migration notes.
 3. Update `package.json` pins.
-4. Regenerate and commit the lockfile.
-5. Run `npm audit --omit=dev`.
-6. Run `npm run bearbrowser:deps:verify`.
-7. Run Playwright dry-run and guarded live smoke test.
-8. Run Stagehand compatibility check.
-9. Update this document with rationale.
+4. Update `runtime/verify-runtime-deps.mjs` expected versions.
+5. Regenerate and commit the lockfile.
+6. Run `npm audit --omit=dev`.
+7. Run `npm run bearbrowser:deps:verify`.
+8. Run Playwright dry-run and guarded live smoke test.
+9. Run Stagehand compatibility check.
+10. Update this document with rationale.
 
 ## Release gate
 
