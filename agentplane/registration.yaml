@@ -23,6 +23,7 @@ spec:
       - ttlMinutes
       - automationSurface
       - terminalBackend
+      - credentialBrokerPolicyId
     defaultProfileMode: agent-runtime
     defaultTtlMinutes: 120
     requiresPolicyDecision: true
@@ -32,10 +33,19 @@ spec:
     - policy-pending
     - starting
     - running
+    - credential-pending
+    - credential-denied
     - blocked
     - ending
     - ended
     - failed
+  credentialBroker:
+    contract: policy/credential-broker-contract.yaml
+    macOSBackends: credential-broker/macos-backends.yaml
+    linuxBackends: credential-broker/linux-backends.yaml
+    humanSecureUsesOSNativeBroker: true
+    agentRuntimeInheritsHumanCredentials: false
+    eventPayloadSecrets: forbidden
   automationSurfaces:
     - name: playwright
       capability: browser.playwright
@@ -102,3 +112,7 @@ spec:
     - browser.capture.created
     - browser.policy.violation
     - browser.credential.boundary
+    - browser.credential.requested
+    - browser.credential.granted
+    - browser.credential.denied
+    - browser.credential.cleared
