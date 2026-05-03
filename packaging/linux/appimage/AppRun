@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "${0}")")"
+if [ -x "$HERE/usr/bin/bearbrowser" ]; then
+  exec "$HERE/usr/bin/bearbrowser" "$@"
+fi
+
+echo "BearBrowser AppImage placeholder. Full browser binary depends on Lane 13." >&2
+exit 64
