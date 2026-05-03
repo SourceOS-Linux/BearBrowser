@@ -1,0 +1,57 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BearBrowserSessionLifecycle
+metadata:
+  name: bearbrowser-agent-runtime-example
+spec:
+  request:
+    sessionId: bb-session-example
+    agentId: agent-example
+    workspaceId: workspace-example
+    profileMode: agent-runtime
+    automationSurface: playwright
+    initialUrl: https://example.com
+    ttlMinutes: 120
+  policy:
+    policyBundleId: policy-bundle-example
+    policyDecisionId: policy-decision-example
+    required: true
+    defaultDecision: deny
+  mounts:
+    mountPlanId: bearbrowser-agent-mounts
+    downloads: /workspace/downloads
+    profile: /workspace/browser-profile
+    captures: /workspace/browser-captures
+    policy: /run/sourceos/policy
+    provenance: /run/sourceos/provenance
+  transitions:
+    - from: requested
+      to: policy-pending
+      event: browser.session.policyRequested
+    - from: policy-pending
+      to: starting
+      event: browser.session.policyGranted
+    - from: starting
+      to: running
+      event: browser.session.started
+    - from: running
+      to: artifact-created
+      event: browser.capture.created
+    - from: artifact-created
+      to: running
+      event: browser.workspace.artifactIndexed
+    - from: running
+      to: ending
+      event: browser.session.endRequested
+    - from: ending
+      to: ended
+      event: browser.session.ended
+    - from: any
+      to: blocked
+      event: browser.policy.violation
+    - from: any
+      to: failed
+      event: browser.session.failed
+  sinks:
+    policyDecisions: PolicyFabric
+    provenanceEvents: AgentPlane
+    workspaceState: ProphetWorkspace
