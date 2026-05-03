@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+profile="agent-runtime"
+upstream_ref="unknown"
+out="build/release-metadata/bearbrowser-release-metadata.json"
+
+usage() {
+  cat <<'USAGE'
+Usage: emit-release-metadata [--profile human-secure|agent-runtime] [--upstream-ref REF] [--out PATH]
+
+Emits BearBrowser release metadata required for binary artifact promotion.
+USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --profile)
+      profile="${2:?missing profile}"
+      shift 2
+      ;;
+    --upstream-ref)
+      upstream_ref="${2:?missing upstream ref}"
+      shift 2
+      ;;
+    --out)
+      out="${2:?missing output path}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+case "$profile" in
+  human-secure|agent-runtime) ;;
+  *)
+    echo "ERROR: invalid profile: $profile" >&2
+    exit 1
+    ;;
+esac
+
+mkdir -p "$(dirname "$out")"
+
+revision="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+patch_hash="$(find patches -type f -name '*.patch' -print0 2>/dev/null | sort -z | xargs -0 cat 2>/dev/null | shasum -a 256 | awk '{print $1}')"
+policy_hash="$(shasum -a 256 policy/bearbrowser-contract.yaml | awk '{print $1}')"
+mount_hash="none"
+if [ -f mounts/agent-browser-mounts.yaml ]; then
+  mount_hash="$(shasum -a 256 mounts/agent-browser-mounts.yaml | awk '{print $1}')"
+fi
+
+target_system="$(uname -s)-$(uname -m)"
+build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+cat > "$out" <<EOF
+{
+  "product": "BearBrowser",
+  "profile": "$profile",
+  "upstreamRef": "$upstream_ref",
+  "bearbrowserRevision": "$revision",
+  "patchStackHash": "$patch_hash",
+  "policyContractHash": "$policy_hash",
+  "mountPlanHash": "$mount_hash",
+  "targetSystem": "$target_system",
+  "buildTimestamp": "$build_timestamp"
+}
+EOF
+
+echo "Release metadata written: $out"
