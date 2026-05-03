@@ -7,10 +7,19 @@
   "license": "MPL-2.0",
   "scripts": {
     "bearbrowser:playwright:smoke": "node runtime/playwright-smoke.mjs",
-    "bearbrowser:stagehand:check": "node runtime/stagehand-check.mjs"
+    "bearbrowser:stagehand:check": "node runtime/stagehand-check.mjs",
+    "bearbrowser:deps:verify": "node runtime/verify-runtime-deps.mjs"
   },
   "dependencies": {
-    "@browserbasehq/stagehand": "^2.5.0",
-    "playwright": "^1.55.0"
+    "@browserbasehq/stagehand": "2.5.0",
+    "playwright": "1.55.0"
+  },
+  "bearbrowser": {
+    "dependencyPolicy": {
+      "stagehandTrack": "2.x pinned until Stagehand v3 API and supply-chain review completes",
+      "playwrightTrack": "1.55.x pinned from npm latest signal at policy creation time",
+      "allowFloatingRanges": false,
+      "requireLockfileBeforeRelease": true
+    }
   }
 }
