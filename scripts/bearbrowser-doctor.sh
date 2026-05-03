@@ -4,6 +4,7 @@ set -euo pipefail
 repo="${BEARBROWSER_REPO:-SourceOS-Linux/BearBrowser}"
 mirror_repo="${SOURCEOS_LIBREWOLF_MIRROR_REPO:-SourceOS-Linux/librewolf-source-mirror}"
 mirror="${SOURCEOS_LIBREWOLF_MIRROR_DST:-https://github.com/${mirror_repo}.git}"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 printf 'BearBrowser doctor\n'
 printf 'repo=%s\n' "$repo"
@@ -25,6 +26,12 @@ else
   printf 'info: brew not found; Homebrew install/update commands unavailable on this machine\n'
 fi
 
+if command -v npm >/dev/null 2>&1; then
+  printf 'ok: npm -> %s\n' "$(command -v npm)"
+else
+  printf 'optional-missing: npm\n'
+fi
+
 if git ls-remote --heads "$mirror" >/dev/null 2>&1; then
   printf 'ok: mirror reachable\n'
 else
@@ -41,9 +48,25 @@ for cmd in node npx playwright carbonyl browsh elinks lynx w3m links; do
   fi
 done
 
+if [ -d "$repo_root/node_modules/playwright" ]; then
+  printf 'ok: playwright npm dependency present\n'
+else
+  printf 'optional-missing: playwright npm dependency\n'
+fi
+
+if [ -d "$repo_root/node_modules/@browserbasehq/stagehand" ]; then
+  printf 'ok: stagehand npm dependency present\n'
+else
+  printf 'optional-missing: stagehand npm dependency\n'
+fi
+
 printf '\nPolicy posture\n'
-printf 'ok: automation wrappers are policy-mediated scaffolds\n'
-printf 'ok: live Playwright and Stagehand execution remain disabled until runtime integration lands\n'
+printf 'ok: automation wrappers are policy-mediated\n'
+printf 'ok: live Playwright requires BEARBROWSER_ENABLE_LIVE_PLAYWRIGHT=1 and BEARBROWSER_POLICY_DECISION_ID\n'
+printf 'ok: live Stagehand remains blocked until provider credentials and PolicyFabric adapter are implemented\n'
 printf 'ok: terminal browser wrapper selects only installed local backends\n'
+
+printf '\nNext step for runtime deps\n'
+printf 'run: bearbrowser-install-runtime-deps\n'
 
 exit "$missing"
