@@ -31,11 +31,11 @@ usage() {
   cat <<USAGE
 Usage: $0 [--profile human-secure|agent-runtime] [--ref latest|tag|sha|branch] [--workspace-root DIR] [--dry-run]
 
-Creates a BearBrowser build workspace from the clean LibreWolf mirror, then applies SourceOS/BearBrowser overlays.
+Creates a BearBrowser build workspace from the clean upstream mirror, then applies SourceOS/BearBrowser overlays.
 
 Options:
   --profile         Settings profile to inject. Default: agent-runtime.
-  --ref             LibreWolf mirror ref to check out. Default: latest.
+  --ref             Upstream mirror ref to check out. Default: latest.
   --workspace-root  Generated workspace root. Default: build/workspaces.
   --dry-run         Print planned operations without modifying build output.
   -h, --help        Show this help.
@@ -100,7 +100,7 @@ if [ "$ref" = "latest" ]; then
 fi
 
 if [ -z "$resolved_ref" ]; then
-  echo "ERROR: could not resolve LibreWolf ref" >&2
+  echo "ERROR: could not resolve upstream ref" >&2
   exit 1
 fi
 
@@ -136,6 +136,8 @@ if compgen -G "$repo_root/patches/*.patch" >/dev/null; then
   done
 fi
 
+bash "$repo_root/scripts/apply-bearbrowser-branding.sh" --workspace "$workspace/source"
+
 mkdir -p "$workspace/overlay/settings"
 cp -R "$profile_dir/." "$workspace/overlay/settings/"
 
@@ -147,6 +149,8 @@ cat > "$manifest" <<EOF_MANIFEST
   "requestedRef": "$ref",
   "resolvedRef": "$resolved_ref",
   "patchCount": $patch_count,
+  "branding": "BearBrowser",
+  "brandingOverlay": "scripts/apply-bearbrowser-branding.sh",
   "sourceDir": "$workspace/source",
   "settingsDir": "$workspace/overlay/settings",
   "policyContract": "policy/bearbrowser-contract.yaml",
