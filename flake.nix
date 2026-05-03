@@ -32,6 +32,14 @@
               fi
             '';
           };
+
+        mkBinaryPlaceholder = { pname, profile }:
+          pkgs.runCommand pname { } ''
+            echo "BearBrowser ${profile} full binary build is not wired yet." >&2
+            echo "Use: bearbrowser-build-binary --profile ${profile} --dry-run" >&2
+            echo "Then implement Lane 13 full LibreWolf compile integration." >&2
+            exit 64
+          '';
       in
       {
         packages.bearbrowser-human-secure = mkBearBrowserPackage {
@@ -43,6 +51,16 @@
           pname = "bearbrowser-agent-runtime";
           profile = "agent-runtime";
           includeMountPlan = true;
+        };
+
+        packages.bearbrowser-human-secure-binary = mkBinaryPlaceholder {
+          pname = "bearbrowser-human-secure-binary";
+          profile = "human-secure";
+        };
+
+        packages.bearbrowser-agent-runtime-binary = mkBinaryPlaceholder {
+          pname = "bearbrowser-agent-runtime-binary";
+          profile = "agent-runtime";
         };
 
         packages.default = self.packages.${system}.bearbrowser-human-secure;
