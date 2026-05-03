@@ -4,6 +4,11 @@ const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.ur
 const dependencies = pkg.dependencies || {};
 const failures = [];
 
+const expected = {
+  playwright: '1.55.1',
+  '@browserbasehq/stagehand': '3.3.0'
+};
+
 for (const [name, version] of Object.entries(dependencies)) {
   if (/^[~^]/.test(version)) {
     failures.push(`${name} uses floating semver range: ${version}`);
@@ -13,12 +18,10 @@ for (const [name, version] of Object.entries(dependencies)) {
   }
 }
 
-if (dependencies.playwright !== '1.55.0') {
-  failures.push(`playwright must remain pinned to 1.55.0 until update policy is executed; found ${dependencies.playwright}`);
-}
-
-if (dependencies['@browserbasehq/stagehand'] !== '2.5.0') {
-  failures.push(`@browserbasehq/stagehand must remain pinned to 2.5.0 until Stagehand API review is executed; found ${dependencies['@browserbasehq/stagehand']}`);
+for (const [name, version] of Object.entries(expected)) {
+  if (dependencies[name] !== version) {
+    failures.push(`${name} must remain pinned to ${version} until dependency policy is executed; found ${dependencies[name]}`);
+  }
 }
 
 if (failures.length) {
@@ -31,6 +34,7 @@ if (failures.length) {
 console.log('BearBrowser runtime dependency policy verified');
 console.log(JSON.stringify({
   dependencies,
+  expected,
   allowFloatingRanges: false,
   requireLockfileBeforeRelease: true
 }, null, 2));
