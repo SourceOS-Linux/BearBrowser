@@ -1,0 +1,11 @@
+Package: bearbrowser
+Version: 0.1.0-overlay
+Section: web
+Priority: optional
+Architecture: amd64
+Maintainer: SourceOS <maintainers@sourceos.dev>
+Homepage: https://github.com/SourceOS-Linux/BearBrowser
+Description: SourceOS governed browser for humans and agents
+ BearBrowser is a SourceOS governed browser with separate human-secure and
+ agent-runtime profiles, policy-mediated automation surfaces, and workspace
+ integration contracts.
