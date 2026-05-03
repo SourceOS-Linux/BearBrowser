@@ -22,9 +22,10 @@ if ! grep -q '"product": "BearBrowser"' "$workspace/.bearbrowser/branding.json";
   exit 1
 fi
 
-# Product-surface scan. We intentionally exclude license, upstream docs, and git metadata.
+# Product-surface scan. We intentionally exclude license, upstream docs, provenance markers, and git metadata.
 leftovers="$(find "$workspace" -type f \
   ! -path '*/.git/*' \
+  ! -path '*/.bearbrowser/*' \
   ! -path '*/LICENSE*' \
   ! -path '*/COPYING*' \
   ! -path '*/README*' \
