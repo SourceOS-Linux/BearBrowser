@@ -1,0 +1,34 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: CredentialBackendSet
+metadata:
+  name: bearbrowser-macos-credential-backends
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/platform: macos
+spec:
+  platform: macos
+  defaultDecision: userMediated
+  backends:
+    - name: KeychainServices
+      purpose: OS-native credential lookup and storage
+      storesSecrets: true
+      browserOwnedVault: false
+      access: userAndPolicyMediated
+    - name: LocalAuthentication
+      purpose: Touch ID / device-owner unlock decision
+      storesSecrets: false
+      browserHandlesBiometricSecrets: false
+      resultSurface: allowDenyOnly
+      access: userMediated
+    - name: PlatformPasskeys
+      purpose: WebAuthn/passkey authentication through platform authenticator
+      storesSecrets: false
+      browserOwnedVault: false
+      access: userMediated
+  humanSecure:
+    allowed: true
+    requireUserConsent: true
+  agentRuntime:
+    allowed: false
+    inheritHumanCredentials: false
+    replacement: PolicyBrokerSessionCredential
