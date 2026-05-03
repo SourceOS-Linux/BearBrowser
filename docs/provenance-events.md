@@ -20,6 +20,8 @@ Each event should include:
 - `decision` for policy events
 - `reason` for denied actions
 
+Events must not contain passwords, payment card values, passkey private material, biometric material, tokens, cookies, or other secret values.
+
 ## Required events
 
 ### `browser.session.started`
@@ -121,6 +123,54 @@ Required fields:
 - `action`
 - `decision`
 - `policyDecisionId`
+- `brokerBackend` such as `KeychainServices`, `SecretService`, `KWallet`, `PlatformPasskeys`, or `PolicyBrokerSessionCredential`
+
+### `browser.credential.requested`
+
+Emitted when a page, user action, or automation surface requests credential access.
+
+Required fields:
+
+- `sessionId`
+- `credentialClass`
+- `brokerBackend`
+- `requestingOrigin`
+- `policyDecisionId`
+
+### `browser.credential.granted`
+
+Emitted when the broker grants credential access.
+
+Required fields:
+
+- `sessionId`
+- `credentialClass`
+- `brokerBackend`
+- `decision`
+- `policyDecisionId`
+
+### `browser.credential.denied`
+
+Emitted when the broker denies credential access.
+
+Required fields:
+
+- `sessionId`
+- `credentialClass`
+- `brokerBackend`
+- `reason`
+- `policyDecisionId`
+
+### `browser.credential.cleared`
+
+Emitted when a session-scoped credential is cleared or expires.
+
+Required fields:
+
+- `sessionId`
+- `credentialClass`
+- `credentialScope`
+- `cleanupStatus`
 
 ## Sinks
 
