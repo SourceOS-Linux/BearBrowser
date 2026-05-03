@@ -1,12 +1,45 @@
 # BearBrowser Nix Packaging
 
-This lane packages BearBrowser as LibreWolf-derived outputs with SourceOS overlays.
+BearBrowser exposes root-level Nix outputs for SourceOS packaging.
+
+## Commands
+
+Show outputs:
+
+```bash
+nix flake show
+```
+
+Build human secure profile package:
+
+```bash
+nix build .#bearbrowser-human-secure
+```
+
+Build agent runtime profile package:
+
+```bash
+nix build .#bearbrowser-agent-runtime
+```
+
+Enter development shell:
+
+```bash
+nix develop
+```
+
+Verify structural packaging inputs:
+
+```bash
+bash scripts/verify-nix-packaging.sh
+```
 
 ## Outputs
 
-- `bearbrowser-human-secure`
-- `bearbrowser-agent-runtime`
-- `bearbrowser-devshell`
+- `packages.${system}.bearbrowser-human-secure`
+- `packages.${system}.bearbrowser-agent-runtime`
+- `packages.${system}.default`
+- `devShells.${system}.default`
 
 ## Inputs
 
@@ -16,14 +49,20 @@ This lane packages BearBrowser as LibreWolf-derived outputs with SourceOS overla
 - Agent profile: `settings/profiles/agent-runtime`
 - Policy contract: `policy/bearbrowser-contract.yaml`
 - Mount plan: `mounts/agent-browser-mounts.yaml`
+- Upstream manifest: `manifests/upstream.json`
 
-## Build flow
+## Current build flow
+
+The current Nix outputs package the BearBrowser profile, policy, mount, and upstream metadata surfaces. They are intentionally metadata/profile packages, not full LibreWolf binary builds yet.
+
+## Full browser build flow target
 
 1. Resolve pinned LibreWolf ref from `manifests/upstream.json` or explicit build input.
 2. Run the overlay pipeline for the selected profile.
 3. Build the resulting LibreWolf-derived source workspace.
 4. Inject profile-specific settings and policies.
 5. Emit package metadata and provenance manifest.
+6. Promote artifacts through Nix, Homebrew, OCI, and SourceOS release channels.
 
 ## Reproducibility expectations
 
