@@ -1,16 +1,55 @@
 apiVersion: sourceos.dev/v1alpha1
 kind: WorkspaceSurface
 metadata:
-  name: sourceos-browser
+  name: bearbrowser
+  labels:
+    sourceos.dev/product: BearBrowser
 spec:
   surfaceType: browser
   displayName: BearBrowser
   modes:
     - human-secure
     - agent-runtime
+  stateModel:
+    states:
+      - idle
+      - requested
+      - policy-pending
+      - starting
+      - running
+      - blocked
+      - artifact-created
+      - ending
+      - ended
+      - failed
+    defaultState: idle
+  visibleFields:
+    - sessionId
+    - agentId
+    - workspaceId
+    - profileMode
+    - automationSurface
+    - currentUrl
+    - policyStatus
+    - artifactCount
+    - lastEventAt
   workspaceEvents:
     - browser.session.started
     - browser.session.ended
+    - browser.navigation.requested
+    - browser.navigation.completed
     - browser.download.created
     - browser.capture.created
     - browser.policy.violation
+    - browser.credential.boundary
+  userActions:
+    - openSessionDetails
+    - viewArtifacts
+    - viewPolicyDecision
+    - requestSessionEnd
+    - exportProvenanceSummary
+  redaction:
+    hideCredentials: true
+    hideCookieValues: true
+    hideLocalStorageValues: true
+    showArtifactMetadataOnlyByDefault: true
