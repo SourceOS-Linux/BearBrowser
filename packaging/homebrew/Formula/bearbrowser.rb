@@ -18,6 +18,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-update").write wrapper_for("bearbrowser-update.sh")
     (bin/"bearbrowser-automation-surfaces").write wrapper_for("bearbrowser-automation-surfaces.sh")
     (bin/"bearbrowser-install-runtime-deps").write wrapper_for("bearbrowser-install-runtime-deps.sh")
+    (bin/"bearbrowser-lock-runtime-deps").write wrapper_for("bearbrowser-lock-runtime-deps.sh")
     (bin/"bearbrowser-playwright").write wrapper_for("bearbrowser-playwright.sh")
     (bin/"bearbrowser-stagehand").write wrapper_for("bearbrowser-stagehand.sh")
     (bin/"bearbrowser-terminal").write wrapper_for("bearbrowser-terminal.sh")
@@ -42,6 +43,7 @@ class Bearbrowser < Formula
         bearbrowser-update
         bearbrowser-automation-surfaces
         bearbrowser-install-runtime-deps
+        bearbrowser-lock-runtime-deps
         bearbrowser-playwright --dry-run
         bearbrowser-stagehand --dry-run
         bearbrowser-terminal --dry-run
