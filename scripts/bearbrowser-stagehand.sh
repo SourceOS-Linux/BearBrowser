@@ -12,9 +12,7 @@ Usage: bearbrowser-stagehand [--operation observe|extract|recover] [--url URL] [
 
 Stagehand compatibility surface for BearBrowser.
 
-Dry-run validates the policy/provenance envelope and Stagehand dependency.
-Live execution remains guarded until provider credentials and PolicyFabric
-adapter integration are complete.
+Dry-run works after Homebrew install. Live execution remains guarded until provider credentials and PolicyFabric adapter integration are complete.
 USAGE
 }
 
@@ -59,7 +57,23 @@ url=$url
 policy=PolicyFabric
 provenance=required
 observationBeforeMutation=required
+liveExecution=guarded
 EOF
+
+if [ "$dry_run" = "true" ]; then
+  if command -v node >/dev/null 2>&1; then
+    echo "ok: node -> $(command -v node)"
+  else
+    echo "optional-missing: node"
+  fi
+  if [ -d "$repo_root/node_modules/@browserbasehq/stagehand" ]; then
+    echo "ok: @browserbasehq/stagehand runtime dependency present"
+  else
+    echo "optional-missing: @browserbasehq/stagehand runtime dependency"
+  fi
+  echo "Dry run complete."
+  exit 0
+fi
 
 if ! command -v node >/dev/null 2>&1; then
   echo "missing: node"
@@ -70,17 +84,9 @@ fi
 if [ ! -d "$repo_root/node_modules/@browserbasehq/stagehand" ]; then
   echo "missing: @browserbasehq/stagehand runtime dependency"
   echo "Run npm install in the BearBrowser repo, or install a packaged runtime distribution."
-  if [ "$dry_run" = "true" ]; then
-    echo "Dry run dependency check complete."
-    exit 2
-  fi
   exit 2
 fi
 
 export BEARBROWSER_URL="$url"
 export BEARBROWSER_STAGEHAND_OPERATION="$operation"
-if [ "$dry_run" = "true" ]; then
-  unset BEARBROWSER_ENABLE_LIVE_STAGEHAND
-fi
-
 exec node "$repo_root/runtime/stagehand-check.mjs"
