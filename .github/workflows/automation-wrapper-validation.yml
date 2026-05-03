@@ -19,9 +19,13 @@ jobs:
           bash -n scripts/bearbrowser-playwright.sh
           bash -n scripts/bearbrowser-terminal.sh
           bash -n scripts/bearbrowser-stagehand.sh
+          bash -n scripts/bearbrowser-install-runtime-deps.sh
+
+      - name: Validate dependency policy
+        run: node runtime/verify-runtime-deps.mjs
 
       - name: Validate dry-run commands
         run: |
-          bash scripts/bearbrowser-playwright.sh --dry-run || test "$?" = "2"
-          bash scripts/bearbrowser-terminal.sh --dry-run || test "$?" = "2"
-          bash scripts/bearbrowser-stagehand.sh --dry-run || test "$?" = "2"
+          bash scripts/bearbrowser-playwright.sh --dry-run
+          bash scripts/bearbrowser-terminal.sh --dry-run
+          bash scripts/bearbrowser-stagehand.sh --dry-run
