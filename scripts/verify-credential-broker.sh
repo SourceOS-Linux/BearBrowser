@@ -6,6 +6,7 @@ required=(
   policy/credential-broker-contract.yaml
   credential-broker/macos-backends.yaml
   credential-broker/linux-backends.yaml
+  prophet-workspace/credential-redaction.yaml
 )
 
 for path in "${required[@]}"; do
@@ -22,6 +23,7 @@ import yaml
 
 contract = yaml.safe_load(Path('policy/credential-broker-contract.yaml').read_text())
 spec = contract['spec']
+redaction = yaml.safe_load(Path('prophet-workspace/credential-redaction.yaml').read_text())['spec']
 errors = []
 
 if spec['storageModel'].get('browserOwnedPasswordVault') != 'disabledByDefault':
@@ -40,6 +42,12 @@ if spec['agentRuntime']['autofill'].get('allowed') is not False:
     errors.append('agent-runtime autofill must be false')
 if spec['redaction'].get('eventPayloadSecrets') != 'forbidden':
     errors.append('event payload secrets must be forbidden')
+
+for key in ['showSecretValues', 'showCredentialMaterial', 'showPaymentValues', 'showBiometricMaterial', 'showTokenValues', 'showCookieValues']:
+    if redaction.get(key) is not False:
+        errors.append(f'workspace redaction {key} must be false')
+if redaction.get('eventPayloadSecrets') != 'forbidden':
+    errors.append('workspace redaction eventPayloadSecrets must be forbidden')
 
 for backend_file in ['credential-broker/macos-backends.yaml', 'credential-broker/linux-backends.yaml']:
     data = yaml.safe_load(Path(backend_file).read_text())
