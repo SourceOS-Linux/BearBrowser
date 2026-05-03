@@ -1,0 +1,37 @@
+name: BearBrowser branding
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  branding-script-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout BearBrowser
+        uses: actions/checkout@v4
+
+      - name: Validate branding script syntax
+        run: |
+          bash -n scripts/apply-bearbrowser-branding.sh
+          bash -n scripts/verify-bearbrowser-branding.sh
+
+      - name: Validate branding overlay on fixture
+        run: |
+          mkdir -p build/branding-fixture/source/browser/branding/librewolf/default48
+          cat > build/branding-fixture/source/browser/branding/librewolf/brand.properties <<'EOF'
+          brandShortName=LibreWolf
+          brandFullName=LibreWolf Browser
+          vendorShortName=LibreWolf
+          EOF
+          cat > build/branding-fixture/source/io.gitlab.librewolf-community.desktop <<'EOF'
+          [Desktop Entry]
+          Name=LibreWolf
+          GenericName=LibreWolf Web Browser
+          StartupWMClass=LibreWolf
+          EOF
+          bash scripts/apply-bearbrowser-branding.sh --workspace build/branding-fixture/source
+          bash scripts/verify-bearbrowser-branding.sh build/branding-fixture/source
