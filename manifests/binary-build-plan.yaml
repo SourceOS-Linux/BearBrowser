@@ -1,0 +1,46 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BearBrowserBinaryBuildPlan
+metadata:
+  name: bearbrowser-librewolf-derived-binaries
+  labels:
+    sourceos.dev/product: BearBrowser
+spec:
+  upstream:
+    canonical: https://codeberg.org/librewolf/source.git
+    mirror: https://github.com/SourceOS-Linux/librewolf-source-mirror.git
+    refSource: manifests/upstream.json
+  generatedWorkspace:
+    script: scripts/apply-sourceos-overlays.sh
+    root: build/workspaces
+    committedToGit: false
+  profiles:
+    - name: human-secure
+      nixOutput: bearbrowser-human-secure-binary
+      settingsPath: settings/profiles/human-secure
+      includeMountPlan: false
+    - name: agent-runtime
+      nixOutput: bearbrowser-agent-runtime-binary
+      settingsPath: settings/profiles/agent-runtime
+      includeMountPlan: true
+  requiredMetadata:
+    - product
+    - profile
+    - upstreamRef
+    - bearbrowserRevision
+    - patchStackHash
+    - policyContractHash
+    - mountPlanHash
+    - targetSystem
+    - buildTimestamp
+  promotionGates:
+    - mirrorParityPasses
+    - overlayDryRunPasses
+    - overlayWorkspaceCreated
+    - browserBuildCompletes
+    - releaseMetadataEmitted
+    - generatedSourceNotCommitted
+    - licenseNoticesPreserved
+  nonGoalsForCurrentScaffold:
+    - committingGeneratedLibreWolfSource
+    - weakeningLibreWolfPrivacyDefaults
+    - sharingHumanProfileWithAgentRuntime
