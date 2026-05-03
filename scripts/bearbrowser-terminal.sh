@@ -71,15 +71,21 @@ policy=PolicyFabric
 provenance=required-for-agent-runtime
 EOF
 
+if [ "$dry_run" = "true" ]; then
+  if [ -n "$selected" ]; then
+    echo "Dry run complete. Terminal browser launch would use: $selected"
+  else
+    echo "optional-missing: no supported terminal browser found"
+    echo "Install one of: carbonyl, browsh, elinks, w3m, links, lynx"
+    echo "Dry run complete."
+  fi
+  exit 0
+fi
+
 if [ -z "$selected" ]; then
   echo "missing: no supported terminal browser found"
   echo "Install one of: carbonyl, browsh, elinks, w3m, links, lynx"
   exit 2
-fi
-
-if [ "$dry_run" = "true" ]; then
-  echo "Dry run complete. Terminal browser launch would use: $selected"
-  exit 0
 fi
 
 case "$selected" in
