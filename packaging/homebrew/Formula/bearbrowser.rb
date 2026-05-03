@@ -13,6 +13,7 @@ class Bearbrowser < Formula
     libexec.install Dir["*"]
 
     (bin/"bearbrowser").write wrapper_for("apply-sourceos-overlays.sh")
+    (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-verify-upstream").write wrapper_for("verify-upstream-parity.sh")
     (bin/"bearbrowser-doctor").write wrapper_for("bearbrowser-doctor.sh")
     (bin/"bearbrowser-update").write wrapper_for("bearbrowser-update.sh")
@@ -38,6 +39,7 @@ class Bearbrowser < Formula
 
       Useful commands:
         bearbrowser --profile agent-runtime --ref latest --dry-run
+        bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-upstream
         bearbrowser-doctor
         bearbrowser-update
@@ -55,6 +57,7 @@ class Bearbrowser < Formula
 
   test do
     assert_match "BearBrowser overlay plan", shell_output("#{bin}/bearbrowser --profile agent-runtime --ref latest --dry-run")
+    assert_match "BearBrowser full binary build lane", shell_output("#{bin}/bearbrowser-build-binary --profile agent-runtime --dry-run")
     assert_match "hidden_refs=", shell_output("#{bin}/bearbrowser-verify-upstream")
     assert_match "BearBrowser doctor", shell_output("#{bin}/bearbrowser-doctor")
     assert_match "browser.playwright", shell_output("#{bin}/bearbrowser-automation-surfaces")
