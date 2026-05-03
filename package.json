@@ -11,15 +11,23 @@
     "bearbrowser:deps:verify": "node runtime/verify-runtime-deps.mjs"
   },
   "dependencies": {
-    "@browserbasehq/stagehand": "3.3.0",
     "playwright": "1.55.1"
+  },
+  "peerDependencies": {
+    "@browserbasehq/stagehand": "3.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@browserbasehq/stagehand": {
+      "optional": true
+    }
   },
   "bearbrowser": {
     "dependencyPolicy": {
-      "stagehandTrack": "3.x promoted after npm audit showed v2 transitive vulnerabilities; live execution remains PolicyFabric-gated",
+      "stagehandTrack": "optional peer dependency until Stagehand transitive LangChain/LangSmith/uuid audit findings are resolved",
       "playwrightTrack": "1.55.1 minimum patched version for GHSA-7mvr-c777-76hp",
       "allowFloatingRanges": false,
-      "requireLockfileBeforeRelease": true
+      "requireLockfileBeforeRelease": true,
+      "stagehandDefaultInstall": false
     }
   }
 }
