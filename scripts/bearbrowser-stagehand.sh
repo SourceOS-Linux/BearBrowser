@@ -4,6 +4,7 @@ set -euo pipefail
 operation="observe"
 dry_run="false"
 url="about:blank"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -11,9 +12,9 @@ Usage: bearbrowser-stagehand [--operation observe|extract|recover] [--url URL] [
 
 Stagehand compatibility surface for BearBrowser.
 
-This command currently reports the intended policy and provenance envelope for
-future Stagehand integration. Live browser execution is not enabled in this
-scaffold.
+Dry-run validates the policy/provenance envelope and Stagehand dependency.
+Live execution remains guarded until provider credentials and PolicyFabric
+adapter integration are complete.
 USAGE
 }
 
@@ -58,7 +59,6 @@ url=$url
 policy=PolicyFabric
 provenance=required
 observationBeforeMutation=required
-liveExecution=disabled
 EOF
 
 if ! command -v node >/dev/null 2>&1; then
@@ -67,10 +67,20 @@ if ! command -v node >/dev/null 2>&1; then
   exit 2
 fi
 
-if [ "$dry_run" = "true" ]; then
-  echo "Dry run complete."
-  exit 0
+if [ ! -d "$repo_root/node_modules/@browserbasehq/stagehand" ]; then
+  echo "missing: @browserbasehq/stagehand runtime dependency"
+  echo "Run npm install in the BearBrowser repo, or install a packaged runtime distribution."
+  if [ "$dry_run" = "true" ]; then
+    echo "Dry run dependency check complete."
+    exit 2
+  fi
+  exit 2
 fi
 
-echo "Live Stagehand integration is not implemented in this scaffold yet."
-exit 64
+export BEARBROWSER_URL="$url"
+export BEARBROWSER_STAGEHAND_OPERATION="$operation"
+if [ "$dry_run" = "true" ]; then
+  unset BEARBROWSER_ENABLE_LIVE_STAGEHAND
+fi
+
+exec node "$repo_root/runtime/stagehand-check.mjs"
