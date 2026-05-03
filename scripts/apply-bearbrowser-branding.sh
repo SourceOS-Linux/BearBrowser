@@ -64,7 +64,7 @@ echo "dry_run=$dry_run"
 
 should_skip() {
   case "$1" in
-    */.git/*|*/LICENSE*|*/COPYING*|*/README*|*/docs/*|*/doc/*|*/manifests/upstream.json)
+    */.git/*|*/.bearbrowser/*|*/LICENSE*|*/COPYING*|*/README*|*/docs/*|*/doc/*|*/manifests/upstream.json)
       return 0
       ;;
   esac
@@ -101,8 +101,8 @@ replacements = {
     'Libre Wolf': 'BearBrowser',
     'librewolf': 'bearbrowser',
     'LibreWolf.desktop': 'BearBrowser.desktop',
-    'io.gitlab.librewolf-community': 'dev.sourceos.BearBrowser',
     'io.gitlab.librewolf-community.librewolf': 'dev.sourceos.BearBrowser',
+    'io.gitlab.librewolf-community': 'dev.sourceos.BearBrowser',
 }
 for old, new in replacements.items():
     text = text.replace(old, new)
@@ -140,7 +140,8 @@ if [ "$dry_run" != "true" ]; then
   "product": "BearBrowser",
   "appId": "dev.sourceos.BearBrowser",
   "profileName": "BearBrowser",
-  "upstreamDerivative": "LibreWolf-derived",
+  "upstreamDerivative": "upstream-derived",
+  "upstreamAttribution": "See manifests/upstream.json and license notices.",
   "licenseNotice": "Preserve upstream license and attribution notices."
 }
 EOF
