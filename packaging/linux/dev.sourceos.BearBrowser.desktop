@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=BearBrowser
+GenericName=Web Browser
+Comment=SourceOS governed browser for humans and agents
+Exec=bearbrowser %u
+Terminal=false
+StartupNotify=true
+StartupWMClass=BearBrowser
+Icon=dev.sourceos.BearBrowser
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;image/gif;image/jpeg;image/png;image/webp;x-scheme-handler/http;x-scheme-handler/https;
+Keywords=web;browser;sourceos;agent;policy;privacy;
