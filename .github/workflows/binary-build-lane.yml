@@ -1,0 +1,18 @@
+name: BearBrowser binary build lane
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  binary-build-lane:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout BearBrowser
+        uses: actions/checkout@v4
+
+      - name: Verify binary build lane
+        run: bash scripts/verify-binary-build-lane.sh
