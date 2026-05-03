@@ -1,0 +1,25 @@
+name: BearBrowser macOS distribution
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  macos-distribution-scripts:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout BearBrowser
+        uses: actions/checkout@v4
+
+      - name: Validate macOS script syntax
+        run: |
+          bash -n scripts/package-macos-app.sh
+          bash -n scripts/sign-notarize-macos-app.sh
+          bash -n scripts/verify-macos-app.sh
+          bash -n scripts/update-homebrew-cask.sh
+
+      - name: Validate Cask syntax
+        run: ruby -c packaging/homebrew/Casks/bearbrowser.rb
