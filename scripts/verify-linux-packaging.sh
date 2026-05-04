@@ -14,9 +14,17 @@ required=(
   "packaging/linux/appimage/dev.sourceos.BearBrowser.appdata.xml"
   "packaging/linux/deb/control"
   "packaging/linux/rpm/bearbrowser.spec"
+  "packaging/linux/release-plan.yaml"
   "packaging/linux/sandbox/apparmor/bearbrowser-agent-runtime"
   "packaging/linux/sandbox/seccomp/bearbrowser-agent-runtime.json"
   "packaging/linux/sandbox/selinux/bearbrowser-agent-runtime.te"
+  "scripts/prepare-linux-runtime-tree.sh"
+  "scripts/package-linux-tarball.sh"
+  "scripts/package-linux-deb.sh"
+  "scripts/package-linux-rpm.sh"
+  "scripts/package-linux-appimage.sh"
+  "scripts/package-linux-flatpak.sh"
+  "scripts/package-linux-all.sh"
 )
 
 for path in "${required[@]}"; do
@@ -27,6 +35,14 @@ for path in "${required[@]}"; do
   echo "ok: $path"
 done
 
+bash -n scripts/prepare-linux-runtime-tree.sh
+bash -n scripts/package-linux-tarball.sh
+bash -n scripts/package-linux-deb.sh
+bash -n scripts/package-linux-rpm.sh
+bash -n scripts/package-linux-appimage.sh
+bash -n scripts/package-linux-flatpak.sh
+bash -n scripts/package-linux-all.sh
+
 if grep -RIE 'LibreWolf|librewolf|Libre Wolf' packaging/linux branding/bearbrowser.svg; then
   echo "ERROR: upstream product branding found in Linux product surface" >&2
   exit 1
@@ -36,8 +52,14 @@ python3 - <<'PY'
 from pathlib import Path
 import json
 import xml.etree.ElementTree as ET
+import yaml
 
 json.loads(Path('packaging/linux/sandbox/seccomp/bearbrowser-agent-runtime.json').read_text())
+release_plan = yaml.safe_load(Path('packaging/linux/release-plan.yaml').read_text())
+if release_plan['spec']['product'] != 'BearBrowser':
+    raise SystemExit('ERROR: Linux release plan product must be BearBrowser')
+if release_plan['spec']['appId'] != 'dev.sourceos.BearBrowser':
+    raise SystemExit('ERROR: Linux release plan appId must be dev.sourceos.BearBrowser')
 for xml_path in [
     Path('packaging/linux/dev.sourceos.BearBrowser.metainfo.xml'),
     Path('packaging/linux/appimage/dev.sourceos.BearBrowser.appdata.xml'),
