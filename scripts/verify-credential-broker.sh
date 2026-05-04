@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
+cd "$repo_root"
+
 required=(
   docs/credential-broker.md
   policy/credential-broker-contract.yaml
