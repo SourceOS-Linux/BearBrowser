@@ -16,6 +16,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-verify-upstream").write wrapper_for("verify-upstream-parity.sh")
     (bin/"bearbrowser-doctor").write wrapper_for("bearbrowser-doctor.sh")
+    (bin/"bearbrowser-credential-doctor").write wrapper_for("bearbrowser-credential-doctor.sh")
     (bin/"bearbrowser-update").write wrapper_for("bearbrowser-update.sh")
     (bin/"bearbrowser-automation-surfaces").write wrapper_for("bearbrowser-automation-surfaces.sh")
     (bin/"bearbrowser-install-runtime-deps").write wrapper_for("bearbrowser-install-runtime-deps.sh")
