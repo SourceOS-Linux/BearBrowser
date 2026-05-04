@@ -15,6 +15,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser").write wrapper_for("apply-sourceos-overlays.sh")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-install-app-launcher").write wrapper_for("install-macos-app-launcher.sh")
+    (bin/"bearbrowser-repair-app-launcher").write wrapper_for("repair-macos-app-launcher.sh")
     (bin/"bearbrowser-verify-build-lane").write wrapper_for("verify-build-lane.sh")
     (bin/"bearbrowser-check-build-env").write wrapper_for("check-build-environment.sh")
     (bin/"bearbrowser-discover-build-system").write wrapper_for("discover-upstream-build-system.sh")
@@ -47,6 +48,7 @@ class Bearbrowser < Formula
 
       Useful commands:
         bearbrowser-install-app-launcher
+        bearbrowser-repair-app-launcher
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
