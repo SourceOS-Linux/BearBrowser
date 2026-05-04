@@ -14,6 +14,7 @@ class Bearbrowser < Formula
 
     (bin/"bearbrowser").write wrapper_for("apply-sourceos-overlays.sh")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
+    (bin/"bearbrowser-install-app-launcher").write wrapper_for("install-macos-app-launcher.sh")
     (bin/"bearbrowser-verify-build-lane").write wrapper_for("verify-build-lane.sh")
     (bin/"bearbrowser-check-build-env").write wrapper_for("check-build-environment.sh")
     (bin/"bearbrowser-discover-build-system").write wrapper_for("discover-upstream-build-system.sh")
@@ -45,6 +46,7 @@ class Bearbrowser < Formula
       BearBrowser Formula installs the overlay/runtime tooling.
 
       Useful commands:
+        bearbrowser-install-app-launcher
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
@@ -64,7 +66,7 @@ class Bearbrowser < Formula
         bearbrowser-stagehand --dry-run
         bearbrowser-terminal --dry-run
 
-      Future GUI app distribution will use:
+      Full signed app distribution will use:
         brew install --cask SourceOS-Linux/tap/bearbrowser
     EOS
   end
