@@ -8,7 +8,8 @@ usage() {
 Usage: repair-macos-app-launcher [--target /Applications/BearBrowser.app]
 
 Repairs BearBrowser.app so it opens a usable bootstrap browser engine instead of
-only displaying status. It also writes launcher logs to:
+only displaying status. It installs a compiled macOS launcher executable and
+writes launcher logs to:
 
   ~/Library/Logs/BearBrowser/launcher.log
 USAGE
@@ -37,14 +38,25 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-exe="$target/Contents/MacOS/BearBrowser"
+if ! command -v clang >/dev/null 2>&1; then
+  echo "ERROR: clang is required to build the BearBrowser app launcher executable" >&2
+  exit 2
+fi
+
 if [ ! -d "$target/Contents/MacOS" ]; then
   echo "ERROR: BearBrowser.app is missing Contents/MacOS: $target" >&2
   echo "Run: bearbrowser-install-app-launcher" >&2
   exit 1
 fi
 
-cat > "$exe" <<'EOF'
+resources="$target/Contents/Resources"
+macos="$target/Contents/MacOS"
+mkdir -p "$resources" "$macos"
+launcher_sh="$resources/launcher.sh"
+launcher_c="$resources/launcher.c"
+exe="$macos/BearBrowser"
+
+cat > "$launcher_sh" <<'EOF'
 #!/usr/bin/env bash
 set -u
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
@@ -58,6 +70,7 @@ exec >>"$log" 2>&1
 
 echo "---- $(date -u +%Y-%m-%dT%H:%M:%SZ) BearBrowser launcher start ----"
 echo "PATH=$PATH"
+echo "argv=$*"
 
 cat > "$profile/user.js" <<'PREFS'
 user_pref("browser.download.useDownloadDir", true);
@@ -80,7 +93,6 @@ cat > "$support/policies/policies.json" <<'POLICIES'
 }
 POLICIES
 
-# Prefer future real BearBrowser runtime if present.
 for path in \
   "$HOME/Applications/BearBrowser.app/Contents/MacOS/bearbrowser" \
   "/opt/homebrew/bin/bearbrowser-runtime" \
@@ -92,7 +104,6 @@ for path in \
   fi
 done
 
-# First try LaunchServices. This is more reliable for app bundles.
 for app in "Firefox" "Firefox Developer Edition"; do
   if /usr/bin/open -Ra "$app" >/dev/null 2>&1; then
     echo "launching bootstrap engine via LaunchServices: $app"
@@ -106,7 +117,6 @@ for app in "Firefox" "Firefox Developer Edition"; do
   fi
 done
 
-# Then try known binary paths directly.
 for path in \
   "/Applications/Firefox.app/Contents/MacOS/firefox" \
   "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox" \
@@ -136,7 +146,52 @@ else
 fi
 exit 64
 EOF
+chmod +x "$launcher_sh"
 
+cat > "$launcher_c" <<'EOF'
+#include <libgen.h>
+#include <limits.h>
+#include <mach-o/dyld.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+  char exe_path[PATH_MAX];
+  uint32_t size = sizeof(exe_path);
+  if (_NSGetExecutablePath(exe_path, &size) != 0) {
+    return 111;
+  }
+
+  char resolved[PATH_MAX];
+  if (realpath(exe_path, resolved) == NULL) {
+    return 112;
+  }
+
+  char dirbuf[PATH_MAX];
+  strncpy(dirbuf, resolved, sizeof(dirbuf));
+  dirbuf[sizeof(dirbuf) - 1] = '\0';
+  char *macos_dir = dirname(dirbuf);
+
+  char script[PATH_MAX];
+  snprintf(script, sizeof(script), "%s/../Resources/launcher.sh", macos_dir);
+
+  char **args = calloc((size_t)argc + 3, sizeof(char *));
+  if (!args) return 113;
+  args[0] = "/bin/bash";
+  args[1] = script;
+  for (int i = 1; i < argc; i++) {
+    args[i + 1] = argv[i];
+  }
+  args[argc + 1] = NULL;
+  execv("/bin/bash", args);
+  perror("execv");
+  return 114;
+}
+EOF
+
+clang "$launcher_c" -o "$exe"
 chmod +x "$exe"
 xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
 
@@ -147,6 +202,6 @@ fi
 
 /usr/bin/touch "$target"
 
-echo "Repaired BearBrowser app launcher: $target"
+echo "Repaired BearBrowser app launcher with compiled executable: $target"
 echo "Open: open '$target'"
 echo "Log: ~/Library/Logs/BearBrowser/launcher.log"
