@@ -5,7 +5,8 @@ profile="agent-runtime"
 ref="latest"
 dry_run="false"
 workspace_root="build/workspaces"
-repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
 manifest_file="$repo_root/manifests/upstream.json"
 
 mirror_from_manifest() {
@@ -109,6 +110,7 @@ workspace="$repo_root/${workspace_root}/${profile}-${safe_ref}"
 manifest="$workspace/bearbrowser-overlay-manifest.json"
 
 echo "BearBrowser overlay plan"
+echo "repo_root=$repo_root"
 echo "mirror=$mirror"
 echo "profile=$profile"
 echo "requested_ref=$ref"
