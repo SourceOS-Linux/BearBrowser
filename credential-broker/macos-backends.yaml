@@ -15,8 +15,9 @@ spec:
       browserOwnedVault: false
       access: userAndPolicyMediated
     - name: LocalAuthentication
-      purpose: Touch ID / device-owner unlock decision
+      purpose: OS-mediated device-owner unlock decision
       storesSecrets: false
+      browserOwnedVault: false
       browserHandlesBiometricSecrets: false
       resultSurface: allowDenyOnly
       access: userMediated
