@@ -10,8 +10,9 @@ Usage: install-macos-app-launcher [--target /Applications/BearBrowser.app] [--ve
 
 Installs a local BearBrowser.app launcher into /Applications.
 
-This is a launcher for the installed BearBrowser tooling and product surface.
-The full browser binary/app bundle is tracked separately by Lane 13 and Lane 15.
+The launcher opens a BearBrowser runtime if present. Until the full runtime exists,
+it opens an installed local Firefox-compatible browser engine with an isolated
+BearBrowser profile and policy files.
 USAGE
 }
 
@@ -95,22 +96,62 @@ cat > "$macos/BearBrowser" <<'EOF'
 set -euo pipefail
 PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
-msg="BearBrowser tooling is installed.\n\nThe full GUI browser runtime is tracked by the build lane.\n\nUse Terminal commands for now:\n  bearbrowser-doctor\n  bearbrowser-verify-build-lane"
+support="$HOME/Library/Application Support/BearBrowser"
+profile="$support/profile"
+mkdir -p "$profile" "$support/policies"
+
+cat > "$profile/user.js" <<'PREFS'
+user_pref("browser.download.useDownloadDir", true);
+user_pref("browser.download.always_ask_before_handling_new_types", false);
+user_pref("browser.sessionstore.resume_from_crash", false);
+user_pref("signon.rememberSignons", false);
+user_pref("media.navigator.enabled", false);
+user_pref("geo.enabled", false);
+PREFS
+
+cat > "$support/policies/policies.json" <<'POLICIES'
+{
+  "policies": {
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisablePocket": true,
+    "DontCheckDefaultBrowser": true,
+    "OfferToSaveLogins": false
+  }
+}
+POLICIES
+
+candidate=""
+for path in \
+  "$HOME/Applications/BearBrowser.app/Contents/MacOS/bearbrowser" \
+  "/Applications/BearBrowser.app/Contents/MacOS/bearbrowser" \
+  "/opt/homebrew/bin/bearbrowser-runtime" \
+  "/usr/local/bin/bearbrowser-runtime" \
+  "/Applications/Firefox.app/Contents/MacOS/firefox" \
+  "/Applications/LibreWolf.app/Contents/MacOS/librewolf" \
+  "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox"; do
+  if [ -x "$path" ]; then
+    candidate="$path"
+    break
+  fi
+done
+
+if [ -z "$candidate" ]; then
+  if command -v firefox >/dev/null 2>&1; then
+    candidate="$(command -v firefox)"
+  fi
+fi
+
+if [ -n "$candidate" ]; then
+  exec "$candidate" -no-remote -profile "$profile" "about:blank"
+fi
+
+msg="BearBrowser launcher is installed, but no local browser engine was found.\n\nInstall Firefox for the temporary bootstrap runtime, or complete the BearBrowser build lane.\n\nCommands:\n  brew install --cask firefox\n  bearbrowser-verify-build-lane"
 
 if command -v osascript >/dev/null 2>&1; then
-  choice="$(osascript <<APPLESCRIPT
-set response to display dialog "$msg" buttons {"Open Terminal", "OK"} default button "OK" with title "BearBrowser" with icon note
-button returned of response
+  osascript <<APPLESCRIPT
+set response to display dialog "$msg" buttons {"OK"} default button "OK" with title "BearBrowser" with icon caution
 APPLESCRIPT
-)"
-  if [ "$choice" = "Open Terminal" ]; then
-    osascript <<'APPLESCRIPT'
-tell application "Terminal"
-  activate
-  do script "bearbrowser-doctor; echo; bearbrowser-verify-build-lane; echo; echo 'BearBrowser launcher is installed at /Applications/BearBrowser.app';"
-end tell
-APPLESCRIPT
-  fi
 else
   echo "$msg"
 fi
