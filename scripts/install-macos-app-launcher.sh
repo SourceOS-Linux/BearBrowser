@@ -119,7 +119,7 @@ chmod +x "$macos/BearBrowser"
 
 python3 - "$iconset" <<'PY'
 from pathlib import Path
-import struct, zlib, sys, math
+import struct, zlib, sys
 
 out = Path(sys.argv[1])
 out.mkdir(parents=True, exist_ok=True)
@@ -131,7 +131,6 @@ def png(path, size):
         for x in range(size):
             nx = (x + 0.5) / size
             ny = (y + 0.5) / size
-            # rounded brown background
             bg = (80, 48, 25, 255)
             face = (184, 119, 58, 255)
             ear = (92, 53, 29, 255)
@@ -171,7 +170,14 @@ cp -R "$app" "$target"
 chmod -R u+rwX,go+rX "$target"
 xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
 
+lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [ -x "$lsregister" ]; then
+  "$lsregister" -f "$target" || true
+fi
+
+/usr/bin/touch "$target"
 rm -rf "$workdir"
 
 echo "Installed BearBrowser app launcher: $target"
-echo "Open it from Finder, Spotlight, or: open -a BearBrowser"
+echo "Open by path now: open '$target'"
+echo "If LaunchServices is still warming up, retry: open -a BearBrowser"
