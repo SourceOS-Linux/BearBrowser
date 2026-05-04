@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
+cd "$repo_root"
+
 desktop="packaging/linux/dev.sourceos.BearBrowser.desktop"
 metainfo="packaging/linux/dev.sourceos.BearBrowser.metainfo.xml"
 icon="branding/bearbrowser.svg"
