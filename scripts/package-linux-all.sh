@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-runtime_tree="${BEARBROWSER_LINUX_RUNTIME_TREE:-build/linux/runtime-tree}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
+runtime_tree="${BEARBROWSER_LINUX_RUNTIME_TREE:-$repo_root/build/linux/runtime-tree}"
 profile="${BEARBROWSER_PROFILE:-human-secure}"
 version="${BEARBROWSER_VERSION:-0.1.0-overlay}"
-out_dir="${BEARBROWSER_DIST_DIR:-dist/linux}"
+out_dir="${BEARBROWSER_DIST_DIR:-$repo_root/dist/linux}"
 
 usage() {
   cat <<'USAGE'
@@ -53,28 +55,28 @@ fi
 
 mkdir -p "$out_dir"
 
-bash scripts/package-linux-tarball.sh --runtime-tree "$runtime_tree" --profile "$profile" --version "$version" --out-dir "$out_dir"
+bash "$repo_root/scripts/package-linux-tarball.sh" --runtime-tree "$runtime_tree" --profile "$profile" --version "$version" --out-dir "$out_dir"
 
 if command -v dpkg-deb >/dev/null 2>&1; then
-  bash scripts/package-linux-deb.sh --runtime-tree "$runtime_tree" --version "$version" --out-dir "$out_dir"
+  bash "$repo_root/scripts/package-linux-deb.sh" --runtime-tree "$runtime_tree" --version "$version" --out-dir "$out_dir"
 else
   echo "skip: dpkg-deb not installed"
 fi
 
 if command -v rpmbuild >/dev/null 2>&1; then
-  bash scripts/package-linux-rpm.sh --runtime-tree "$runtime_tree" --version "${version%%-*}" --out-dir "$out_dir"
+  bash "$repo_root/scripts/package-linux-rpm.sh" --runtime-tree "$runtime_tree" --version "${version%%-*}" --out-dir "$out_dir"
 else
   echo "skip: rpmbuild not installed"
 fi
 
 if command -v appimagetool >/dev/null 2>&1; then
-  bash scripts/package-linux-appimage.sh --runtime-tree "$runtime_tree" --profile "$profile" --version "$version" --out-dir "$out_dir"
+  bash "$repo_root/scripts/package-linux-appimage.sh" --runtime-tree "$runtime_tree" --profile "$profile" --version "$version" --out-dir "$out_dir"
 else
   echo "skip: appimagetool not installed"
 fi
 
 if command -v flatpak-builder >/dev/null 2>&1 && command -v flatpak >/dev/null 2>&1; then
-  bash scripts/package-linux-flatpak.sh --out-dir "$out_dir"
+  bash "$repo_root/scripts/package-linux-flatpak.sh" --out-dir "$out_dir"
 else
   echo "skip: flatpak-builder/flatpak not installed"
 fi
