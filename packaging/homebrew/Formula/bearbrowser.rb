@@ -14,6 +14,7 @@ class Bearbrowser < Formula
 
     (bin/"bearbrowser").write wrapper_for("apply-sourceos-overlays.sh")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
+    (bin/"bearbrowser-verify-build-lane").write wrapper_for("verify-build-lane.sh")
     (bin/"bearbrowser-check-build-env").write wrapper_for("check-build-environment.sh")
     (bin/"bearbrowser-discover-build-system").write wrapper_for("discover-upstream-build-system.sh")
     (bin/"bearbrowser-verify-upstream").write wrapper_for("verify-upstream-parity.sh")
@@ -46,6 +47,7 @@ class Bearbrowser < Formula
       Useful commands:
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
+        bearbrowser-verify-build-lane
         bearbrowser-check-build-env
         bearbrowser-discover-build-system <workspace-source-dir>
         bearbrowser-verify-upstream
@@ -70,6 +72,7 @@ class Bearbrowser < Formula
   test do
     assert_match "BearBrowser overlay plan", shell_output("#{bin}/bearbrowser --profile agent-runtime --ref latest --dry-run")
     assert_match "BearBrowser full binary build lane", shell_output("#{bin}/bearbrowser-build-binary --profile agent-runtime --dry-run")
+    assert_match "BearBrowser build lane verified", shell_output("#{bin}/bearbrowser-verify-build-lane")
     assert_match "BearBrowser build environment check", shell_output("#{bin}/bearbrowser-check-build-env")
     assert_match "hidden_refs=", shell_output("#{bin}/bearbrowser-verify-upstream")
     assert_match "BearBrowser doctor", shell_output("#{bin}/bearbrowser-doctor")
