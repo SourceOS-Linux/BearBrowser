@@ -16,6 +16,10 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-open").write wrapper_for("bearbrowser-open.sh")
     (bin/"bearbrowser-status").write wrapper_for("bearbrowser-status.sh")
     (bin/"bearbrowser-reset-bootstrap").write wrapper_for("bearbrowser-reset-bootstrap.sh")
+    (bin/"bearbrowser-emit-event").write wrapper_for("bearbrowser-emit-event.py")
+    (bin/"bearbrowser-verify-provenance").write wrapper_for("bearbrowser-verify-provenance.py")
+    (bin/"bearbrowser-propose-action").write wrapper_for("bearbrowser-propose-action.py")
+    (bin/"bearbrowser-verify-actions").write wrapper_for("bearbrowser-verify-actions.py")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-install-app-launcher").write wrapper_for("install-macos-app-launcher.sh")
     (bin/"bearbrowser-repair-app-launcher").write wrapper_for("repair-macos-app-launcher.sh")
@@ -55,6 +59,10 @@ class Bearbrowser < Formula
         bearbrowser-open
         bearbrowser-status
         bearbrowser-reset-bootstrap
+        bearbrowser-emit-event --event-type runtime.health --payload '{"status":"ok"}'
+        bearbrowser-verify-provenance
+        bearbrowser-propose-action --action-type summarize_page --target-kind page --target-label current-page
+        bearbrowser-verify-actions
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
@@ -91,5 +99,7 @@ class Bearbrowser < Formula
     assert_match "BearBrowser credential broker policy verified", shell_output("#{bin}/bearbrowser-verify-credentials")
     assert_match "BearBrowser Linux packaging verified", shell_output("#{bin}/bearbrowser-verify-linux-packaging")
     assert_match "browser.playwright", shell_output("#{bin}/bearbrowser-automation-surfaces")
+    assert_match "BearBrowser provenance", shell_output("#{bin}/bearbrowser-emit-event --event-type runtime.health --payload '{\"status\":\"test\"}'")
+    assert_match "BearBrowser policy action", shell_output("#{bin}/bearbrowser-propose-action --action-type summarize_page --target-kind page --target-label test")
   end
 end
