@@ -7,10 +7,8 @@ usage() {
   cat <<'USAGE'
 Usage: repair-macos-app-launcher [--target /Applications/BearBrowser.app]
 
-Repairs BearBrowser.app so it opens a usable bootstrap browser engine. It
-installs a compiled macOS launcher executable and writes launcher logs to:
-
-  ~/Library/Logs/BearBrowser/launcher.log
+Repairs BearBrowser.app so the running Dock process is BearBrowser, not Firefox.
+Installs a native macOS WebKit bootstrap shell inside the app bundle.
 USAGE
 }
 
@@ -38,7 +36,7 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 if ! command -v clang >/dev/null 2>&1; then
-  echo "ERROR: clang is required to build the BearBrowser app launcher executable" >&2
+  echo "ERROR: clang is required to build the BearBrowser native launcher" >&2
   exit 2
 fi
 
@@ -48,50 +46,34 @@ if [ ! -d "$target/Contents/MacOS" ]; then
   exit 1
 fi
 
-resources="$target/Contents/Resources"
-macos="$target/Contents/MacOS"
+contents="$target/Contents"
+resources="$contents/Resources"
+macos="$contents/MacOS"
 mkdir -p "$resources" "$macos"
-launcher_sh="$resources/launcher.sh"
-launcher_c="$resources/launcher.c"
+
+plist="$contents/Info.plist"
+landing="$resources/BearBrowser-start.html"
+source="$resources/BearBrowserWebKitLauncher.m"
 exe="$macos/BearBrowser"
 
-cat > "$launcher_sh" <<'EOF'
-#!/usr/bin/env bash
-set -u
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
-support="$HOME/Library/Application Support/BearBrowser"
-profile="$support/profile"
-logdir="$HOME/Library/Logs/BearBrowser"
-log="$logdir/launcher.log"
-landing="$support/BearBrowser-start.html"
-mkdir -p "$profile" "$support/policies" "$logdir"
-exec >>"$log" 2>&1
-
-echo "---- $(date -u +%Y-%m-%dT%H:%M:%SZ) BearBrowser launcher start ----"
-echo "PATH=$PATH"
-echo "profile=$profile"
-
-cat > "$profile/user.js" <<'PREFS'
-user_pref("browser.download.useDownloadDir", true);
-user_pref("browser.download.always_ask_before_handling_new_types", false);
-user_pref("browser.sessionstore.resume_from_crash", false);
-user_pref("signon.rememberSignons", false);
-user_pref("media.navigator.enabled", false);
-user_pref("geo.enabled", false);
-PREFS
-
-cat > "$support/policies/policies.json" <<'POLICIES'
-{
-  "policies": {
-    "DisableTelemetry": true,
-    "DisableFirefoxStudies": true,
-    "DisablePocket": true,
-    "DontCheckDefaultBrowser": true,
-    "OfferToSaveLogins": false
-  }
-}
-POLICIES
+cat > "$plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>BearBrowser</string>
+  <key>CFBundleDisplayName</key><string>BearBrowser</string>
+  <key>CFBundleIdentifier</key><string>dev.sourceos.BearBrowser</string>
+  <key>CFBundleExecutable</key><string>BearBrowser</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>BearBrowser</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0-overlay</string>
+  <key>CFBundleVersion</key><string>0.1.0-overlay</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
 
 cat > "$landing" <<'HTML'
 <!doctype html>
@@ -101,121 +83,117 @@ cat > "$landing" <<'HTML'
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BearBrowser</title>
 <style>
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#1f1b16;color:#f4efe7;display:grid;place-items:center;min-height:100vh}
-main{max-width:760px;padding:48px;border:1px solid #6d4b31;border-radius:28px;background:#2a241d;box-shadow:0 30px 90px rgba(0,0,0,.35)}
-h1{font-size:48px;margin:0 0 8px} p{font-size:18px;line-height:1.55;color:#d8cabc}.bear{font-size:64px}.status{margin-top:28px;padding:16px 18px;border-radius:18px;background:#3a3027;color:#f6d28b;font-weight:700} code{color:#f6d28b}
+:root{color-scheme:dark;--bg:#1f1b16;--panel:#2a241d;--line:#6d4b31;--text:#f4efe7;--muted:#d8cabc;--gold:#f6d28b}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at 30% 15%,#3a2a1d 0,#1f1b16 45%,#15120f 100%);color:var(--text);display:grid;place-items:center;min-height:100vh}.shell{max-width:860px;margin:48px;padding:48px;border:1px solid var(--line);border-radius:30px;background:rgba(42,36,29,.94);box-shadow:0 30px 90px rgba(0,0,0,.35)}.bear{font-size:64px}h1{font-size:52px;line-height:1.05;margin:12px 0 14px}p{font-size:18px;line-height:1.55;color:var(--muted)}.status{margin-top:28px;padding:16px 18px;border-radius:18px;background:#3a3027;color:var(--gold);font-weight:700}code{color:var(--gold)}
 </style>
 </head>
 <body>
-<main>
+<main class="shell">
 <div class="bear">🐻</div>
 <h1>BearBrowser</h1>
-<p>Bootstrap browser surface is running with an isolated BearBrowser profile.</p>
-<p>The full BearBrowser runtime remains tracked by the build lane. This interim launcher exists so the app opens visibly from Applications while Lane 13 continues.</p>
-<div class="status">Next: <code>bearbrowser-verify-build-lane</code></div>
+<p>Native BearBrowser bootstrap shell is running. The Dock process and app identity should now be BearBrowser, not Firefox.</p>
+<p>The final Gecko-derived runtime remains tracked by Lane 13. This interim native shell exists so the product opens from Applications with correct identity while the full runtime continues.</p>
+<div class="status">BearBrowser native bootstrap active</div>
 </main>
 </body>
 </html>
 HTML
 
-landing_url="file://$landing"
+cat > "$source" <<'OBJC'
+#import <Cocoa/Cocoa.h>
+#import <WebKit/WebKit.h>
 
-for path in \
-  "$HOME/Applications/BearBrowser.app/Contents/MacOS/bearbrowser" \
-  "/opt/homebrew/bin/bearbrowser-runtime" \
-  "/usr/local/bin/bearbrowser-runtime"; do
-  if [ -x "$path" ]; then
-    echo "launching real BearBrowser runtime: $path"
-    "$path" -no-remote -profile "$profile" -new-window "$landing_url" &
-    exit 0
-  fi
-done
-
-activate_app() {
-  local app="$1"
-  if command -v osascript >/dev/null 2>&1; then
-    osascript <<APPLESCRIPT >/dev/null 2>&1 || true
-tell application "$app" to activate
-APPLESCRIPT
-  fi
+static void BBLog(NSString *message) {
+  NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/BearBrowser"];
+  [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+  NSString *path = [dir stringByAppendingPathComponent:@"launcher.log"];
+  NSString *line = [NSString stringWithFormat:@"%@ %@\n", [NSDate date], message];
+  NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+  if (!handle) { [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]; return; }
+  [handle seekToEndOfFile]; [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]]; [handle closeFile];
 }
 
-for app in "Firefox" "Firefox Developer Edition"; do
-  if /usr/bin/open -Ra "$app" >/dev/null 2>&1; then
-    echo "launching bootstrap engine via LaunchServices: $app url=$landing_url"
-    /usr/bin/open -na "$app" --args -no-remote -profile "$profile" -new-window "$landing_url"
-    activate_app "$app"
-    sleep 2
-    if pgrep -if "Firefox" >/dev/null 2>&1; then
-      echo "bootstrap launch appears active: $app"
-      exit 0
-    fi
-    echo "LaunchServices attempted $app but no Firefox process was observed"
-  fi
-done
+@interface BBDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate, NSTextFieldDelegate>
+@property(strong) NSWindow *window;
+@property(strong) WKWebView *webView;
+@property(strong) NSTextField *address;
+@end
 
-for path in \
-  "/Applications/Firefox.app/Contents/MacOS/firefox" \
-  "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox" \
-  "/opt/homebrew/bin/firefox" \
-  "/usr/local/bin/firefox"; do
-  if [ -x "$path" ]; then
-    echo "launching bootstrap engine directly: $path url=$landing_url"
-    "$path" -no-remote -profile "$profile" -new-window "$landing_url" &
-    sleep 2
-    if pgrep -if "Firefox" >/dev/null 2>&1; then
-      echo "direct launch appears active: $path"
-      exit 0
-    fi
-    echo "direct launch attempted but no Firefox process was observed: $path"
-  fi
-done
+@implementation BBDelegate
+- (void)applicationDidFinishLaunching:(NSNotification *)n {
+  BBLog(@"BearBrowser native WebKit shell start");
+  [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+  NSRect frame = NSMakeRect(0, 0, 1180, 820);
+  self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable) backing:NSBackingStoreBuffered defer:NO];
+  [self.window setTitle:@"BearBrowser"];
+  [self.window center];
 
-echo "ERROR: no local browser engine found"
-if command -v osascript >/dev/null 2>&1; then
-  osascript <<APPLESCRIPT
-set response to display dialog "BearBrowser could not find or start a local browser engine. Install Firefox or complete the BearBrowser build lane. Log: $log" buttons {"OK"} default button "OK" with title "BearBrowser" with icon caution
-APPLESCRIPT
-fi
-exit 64
-EOF
-chmod +x "$launcher_sh"
+  NSView *root = [[NSView alloc] initWithFrame:frame];
+  [root setAutoresizingMask:NSViewWidthSizable|NSViewHeightSizable];
+  [self.window setContentView:root];
 
-cat > "$launcher_c" <<'EOF'
-#include <libgen.h>
-#include <limits.h>
-#include <mach-o/dyld.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+  CGFloat toolbarH = 46.0;
+  NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, frame.size.height-toolbarH, frame.size.width, toolbarH)];
+  [toolbar setAutoresizingMask:NSViewWidthSizable|NSViewMinYMargin];
+  [root addSubview:toolbar];
 
-int main(int argc, char **argv) {
-  char exe_path[PATH_MAX];
-  uint32_t size = sizeof(exe_path);
-  if (_NSGetExecutablePath(exe_path, &size) != 0) return 111;
-  char resolved[PATH_MAX];
-  if (realpath(exe_path, resolved) == NULL) return 112;
-  char dirbuf[PATH_MAX];
-  strncpy(dirbuf, resolved, sizeof(dirbuf));
-  dirbuf[sizeof(dirbuf) - 1] = '\0';
-  char *macos_dir = dirname(dirbuf);
-  char script[PATH_MAX];
-  snprintf(script, sizeof(script), "%s/../Resources/launcher.sh", macos_dir);
-  char **args = calloc((size_t)argc + 3, sizeof(char *));
-  if (!args) return 113;
-  args[0] = "/bin/bash";
-  args[1] = script;
-  for (int i = 1; i < argc; i++) args[i + 1] = argv[i];
-  args[argc + 1] = NULL;
-  execv("/bin/bash", args);
-  perror("execv");
-  return 114;
+  NSButton *back = [NSButton buttonWithTitle:@"‹" target:self action:@selector(goBack:)];
+  NSButton *fwd = [NSButton buttonWithTitle:@"›" target:self action:@selector(goForward:)];
+  NSButton *reload = [NSButton buttonWithTitle:@"↻" target:self action:@selector(reload:)];
+  NSArray *buttons = @[back, fwd, reload];
+  CGFloat x = 12.0;
+  for (NSButton *b in buttons) { [b setFrame:NSMakeRect(x, 8, 38, 30)]; [b setBezelStyle:NSBezelStyleRounded]; [toolbar addSubview:b]; x += 44.0; }
+
+  self.address = [[NSTextField alloc] initWithFrame:NSMakeRect(x+6, 8, frame.size.width-x-24, 30)];
+  [self.address setAutoresizingMask:NSViewWidthSizable];
+  [self.address setDelegate:self];
+  [self.address setStringValue:@"bearbrowser://start"];
+  [toolbar addSubview:self.address];
+
+  WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
+  self.webView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height-toolbarH) configuration:config];
+  [self.webView setAutoresizingMask:NSViewWidthSizable|NSViewHeightSizable];
+  [self.webView setNavigationDelegate:self];
+  [root addSubview:self.webView];
+
+  NSURL *landing = [[NSBundle mainBundle] URLForResource:@"BearBrowser-start" withExtension:@"html"];
+  if (landing) { [self.webView loadFileURL:landing allowingReadAccessToURL:[landing URLByDeletingLastPathComponent]]; BBLog([NSString stringWithFormat:@"loaded %@", landing.path]); }
+  else { [self.webView loadHTMLString:@"<h1>BearBrowser</h1><p>Landing page missing.</p>" baseURL:nil]; BBLog(@"landing page missing"); }
+
+  [self.window makeKeyAndOrderFront:nil];
+  [NSApp activateIgnoringOtherApps:YES];
 }
-EOF
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return YES; }
+- (void)goBack:(id)sender { if (self.webView.canGoBack) [self.webView goBack]; }
+- (void)goForward:(id)sender { if (self.webView.canGoForward) [self.webView goForward]; }
+- (void)reload:(id)sender { [self.webView reload]; }
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)sel {
+  if (sel == @selector(insertNewline:)) {
+    NSString *raw = self.address.stringValue;
+    NSURL *url = [NSURL URLWithString:raw];
+    if (!url.scheme) url = [NSURL URLWithString:[@"https://" stringByAppendingString:raw]];
+    if (url) { BBLog([NSString stringWithFormat:@"navigate %@", url.absoluteString]); [self.webView loadRequest:[NSURLRequest requestWithURL:url]]; }
+    return YES;
+  }
+  return NO;
+}
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)nav { self.address.stringValue = webView.URL.absoluteString ?: @"bearbrowser://start"; }
+@end
 
-clang "$launcher_c" -o "$exe"
+int main(int argc, const char *argv[]) {
+  @autoreleasepool {
+    NSApplication *app = [NSApplication sharedApplication];
+    BBDelegate *delegate = [[BBDelegate alloc] init];
+    [app setDelegate:delegate];
+    [app run];
+  }
+  return 0;
+}
+OBJC
+
+clang -fobjc-arc -framework Cocoa -framework WebKit "$source" -o "$exe"
 chmod +x "$exe"
+: > "$HOME/Library/Logs/BearBrowser/launcher.log" 2>/dev/null || true
 xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
 
 lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
@@ -224,7 +202,6 @@ if [ -x "$lsregister" ]; then
 fi
 
 /usr/bin/touch "$target"
-
-echo "Repaired BearBrowser app launcher with compiled executable: $target"
+echo "Repaired BearBrowser app launcher with native WebKit executable: $target"
 echo "Open: open '$target'"
 echo "Log: ~/Library/Logs/BearBrowser/launcher.log"
