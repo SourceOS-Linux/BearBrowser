@@ -5,22 +5,26 @@ on:
     paths:
       - "schemas/**"
       - "policy/local-default-actions.yaml"
+      - "agent-sidecar/**"
       - "scripts/bearbrowser-emit-event.py"
       - "scripts/bearbrowser-verify-provenance.py"
       - "scripts/bearbrowser-propose-action.py"
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/verify-feature-plane.sh"
+      - "scripts/verify-agent-sidecar-contract.py"
       - ".github/workflows/feature-plane.yml"
   push:
     branches: [main]
     paths:
       - "schemas/**"
       - "policy/local-default-actions.yaml"
+      - "agent-sidecar/**"
       - "scripts/bearbrowser-emit-event.py"
       - "scripts/bearbrowser-verify-provenance.py"
       - "scripts/bearbrowser-propose-action.py"
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/verify-feature-plane.sh"
+      - "scripts/verify-agent-sidecar-contract.py"
       - ".github/workflows/feature-plane.yml"
   workflow_dispatch:
 
@@ -41,7 +45,8 @@ jobs:
             scripts/bearbrowser-emit-event.py \
             scripts/bearbrowser-verify-provenance.py \
             scripts/bearbrowser-propose-action.py \
-            scripts/bearbrowser-verify-actions.py
+            scripts/bearbrowser-verify-actions.py \
+            scripts/verify-agent-sidecar-contract.py
 
       - name: Shell syntax
         run: |
@@ -50,3 +55,7 @@ jobs:
       - name: Validate feature plane
         run: |
           bash scripts/verify-feature-plane.sh
+
+      - name: Validate agent sidecar contract
+        run: |
+          python3 scripts/verify-agent-sidecar-contract.py
