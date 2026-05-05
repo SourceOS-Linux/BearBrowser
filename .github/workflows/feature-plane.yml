@@ -10,7 +10,9 @@ on:
       - "scripts/bearbrowser-verify-provenance.py"
       - "scripts/bearbrowser-propose-action.py"
       - "scripts/bearbrowser-verify-actions.py"
+      - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
+      - "scripts/verify-sidecar-status.sh"
       - "scripts/verify-agent-sidecar-contract.py"
       - ".github/workflows/feature-plane.yml"
   push:
@@ -23,7 +25,9 @@ on:
       - "scripts/bearbrowser-verify-provenance.py"
       - "scripts/bearbrowser-propose-action.py"
       - "scripts/bearbrowser-verify-actions.py"
+      - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
+      - "scripts/verify-sidecar-status.sh"
       - "scripts/verify-agent-sidecar-contract.py"
       - ".github/workflows/feature-plane.yml"
   workflow_dispatch:
@@ -46,15 +50,21 @@ jobs:
             scripts/bearbrowser-verify-provenance.py \
             scripts/bearbrowser-propose-action.py \
             scripts/bearbrowser-verify-actions.py \
+            scripts/bearbrowser-sidecar-status.py \
             scripts/verify-agent-sidecar-contract.py
 
       - name: Shell syntax
         run: |
           bash -n scripts/verify-feature-plane.sh
+          bash -n scripts/verify-sidecar-status.sh
 
       - name: Validate feature plane
         run: |
           bash scripts/verify-feature-plane.sh
+
+      - name: Validate sidecar status renderer
+        run: |
+          bash scripts/verify-sidecar-status.sh
 
       - name: Validate agent sidecar contract
         run: |
