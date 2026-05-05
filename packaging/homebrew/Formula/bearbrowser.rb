@@ -42,10 +42,11 @@ class Bearbrowser < Formula
   end
 
   def wrapper_for(script)
+    interpreter = script.end_with?(".py") ? "python3" : "bash"
     <<~EOS
       #!/usr/bin/env bash
       set -euo pipefail
-      exec bash "#{libexec}/scripts/#{script}" "$@"
+      exec #{interpreter} "#{libexec}/scripts/#{script}" "$@"
     EOS
   end
 
