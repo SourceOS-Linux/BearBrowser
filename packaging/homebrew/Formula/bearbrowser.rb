@@ -13,6 +13,9 @@ class Bearbrowser < Formula
     libexec.install Dir["*"]
 
     (bin/"bearbrowser").write wrapper_for("apply-sourceos-overlays.sh")
+    (bin/"bearbrowser-open").write wrapper_for("bearbrowser-open.sh")
+    (bin/"bearbrowser-status").write wrapper_for("bearbrowser-status.sh")
+    (bin/"bearbrowser-reset-bootstrap").write wrapper_for("bearbrowser-reset-bootstrap.sh")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-install-app-launcher").write wrapper_for("install-macos-app-launcher.sh")
     (bin/"bearbrowser-repair-app-launcher").write wrapper_for("repair-macos-app-launcher.sh")
@@ -49,6 +52,9 @@ class Bearbrowser < Formula
       Useful commands:
         bearbrowser-install-app-launcher
         bearbrowser-repair-app-launcher
+        bearbrowser-open
+        bearbrowser-status
+        bearbrowser-reset-bootstrap
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
@@ -75,6 +81,7 @@ class Bearbrowser < Formula
 
   test do
     assert_match "BearBrowser overlay plan", shell_output("#{bin}/bearbrowser --profile agent-runtime --ref latest --dry-run")
+    assert_match "BearBrowser status", shell_output("#{bin}/bearbrowser-status")
     assert_match "BearBrowser full binary build lane", shell_output("#{bin}/bearbrowser-build-binary --profile agent-runtime --dry-run")
     assert_match "BearBrowser build lane verified", shell_output("#{bin}/bearbrowser-verify-build-lane")
     assert_match "BearBrowser build environment check", shell_output("#{bin}/bearbrowser-check-build-env")
