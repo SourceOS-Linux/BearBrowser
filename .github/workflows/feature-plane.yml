@@ -1,0 +1,52 @@
+name: Feature Plane Validation
+
+on:
+  pull_request:
+    paths:
+      - "schemas/**"
+      - "policy/local-default-actions.yaml"
+      - "scripts/bearbrowser-emit-event.py"
+      - "scripts/bearbrowser-verify-provenance.py"
+      - "scripts/bearbrowser-propose-action.py"
+      - "scripts/bearbrowser-verify-actions.py"
+      - "scripts/verify-feature-plane.sh"
+      - ".github/workflows/feature-plane.yml"
+  push:
+    branches: [main]
+    paths:
+      - "schemas/**"
+      - "policy/local-default-actions.yaml"
+      - "scripts/bearbrowser-emit-event.py"
+      - "scripts/bearbrowser-verify-provenance.py"
+      - "scripts/bearbrowser-propose-action.py"
+      - "scripts/bearbrowser-verify-actions.py"
+      - "scripts/verify-feature-plane.sh"
+      - ".github/workflows/feature-plane.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-feature-plane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python syntax
+        run: |
+          python3 -m py_compile \
+            scripts/bearbrowser-emit-event.py \
+            scripts/bearbrowser-verify-provenance.py \
+            scripts/bearbrowser-propose-action.py \
+            scripts/bearbrowser-verify-actions.py
+
+      - name: Shell syntax
+        run: |
+          bash -n scripts/verify-feature-plane.sh
+
+      - name: Validate feature plane
+        run: |
+          bash scripts/verify-feature-plane.sh
