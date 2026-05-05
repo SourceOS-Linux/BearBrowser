@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/provenance-event.schema.json",
+  "title": "BearBrowser Provenance Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "timestamp",
+    "product",
+    "surface",
+    "profile",
+    "eventType",
+    "actor",
+    "policy",
+    "redaction",
+    "payload"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "bearbrowser.provenance.v1" },
+    "eventId": { "type": "string", "minLength": 12 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "product": { "type": "string", "const": "BearBrowser" },
+    "surface": {
+      "type": "string",
+      "enum": ["native-shell", "gecko-runtime", "automation-wrapper", "terminal-browser", "packaging", "credential-broker", "policy", "agent-sidecar"]
+    },
+    "profile": { "type": "string", "enum": ["human-secure", "agent-runtime", "bootstrap", "unknown"] },
+    "sessionId": { "type": "string" },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "app.launch",
+        "app.close",
+        "navigation.requested",
+        "navigation.committed",
+        "tab.created",
+        "tab.closed",
+        "page.shared_with_agent",
+        "credential.requested",
+        "credential.granted",
+        "credential.denied",
+        "autofill.requested",
+        "download.requested",
+        "upload.requested",
+        "clipboard.read_requested",
+        "clipboard.write_requested",
+        "extension.capability_used",
+        "automation.observed",
+        "automation.action_requested",
+        "automation.action_approved",
+        "automation.action_denied",
+        "memory.candidate_created",
+        "memory.committed",
+        "memory.rejected",
+        "policy.decision",
+        "runtime.health"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["human", "agent", "system", "automation"] },
+        "id": { "type": "string" },
+        "displayName": { "type": "string" }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "decisionId", "mode"],
+      "properties": {
+        "decision": { "type": "string", "enum": ["allow", "deny", "hold", "observe", "not_applicable"] },
+        "decisionId": { "type": "string" },
+        "mode": { "type": "string", "enum": ["local-default", "policyfabric", "manual", "not_applicable"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secretValuesPresent", "secretValuesLogged", "payloadClass"],
+      "properties": {
+        "secretValuesPresent": { "type": "boolean" },
+        "secretValuesLogged": { "type": "boolean", "const": false },
+        "payloadClass": { "type": "string", "enum": ["public", "metadata", "sensitive-metadata", "secret-blocked"] }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}
