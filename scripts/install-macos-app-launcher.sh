@@ -3,6 +3,7 @@ set -euo pipefail
 
 target="/Applications/BearBrowser.app"
 version="${BEARBROWSER_VERSION:-0.1.0-overlay}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
   cat <<'USAGE'
@@ -10,9 +11,9 @@ Usage: install-macos-app-launcher [--target /Applications/BearBrowser.app] [--ve
 
 Installs a local BearBrowser.app launcher into /Applications.
 
-The launcher opens a BearBrowser runtime if present. Until the full runtime exists,
-it opens an installed local Firefox-compatible browser engine with an isolated
-BearBrowser profile and policy files.
+The installed app uses a native BearBrowser WebKit bootstrap shell so the Dock
+process and app icon are BearBrowser. The full Gecko-derived browser runtime is
+tracked separately by Lane 13.
 USAGE
 }
 
@@ -94,67 +95,7 @@ EOF
 cat > "$macos/BearBrowser" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-
-support="$HOME/Library/Application Support/BearBrowser"
-profile="$support/profile"
-mkdir -p "$profile" "$support/policies"
-
-cat > "$profile/user.js" <<'PREFS'
-user_pref("browser.download.useDownloadDir", true);
-user_pref("browser.download.always_ask_before_handling_new_types", false);
-user_pref("browser.sessionstore.resume_from_crash", false);
-user_pref("signon.rememberSignons", false);
-user_pref("media.navigator.enabled", false);
-user_pref("geo.enabled", false);
-PREFS
-
-cat > "$support/policies/policies.json" <<'POLICIES'
-{
-  "policies": {
-    "DisableTelemetry": true,
-    "DisableFirefoxStudies": true,
-    "DisablePocket": true,
-    "DontCheckDefaultBrowser": true,
-    "OfferToSaveLogins": false
-  }
-}
-POLICIES
-
-candidate=""
-for path in \
-  "$HOME/Applications/BearBrowser.app/Contents/MacOS/bearbrowser" \
-  "/Applications/BearBrowser.app/Contents/MacOS/bearbrowser" \
-  "/opt/homebrew/bin/bearbrowser-runtime" \
-  "/usr/local/bin/bearbrowser-runtime" \
-  "/Applications/Firefox.app/Contents/MacOS/firefox" \
-  "/Applications/LibreWolf.app/Contents/MacOS/librewolf" \
-  "/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox"; do
-  if [ -x "$path" ]; then
-    candidate="$path"
-    break
-  fi
-done
-
-if [ -z "$candidate" ]; then
-  if command -v firefox >/dev/null 2>&1; then
-    candidate="$(command -v firefox)"
-  fi
-fi
-
-if [ -n "$candidate" ]; then
-  exec "$candidate" -no-remote -profile "$profile" "about:blank"
-fi
-
-msg="BearBrowser launcher is installed, but no local browser engine was found.\n\nInstall Firefox for the temporary bootstrap runtime, or complete the BearBrowser build lane.\n\nCommands:\n  brew install --cask firefox\n  bearbrowser-verify-build-lane"
-
-if command -v osascript >/dev/null 2>&1; then
-  osascript <<APPLESCRIPT
-set response to display dialog "$msg" buttons {"OK"} default button "OK" with title "BearBrowser" with icon caution
-APPLESCRIPT
-else
-  echo "$msg"
-fi
+echo "BearBrowser native shell not repaired yet. Run bearbrowser-repair-app-launcher."
 EOF
 chmod +x "$macos/BearBrowser"
 
@@ -210,15 +151,9 @@ mkdir -p "$(dirname "$target")"
 cp -R "$app" "$target"
 chmod -R u+rwX,go+rX "$target"
 xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
-
-lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-if [ -x "$lsregister" ]; then
-  "$lsregister" -f "$target" || true
-fi
-
-/usr/bin/touch "$target"
 rm -rf "$workdir"
 
-echo "Installed BearBrowser app launcher: $target"
-echo "Open by path now: open '$target'"
-echo "If LaunchServices is still warming up, retry: open -a BearBrowser"
+bash "$script_dir/repair-macos-app-launcher.sh" --target "$target"
+
+echo "Installed BearBrowser native app shell: $target"
+echo "Open: open '$target'"
