@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""Verify BearBrowser agent-sidecar contract invariants."""
+"""Verify BearBrowser agent-sidecar contract invariants without external deps."""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
-from typing import Any
-
-try:
-    import yaml
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit("ERROR: PyYAML is required for agent-sidecar contract verification") from exc
 
 CONTRACT = Path("agent-sidecar/contract.yaml")
+REQUIRED_TEXT = {
+    "defaultMode: observe": "default mode must be observe",
+    "memoryDefault: candidateOnly": "memory default must be candidateOnly",
+    "credentialDefault: denyForAgentRuntime": "credential default must deny agent-runtime credentials",
+    "tabSharingDefault: explicitSelectionOnly": "tab sharing must be explicit selection only",
+    "logSecretValues: false": "secret values must not be logged",
+    "logCredentialValues: false": "credential values must not be logged",
+    "logPaymentValues: false": "payment values must not be logged",
+    "logCookieValues: false": "cookie values must not be logged",
+    "requiredForMutation: true": "PolicyFabric must be required for mutation",
+    "requiredForCredentialAccess: true": "PolicyFabric must be required for credential access",
+    "requiredForCrossTabSharing: true": "PolicyFabric must be required for cross-tab sharing",
+}
 REQUIRED_SURFACES = {
     "current-page-summary",
     "selected-tab-compare",
@@ -32,6 +40,14 @@ REQUIRED_EVENTS = {
     "credential.granted",
     "credential.denied",
 }
+MUTATION_SURFACES = {"action-proposal", "memory-candidate"}
+APPROVAL_SURFACES = {"selected-tab-compare", "action-proposal", "memory-candidate"}
+
+
+def block_for_surface(text: str, surface_id: str) -> str:
+    pattern = rf"(?ms)^    - id: {re.escape(surface_id)}\n(.*?)(?=^    - id: |^  modes:|^  redaction:|^  integration:|\Z)"
+    match = re.search(pattern, text)
+    return match.group(0) if match else ""
 
 
 def main() -> int:
@@ -39,61 +55,38 @@ def main() -> int:
         print(f"ERROR: missing {CONTRACT}", file=sys.stderr)
         return 1
 
-    data: dict[str, Any] = yaml.safe_load(CONTRACT.read_text())
-    spec = data.get("spec", {})
+    text = CONTRACT.read_text(encoding="utf-8")
     errors: list[str] = []
 
-    if spec.get("defaultMode") != "observe":
-        errors.append("defaultMode must be observe")
-    if spec.get("memoryDefault") != "candidateOnly":
-        errors.append("memoryDefault must be candidateOnly")
-    if spec.get("credentialDefault") != "denyForAgentRuntime":
-        errors.append("credentialDefault must be denyForAgentRuntime")
-    if spec.get("tabSharingDefault") != "explicitSelectionOnly":
-        errors.append("tabSharingDefault must be explicitSelectionOnly")
+    for required, message in REQUIRED_TEXT.items():
+        if required not in text:
+            errors.append(message)
 
-    surfaces = spec.get("surfaces", [])
-    by_id = {surface.get("id"): surface for surface in surfaces}
-    missing = sorted(REQUIRED_SURFACES - set(by_id))
-    if missing:
-        errors.append(f"missing required surfaces: {', '.join(missing)}")
+    for surface in sorted(REQUIRED_SURFACES):
+        block = block_for_surface(text, surface)
+        if not block:
+            errors.append(f"missing required surface: {surface}")
+            continue
+        if "policyAction:" not in block:
+            errors.append(f"{surface}: missing policyAction")
+        if "provenanceEvents:" not in block:
+            errors.append(f"{surface}: missing provenanceEvents")
+        if surface in MUTATION_SURFACES and "defaultDecision: hold" not in block:
+            errors.append(f"{surface}: mutation-capable surfaces must default to hold")
+        if surface in APPROVAL_SURFACES and "requiresUserApproval: true" not in block:
+            errors.append(f"{surface}: must require user approval")
+        if surface == "credential-boundary":
+            if "defaultDecision: deny" not in block:
+                errors.append("credential-boundary must default deny")
+            if "agent-runtime" not in block:
+                errors.append("credential-boundary must explicitly apply to agent-runtime")
 
-    seen_events: set[str] = set()
-    for surface in surfaces:
-        sid = surface.get("id", "<unknown>")
-        default_decision = surface.get("defaultDecision")
-        policy_action = surface.get("policyAction")
-        if not policy_action:
-            errors.append(f"{sid}: missing policyAction")
-        seen_events.update(surface.get("provenanceEvents", []))
-        if surface.get("writes") and default_decision != "hold":
-            errors.append(f"{sid}: writing surfaces must default to hold")
-        if sid == "credential-boundary" and default_decision != "deny":
-            errors.append("credential-boundary must default deny")
-        if sid == "selected-tab-compare" and surface.get("requiresUserApproval") is not True:
-            errors.append("selected-tab-compare must require user approval")
-        if sid == "action-proposal" and surface.get("requiresUserApproval") is not True:
-            errors.append("action-proposal must require user approval")
-        if sid == "memory-candidate" and surface.get("requiresUserApproval") is not True:
-            errors.append("memory-candidate must require user approval")
+    for event in sorted(REQUIRED_EVENTS):
+        if event not in text:
+            errors.append(f"missing required provenance event: {event}")
 
-    missing_events = sorted(REQUIRED_EVENTS - seen_events)
-    if missing_events:
-        errors.append(f"missing required provenance events: {', '.join(missing_events)}")
-
-    redaction = spec.get("redaction", {})
-    for key in ["logSecretValues", "logCredentialValues", "logPaymentValues", "logCookieValues"]:
-        if redaction.get(key) is not False:
-            errors.append(f"redaction.{key} must be false")
-
-    integration = spec.get("integration", {})
-    policy = integration.get("policyFabric", {})
-    if policy.get("requiredForMutation") is not True:
-        errors.append("PolicyFabric must be required for mutation")
-    if policy.get("requiredForCredentialAccess") is not True:
-        errors.append("PolicyFabric must be required for credential access")
-    if policy.get("requiredForCrossTabSharing") is not True:
-        errors.append("PolicyFabric must be required for cross-tab sharing")
+    if "Agents observe and propose; PolicyFabric and the user grant authority." not in text:
+        errors.append("missing sidecar authority principle")
 
     if errors:
         for error in errors:
