@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "BearBrowser policy surface"
+echo "filesystem: declared_downloads_and_workspace_mounts_only"
+echo "network: human_navigation_or_policy_admitted_agent_navigation"
+echo "execution: browser_automation_actions_only_no_shell_by_default"
+echo "approval: required_for_agent_runtime_downloads_uploads_form_submits_auth_context_or_workspace_writes"
+echo "workspace_scope: declared_browser_workspace_or_downloads_boundary"
+
+echo
+echo "blocking rule: update TRUST_SURFACE.yaml before adding browser automation listeners, non-loopback control, profile export, credential handling, downloads/workspace bridge, or shell/native messaging authority"
