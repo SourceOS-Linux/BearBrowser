@@ -163,7 +163,7 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
   BBEmitEvent(@"app.launch", @"allow", @"Native BearBrowser shell launched.", @{ @"bundleId": @"dev.sourceos.BearBrowser" });
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-  NSRect frame = NSMakeRect(0, 0, 1240, 820);
+  NSRect frame = NSMakeRect(0, 0, 1320, 820);
   self.window = [[NSWindow alloc] initWithContentRect:frame
                                             styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable)
                                               backing:NSBackingStoreBuffered
@@ -185,6 +185,7 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
   NSButton *reload = [NSButton buttonWithTitle:@"↻" target:self action:@selector(reload:)];
   NSButton *share = [NSButton buttonWithTitle:@"Propose Share" target:self action:@selector(proposePageShare:)];
   NSButton *memory = [NSButton buttonWithTitle:@"Memory Candidate" target:self action:@selector(createMemoryCandidate:)];
+  NSButton *resolve = [NSButton buttonWithTitle:@"Resolve Held" target:self action:@selector(resolveHeld:)];
   NSButton *sidecar = [NSButton buttonWithTitle:@"Sidecar Status" target:self action:@selector(openSidecarStatus:)];
 
   CGFloat x = 12.0;
@@ -195,17 +196,18 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
     x += 44.0;
   }
 
-  CGFloat right = frame.size.width - 520;
+  CGFloat right = frame.size.width - 660;
   [share setFrame:NSMakeRect(right, 9, 124, 30)];
   [memory setFrame:NSMakeRect(right + 132, 9, 150, 30)];
-  [sidecar setFrame:NSMakeRect(right + 290, 9, 132, 30)];
-  for (NSButton *button in @[share, memory, sidecar]) {
+  [resolve setFrame:NSMakeRect(right + 290, 9, 118, 30)];
+  [sidecar setFrame:NSMakeRect(right + 416, 9, 132, 30)];
+  for (NSButton *button in @[share, memory, resolve, sidecar]) {
     [button setAutoresizingMask:NSViewMinXMargin];
     [button setBezelStyle:NSBezelStyleRounded];
     [toolbar addSubview:button];
   }
 
-  self.address = [[NSTextField alloc] initWithFrame:NSMakeRect(x + 6, 9, frame.size.width - x - 536, 30)];
+  self.address = [[NSTextField alloc] initWithFrame:NSMakeRect(x + 6, 9, frame.size.width - x - 676, 30)];
   [self.address setAutoresizingMask:NSViewWidthSizable];
   [self.address setDelegate:self];
   [self.address setStringValue:@"bearbrowser://start"];
@@ -239,13 +241,28 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
   return self.webView.URL.absoluteString ?: @"bearbrowser://start";
 }
 
+- (void)runCommand:(NSString *)command successMessage:(NSString *)successMessage {
+  NSTask *task = [[NSTask alloc] init];
+  task.launchPath = @"/bin/bash";
+  task.arguments = @[@"-lc", [NSString stringWithFormat:@"PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; %@", command]];
+  [task launch];
+  [task waitUntilExit];
+  BBLog([NSString stringWithFormat:@"command exit=%d command=%@", task.terminationStatus, command]);
+  [self openSidecarStatus:nil];
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = task.terminationStatus == 0 ? successMessage : @"BearBrowser command failed";
+  alert.informativeText = task.terminationStatus == 0 ? @"Sidecar Status has been refreshed." : @"Check ~/Library/Logs/BearBrowser/launcher.log and the local governance logs.";
+  [alert addButtonWithTitle:@"OK"];
+  [alert beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
 - (void)proposePageShare:(id)sender {
   NSString *url = [self currentURLString];
   BBProposeAction(@"share_page_with_agent", @"page", @"native-propose-share", url, @"medium", @"hold", YES, @"User requested a held page-share proposal from the native shell.");
   BBEmitEvent(@"page.shared_with_agent", @"hold", @"Native page-share proposal created; no agent authority granted.", @{ @"url": url, @"surface": @"native-propose-share" });
   NSAlert *alert = [[NSAlert alloc] init];
   alert.messageText = @"Page share proposal held";
-  alert.informativeText = @"BearBrowser recorded a held share_page_with_agent action. Use Sidecar Status to inspect and resolve it.";
+  alert.informativeText = @"BearBrowser recorded a held share_page_with_agent action. Use Resolve Held or Sidecar Status to inspect and resolve it.";
   [alert addButtonWithTitle:@"OK"];
   [alert beginSheetModalForWindow:self.window completionHandler:nil];
 }
@@ -266,6 +283,28 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
     NSString *url = [self currentURLString];
     BBProposeAction(@"write_memory_candidate", @"memory", @"native-memory-candidate", url, @"medium", @"hold", YES, @"User requested a held memory candidate from the native shell.");
     BBCreateMemoryCandidate(text, url, @"native-memory-candidate");
+  }];
+}
+
+- (void)resolveHeld:(id)sender {
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Resolve held BearBrowser state";
+  alert.informativeText = @"Resolve the latest held policy action or latest pending memory candidate. Decisions are appended to local governance logs.";
+  [alert addButtonWithTitle:@"Allow Held Action"];
+  [alert addButtonWithTitle:@"Deny Held Action"];
+  [alert addButtonWithTitle:@"Commit Memory"];
+  [alert addButtonWithTitle:@"Reject Memory"];
+  [alert addButtonWithTitle:@"Cancel"];
+  [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
+    if (returnCode == NSAlertFirstButtonReturn) {
+      [self runCommand:@"bearbrowser-resolve-action --latest-held --decision allow --actor-type human --actor-id native-shell --reason 'Allowed from BearBrowser native shell.'" successMessage:@"Held action allowed"];
+    } else if (returnCode == NSAlertSecondButtonReturn) {
+      [self runCommand:@"bearbrowser-resolve-action --latest-held --decision deny --actor-type human --actor-id native-shell --reason 'Denied from BearBrowser native shell.'" successMessage:@"Held action denied"];
+    } else if (returnCode == NSAlertThirdButtonReturn) {
+      [self runCommand:@"bearbrowser-memory-candidate resolve --latest-candidate --decision commit --actor-type human --actor-id native-shell --reason 'Committed from BearBrowser native shell.'" successMessage:@"Memory candidate committed"];
+    } else if (returnCode == NSAlertThirdButtonReturn + 1) {
+      [self runCommand:@"bearbrowser-memory-candidate resolve --latest-candidate --decision reject --actor-type human --actor-id native-shell --reason 'Rejected from BearBrowser native shell.'" successMessage:@"Memory candidate rejected"];
+    }
   }];
 }
 
