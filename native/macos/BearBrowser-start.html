@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BearBrowser</title>
+<style>
+:root{color-scheme:dark;--bg:#1f1b16;--panel:#2a241d;--line:#6d4b31;--text:#f4efe7;--muted:#d8cabc;--gold:#f6d28b}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at 30% 15%,#3a2a1d 0,#1f1b16 45%,#15120f 100%);color:var(--text);display:grid;place-items:center;min-height:100vh}
+.shell{max-width:900px;margin:48px;padding:48px;border:1px solid var(--line);border-radius:30px;background:rgba(42,36,29,.94);box-shadow:0 30px 90px rgba(0,0,0,.35)}
+.bear{font-size:64px}h1{font-size:52px;line-height:1.05;margin:12px 0 14px}p{font-size:18px;line-height:1.55;color:var(--muted)}.status{margin-top:28px;padding:16px 18px;border-radius:18px;background:#3a3027;color:var(--gold);font-weight:700}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}.card{border:1px solid #4d3929;border-radius:18px;padding:18px;background:#241f19}.card strong{display:block;color:var(--text);margin-bottom:8px}code{color:var(--gold)}
+@media(max-width:720px){.grid{grid-template-columns:1fr}.shell{padding:32px;margin:24px}}
+</style>
+</head>
+<body>
+<main class="shell">
+<div class="bear">🐻</div>
+<h1>BearBrowser</h1>
+<p>Native BearBrowser bootstrap shell is running. The Dock process and application identity are BearBrowser.</p>
+<p>The governed feature plane is now active: local provenance events, policy-visible action records, and a sidecar status surface.</p>
+<div class="grid">
+  <div class="card"><strong>Provenance</strong><span>Launch and navigation events are recorded locally with redaction.</span></div>
+  <div class="card"><strong>Policy</strong><span>Agentic actions are proposed before authority is granted.</span></div>
+</div>
+<div class="status">Use the Sidecar Status button to inspect local governance state.</div>
+</main>
+</body>
+</html>
