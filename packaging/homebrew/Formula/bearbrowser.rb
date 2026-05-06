@@ -23,6 +23,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-sidecar-status").write wrapper_for("bearbrowser-sidecar-status.py")
     (bin/"bearbrowser-verify-sidecar-status").write wrapper_for("verify-sidecar-status.sh")
     (bin/"bearbrowser-verify-agent-sidecar").write wrapper_for("verify-agent-sidecar-contract.py")
+    (bin/"bearbrowser-verify-native-shell").write wrapper_for("verify-native-macos-shell.sh")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-install-app-launcher").write wrapper_for("install-macos-app-launcher.sh")
     (bin/"bearbrowser-repair-app-launcher").write wrapper_for("repair-macos-app-launcher.sh")
@@ -70,6 +71,7 @@ class Bearbrowser < Formula
         bearbrowser-sidecar-status --format html --open
         bearbrowser-verify-sidecar-status
         bearbrowser-verify-agent-sidecar
+        bearbrowser-verify-native-shell
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
