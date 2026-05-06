@@ -17,6 +17,10 @@ static NSString *BBPolicyPath(void) {
   return [[BBSupportDir() stringByAppendingPathComponent:@"policy"] stringByAppendingPathComponent:@"actions.jsonl"];
 }
 
+static NSString *BBMemoryPath(void) {
+  return [[BBSupportDir() stringByAppendingPathComponent:@"memory"] stringByAppendingPathComponent:@"candidates.jsonl"];
+}
+
 static NSString *BBTimestamp(void) {
   NSDateFormatter *fmt = [[NSDateFormatter alloc] init];
   fmt.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
@@ -104,6 +108,48 @@ static void BBProposeAction(NSString *actionType, NSString *targetKind, NSString
   BBAppendLine(BBPolicyPath(), BBJSON(action));
 }
 
+static BOOL BBMemoryLooksSensitive(NSString *text) {
+  NSArray<NSString *> *markers = @[@"password", @"secret", @"token", @"cookie", @"credential", @"payment"];
+  NSString *lower = [text lowercaseString];
+  for (NSString *marker in markers) {
+    if ([lower containsString:marker]) { return YES; }
+  }
+  return NO;
+}
+
+static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSString *sourceLabel) {
+  BOOL sensitive = BBMemoryLooksSensitive(text ?: @"");
+  NSString *memoryId = [@"mem-" stringByAppendingString:BBRandomHex(16)];
+  NSString *storedText = sensitive ? @"<REDACTED-SENSITIVE-MEMORY-CANDIDATE>" : (text ?: @"");
+  NSString *payloadClass = sensitive ? @"secret-blocked" : @"metadata";
+  NSMutableDictionary *source = [@{ @"kind": @"page" } mutableCopy];
+  if (sourceURL.length > 0) { source[@"url"] = sourceURL; }
+  if (sourceLabel.length > 0) { source[@"label"] = sourceLabel; }
+  NSDictionary *memory = @{
+    @"schemaVersion": @"bearbrowser.memory_candidate.v1",
+    @"memoryId": memoryId,
+    @"timestamp": BBTimestamp(),
+    @"product": @"BearBrowser",
+    @"state": @"candidate",
+    @"actor": @{ @"type": @"human", @"id": NSUserName() ?: @"local-user" },
+    @"source": source,
+    @"classification": @{
+      @"payloadClass": payloadClass,
+      @"secretLikeDetected": @(sensitive),
+      @"persistentWriteRequiresApproval": @YES
+    },
+    @"text": storedText,
+    @"policy": @{
+      @"decision": @"hold",
+      @"decisionId": [@"local-" stringByAppendingString:BBRandomHex(8)],
+      @"mode": @"local-default",
+      @"reason": @"Memory candidates must be previewed and explicitly committed or rejected."
+    }
+  };
+  BBAppendLine(BBMemoryPath(), BBJSON(memory));
+  BBEmitEvent(@"memory.candidate_created", @"hold", @"Native shell created a held memory candidate.", @{ @"memoryId": memoryId, @"url": sourceURL ?: @"" });
+}
+
 @interface BBDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate, NSTextFieldDelegate>
 @property(strong) NSWindow *window;
 @property(strong) WKWebView *webView;
@@ -117,7 +163,7 @@ static void BBProposeAction(NSString *actionType, NSString *targetKind, NSString
   BBEmitEvent(@"app.launch", @"allow", @"Native BearBrowser shell launched.", @{ @"bundleId": @"dev.sourceos.BearBrowser" });
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-  NSRect frame = NSMakeRect(0, 0, 1180, 820);
+  NSRect frame = NSMakeRect(0, 0, 1240, 820);
   self.window = [[NSWindow alloc] initWithContentRect:frame
                                             styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable)
                                               backing:NSBackingStoreBuffered
@@ -137,6 +183,8 @@ static void BBProposeAction(NSString *actionType, NSString *targetKind, NSString
   NSButton *back = [NSButton buttonWithTitle:@"‹" target:self action:@selector(goBack:)];
   NSButton *fwd = [NSButton buttonWithTitle:@"›" target:self action:@selector(goForward:)];
   NSButton *reload = [NSButton buttonWithTitle:@"↻" target:self action:@selector(reload:)];
+  NSButton *share = [NSButton buttonWithTitle:@"Propose Share" target:self action:@selector(proposePageShare:)];
+  NSButton *memory = [NSButton buttonWithTitle:@"Memory Candidate" target:self action:@selector(createMemoryCandidate:)];
   NSButton *sidecar = [NSButton buttonWithTitle:@"Sidecar Status" target:self action:@selector(openSidecarStatus:)];
 
   CGFloat x = 12.0;
@@ -147,12 +195,17 @@ static void BBProposeAction(NSString *actionType, NSString *targetKind, NSString
     x += 44.0;
   }
 
-  [sidecar setFrame:NSMakeRect(frame.size.width - 146, 9, 132, 30)];
-  [sidecar setAutoresizingMask:NSViewMinXMargin];
-  [sidecar setBezelStyle:NSBezelStyleRounded];
-  [toolbar addSubview:sidecar];
+  CGFloat right = frame.size.width - 520;
+  [share setFrame:NSMakeRect(right, 9, 124, 30)];
+  [memory setFrame:NSMakeRect(right + 132, 9, 150, 30)];
+  [sidecar setFrame:NSMakeRect(right + 290, 9, 132, 30)];
+  for (NSButton *button in @[share, memory, sidecar]) {
+    [button setAutoresizingMask:NSViewMinXMargin];
+    [button setBezelStyle:NSBezelStyleRounded];
+    [toolbar addSubview:button];
+  }
 
-  self.address = [[NSTextField alloc] initWithFrame:NSMakeRect(x + 6, 9, frame.size.width - x - 166, 30)];
+  self.address = [[NSTextField alloc] initWithFrame:NSMakeRect(x + 6, 9, frame.size.width - x - 536, 30)];
   [self.address setAutoresizingMask:NSViewWidthSizable];
   [self.address setDelegate:self];
   [self.address setStringValue:@"bearbrowser://start"];
@@ -182,6 +235,40 @@ static void BBProposeAction(NSString *actionType, NSString *targetKind, NSString
 - (void)goForward:(id)sender { if (self.webView.canGoForward) [self.webView goForward]; }
 - (void)reload:(id)sender { [self.webView reload]; }
 
+- (NSString *)currentURLString {
+  return self.webView.URL.absoluteString ?: @"bearbrowser://start";
+}
+
+- (void)proposePageShare:(id)sender {
+  NSString *url = [self currentURLString];
+  BBProposeAction(@"share_page_with_agent", @"page", @"native-propose-share", url, @"medium", @"hold", YES, @"User requested a held page-share proposal from the native shell.");
+  BBEmitEvent(@"page.shared_with_agent", @"hold", @"Native page-share proposal created; no agent authority granted.", @{ @"url": url, @"surface": @"native-propose-share" });
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Page share proposal held";
+  alert.informativeText = @"BearBrowser recorded a held share_page_with_agent action. Use Sidecar Status to inspect and resolve it.";
+  [alert addButtonWithTitle:@"OK"];
+  [alert beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+- (void)createMemoryCandidate:(id)sender {
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Create memory candidate";
+  alert.informativeText = @"Memory candidates are held by default and must be explicitly committed or rejected.";
+  NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 460, 28)];
+  input.placeholderString = @"What should BearBrowser remember as a candidate?";
+  alert.accessoryView = input;
+  [alert addButtonWithTitle:@"Create Candidate"];
+  [alert addButtonWithTitle:@"Cancel"];
+  [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse returnCode) {
+    if (returnCode != NSAlertFirstButtonReturn) { return; }
+    NSString *text = input.stringValue ?: @"";
+    if (text.length == 0) { return; }
+    NSString *url = [self currentURLString];
+    BBProposeAction(@"write_memory_candidate", @"memory", @"native-memory-candidate", url, @"medium", @"hold", YES, @"User requested a held memory candidate from the native shell.");
+    BBCreateMemoryCandidate(text, url, @"native-memory-candidate");
+  }];
+}
+
 - (void)openSidecarStatus:(id)sender {
   NSString *support = BBSupportDir();
   NSString *sidecarDir = [support stringByAppendingPathComponent:@"sidecar"];
@@ -194,8 +281,8 @@ static void BBProposeAction(NSString *actionType, NSString *targetKind, NSString
   [task launch];
   [task waitUntilExit];
 
-  BBProposeAction(@"share_page_with_agent", @"page", @"sidecar-status-open", self.webView.URL.absoluteString ?: @"bearbrowser://start", @"medium", @"hold", YES, @"Opening sidecar status records page context sharing as a held local-default action.");
-  BBEmitEvent(@"page.shared_with_agent", @"hold", @"Sidecar status requested; page sharing remains held by local default policy.", @{ @"url": self.webView.URL.absoluteString ?: @"bearbrowser://start", @"surface": @"sidecar-status" });
+  BBProposeAction(@"share_page_with_agent", @"page", @"sidecar-status-open", [self currentURLString], @"medium", @"hold", YES, @"Opening sidecar status records page context sharing as a held local-default action.");
+  BBEmitEvent(@"page.shared_with_agent", @"hold", @"Sidecar status requested; page sharing remains held by local default policy.", @{ @"url": [self currentURLString], @"surface": @"sidecar-status" });
 
   NSURL *url = [NSURL fileURLWithPath:htmlPath];
   if ([[NSFileManager defaultManager] fileExistsAtPath:htmlPath]) {
