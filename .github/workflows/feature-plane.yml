@@ -9,6 +9,7 @@ on:
       - "scripts/bearbrowser-emit-event.py"
       - "scripts/bearbrowser-verify-provenance.py"
       - "scripts/bearbrowser-propose-action.py"
+      - "scripts/bearbrowser-resolve-action.py"
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
@@ -24,6 +25,7 @@ on:
       - "scripts/bearbrowser-emit-event.py"
       - "scripts/bearbrowser-verify-provenance.py"
       - "scripts/bearbrowser-propose-action.py"
+      - "scripts/bearbrowser-resolve-action.py"
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
@@ -49,6 +51,7 @@ jobs:
             scripts/bearbrowser-emit-event.py \
             scripts/bearbrowser-verify-provenance.py \
             scripts/bearbrowser-propose-action.py \
+            scripts/bearbrowser-resolve-action.py \
             scripts/bearbrowser-verify-actions.py \
             scripts/bearbrowser-sidecar-status.py \
             scripts/verify-agent-sidecar-contract.py
