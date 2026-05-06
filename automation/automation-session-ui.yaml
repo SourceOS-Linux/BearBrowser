@@ -1,0 +1,66 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: AutomationSessionUI
+metadata:
+  name: bearbrowser-automation-session-surface
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/surface: automation-session-ui
+spec:
+  description: >-
+    Visible, user-controlled surface that displays every active browser automation
+    session backed by a BrowserAutomationReceipt. The surface must be rendered
+    whenever any automation transport is active and must never be suppressed.
+
+  visibility:
+    always: true
+    suppressible: false
+    location: browser-toolbar-badge-and-panel
+
+  sessionCard:
+    requiredFields:
+      - receiptId
+      - ownerRef
+      - displayName
+      - transport
+      - tabScope
+      - permissionScope
+      - origin
+      - status
+      - capturedAt
+
+    displayMapping:
+      ownerRef: "Owner / Agent"
+      displayName: "Session label"
+      transport: "Active transport"
+      tabScope: "Controlled tab(s) / window(s)"
+      permissionScope: "Granted permissions"
+      origin: "Origin (local / remote / workspace)"
+      receiptId: "Evidence receipt ID"
+      status: "Session status"
+      capturedAt: "Session started"
+
+    actions:
+      revoke:
+        label: "Revoke / Kill session"
+        icon: stop-circle
+        requiresConfirmation: true
+        confirmationPrompt: "Revoking this session will immediately terminate the automation transport and invalidate all session tokens. Proceed?"
+        effect:
+          - terminateTransport: true
+          - invalidateSessionToken: true
+          - updateReceiptStatus: "revoked"
+          - emitProvenanceEvent: "automation.action_denied"
+          - setRevokedAt: now
+
+  sessionList:
+    emptyState: "No active automation sessions."
+    sortOrder: capturedAt-desc
+    maxVisible: 10
+    overflowBehavior: paginate
+
+  enforcement:
+    noOwnerPolicy: reject
+    noPolicyDecisionPolicy: reject
+    orphanPolicy: quarantine
+    logMode: compactReceiptRef
+    debugLogMode: fullTopologyOnlyWhenDebugEnabled
