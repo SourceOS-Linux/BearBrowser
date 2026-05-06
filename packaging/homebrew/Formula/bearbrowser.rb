@@ -21,6 +21,8 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-propose-action").write wrapper_for("bearbrowser-propose-action.py")
     (bin/"bearbrowser-resolve-action").write wrapper_for("bearbrowser-resolve-action.py")
     (bin/"bearbrowser-verify-actions").write wrapper_for("bearbrowser-verify-actions.py")
+    (bin/"bearbrowser-memory-candidate").write wrapper_for("bearbrowser-memory-candidate.py")
+    (bin/"bearbrowser-verify-memory").write wrapper_for("bearbrowser-verify-memory.py")
     (bin/"bearbrowser-sidecar-status").write wrapper_for("bearbrowser-sidecar-status.py")
     (bin/"bearbrowser-verify-sidecar-status").write wrapper_for("verify-sidecar-status.sh")
     (bin/"bearbrowser-verify-agent-sidecar").write wrapper_for("verify-agent-sidecar-contract.py")
@@ -70,6 +72,9 @@ class Bearbrowser < Formula
         bearbrowser-propose-action --action-type summarize_page --target-kind page --target-label current-page
         bearbrowser-resolve-action --latest-held --decision deny --reason 'Local denial.'
         bearbrowser-verify-actions
+        bearbrowser-memory-candidate create --text 'Remember this only after approval.'
+        bearbrowser-memory-candidate resolve --latest-candidate --decision reject --reason 'Not useful.'
+        bearbrowser-verify-memory
         bearbrowser-sidecar-status --format html --open
         bearbrowser-verify-sidecar-status
         bearbrowser-verify-agent-sidecar
