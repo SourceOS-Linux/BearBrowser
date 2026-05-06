@@ -1,6 +1,6 @@
 # BearBrowser Feature Plane Operating Model
 
-This document defines the first product feature plane for BearBrowser: local provenance, policy-visible actions, and the agent sidecar status surface.
+This document defines the first product feature plane for BearBrowser: local provenance, policy-visible actions, local memory candidates, and the agent sidecar status surface.
 
 The goal is to make BearBrowser agentic by design without granting agents ambient authority.
 
@@ -10,9 +10,10 @@ This feature plane applies to the current native WebKit bootstrap shell and the 
 
 It is intentionally engine-portable:
 
-- The native shell can emit app/runtime events.
-- The Gecko runtime can emit navigation/tab/download/credential events later.
+- The native shell can emit app/runtime/navigation events.
+- The Gecko runtime can emit deeper navigation/tab/download/credential events later.
 - Automation wrappers can emit observe/action proposal events now.
+- Memory candidates can be proposed, held, committed, or rejected without a production engine.
 - The sidecar can render local state without waiting for a production browser engine.
 
 ## Local State Layout
@@ -22,6 +23,7 @@ Default local state paths:
 ```text
 ~/Library/Application Support/BearBrowser/provenance/events.jsonl
 ~/Library/Application Support/BearBrowser/policy/actions.jsonl
+~/Library/Application Support/BearBrowser/memory/candidates.jsonl
 ~/Library/Application Support/BearBrowser/sidecar/status.html
 ```
 
@@ -30,6 +32,7 @@ Linux equivalents should move under XDG paths:
 ```text
 $XDG_STATE_HOME/bearbrowser/provenance/events.jsonl
 $XDG_STATE_HOME/bearbrowser/policy/actions.jsonl
+$XDG_STATE_HOME/bearbrowser/memory/candidates.jsonl
 $XDG_STATE_HOME/bearbrowser/sidecar/status.html
 ```
 
@@ -80,10 +83,11 @@ Schema:
 schemas/policy-action.schema.json
 ```
 
-Writer:
+Writers:
 
 ```text
 scripts/bearbrowser-propose-action.py
+scripts/bearbrowser-resolve-action.py
 ```
 
 Verifier:
@@ -96,6 +100,7 @@ Installed commands:
 
 ```text
 bearbrowser-propose-action
+bearbrowser-resolve-action
 bearbrowser-verify-actions
 ```
 
@@ -105,6 +110,65 @@ Required properties:
 - Every action has a risk level.
 - Agent-runtime credential and autofill requests are denied by local default policy.
 - Cross-tab sharing, uploads, automation, and memory writes default to `hold`.
+- Held actions can be manually allowed or denied through a follow-up action record.
+- Manual resolution emits a `policy.decision` provenance event.
+
+## Memory Candidates
+
+Memory candidates describe what the browser or agent proposes to remember.
+
+Schema:
+
+```text
+schemas/memory-candidate.schema.json
+```
+
+Manager:
+
+```text
+scripts/bearbrowser-memory-candidate.py
+```
+
+Verifier:
+
+```text
+scripts/bearbrowser-verify-memory.py
+```
+
+Installed commands:
+
+```text
+bearbrowser-memory-candidate
+bearbrowser-verify-memory
+```
+
+Required properties:
+
+- New memories start as `candidate`.
+- Candidate memories must default to policy decision `hold`.
+- Persistent writes require explicit approval.
+- Commit creates a follow-up `committed` record resolving the candidate.
+- Reject creates a follow-up `rejected` record resolving the candidate.
+- Sensitive-looking memory text is blocked before persistence and stored as `<REDACTED-SENSITIVE-MEMORY-CANDIDATE>`.
+- Candidate creation emits `memory.candidate_created`.
+- Commit emits `memory.committed`.
+- Reject emits `memory.rejected`.
+
+Example:
+
+```bash
+bearbrowser-memory-candidate create \
+  --text 'Remember that this page is about SourceOS release planning.' \
+  --source-kind page \
+  --source-label sourceos-release-planning
+
+bearbrowser-memory-candidate resolve \
+  --latest-candidate \
+  --decision reject \
+  --reason 'Not useful enough to persist.'
+
+bearbrowser-verify-memory
+```
 
 ## Local Default Policy
 
@@ -164,7 +228,7 @@ Agents observe and propose; PolicyFabric and the user grant authority.
 
 ## Sidecar Status Surface
 
-The sidecar status surface renders local event/action state.
+The sidecar status surface renders local event/action/memory state.
 
 Renderer:
 
@@ -205,12 +269,14 @@ Workflow:
 
 CI validates:
 
-- Python syntax for event/action/sidecar scripts.
+- Python syntax for event/action/memory/sidecar scripts.
 - Shell syntax for feature verifiers.
 - Provenance redaction invariants.
-- Policy action classification invariants.
+- Policy action classification and manual resolution invariants.
+- Memory candidate lifecycle invariants.
+- Sensitive-looking memory candidate blocking.
 - Agent sidecar contract invariants.
-- Sidecar status HTML/JSON generation.
+- Sidecar status HTML/JSON generation, including memory visibility.
 
 This workflow intentionally does not build browser binaries and does not produce release artifacts.
 
@@ -244,8 +310,30 @@ bearbrowser-propose-action \
   --target-kind page \
   --target-label current-page
 
+bearbrowser-resolve-action \
+  --latest-held \
+  --decision deny \
+  --actor-type human \
+  --actor-id "$USER" \
+  --reason 'Do not share this page with an agent yet.'
+
+bearbrowser-memory-candidate create \
+  --text 'Remember that BearBrowser memory writes remain candidate-only until approval.' \
+  --actor-type human \
+  --actor-id "$USER" \
+  --source-kind note \
+  --source-label dogfood-memory-test
+
+bearbrowser-memory-candidate resolve \
+  --latest-candidate \
+  --decision reject \
+  --actor-type human \
+  --actor-id "$USER" \
+  --reason 'Rejecting this test memory candidate.'
+
 bearbrowser-verify-provenance
 bearbrowser-verify-actions
+bearbrowser-verify-memory
 bearbrowser-verify-agent-sidecar
 bearbrowser-sidecar-status --format html --open
 bearbrowser-status
@@ -254,20 +342,21 @@ bearbrowser-status
 Expected results:
 
 - BearBrowser opens as native BearBrowser.
-- `app.launch` is emitted automatically by `bearbrowser-open`.
+- `app.launch` is emitted automatically by `bearbrowser-open` and by the native shell.
 - Manual navigation event is recorded.
-- Page-sharing action is classified as `hold`.
-- Provenance and action logs verify.
+- Page-sharing action is classified as `hold`, then resolved by manual denial.
+- Memory candidate is created as `hold`, then rejected by manual denial.
+- Provenance, action, and memory logs verify.
 - Agent sidecar contract verifies.
-- Sidecar status HTML opens with event/action counts and recent records.
+- Sidecar status HTML opens with event/action/memory counts and recent records.
 
 ## Next Implementation Step
 
-The next product step is to connect the native WebKit shell to the feature plane directly:
+The next product step is to connect more native-shell controls to the feature plane directly:
 
-1. Emit `app.launch` from the native app itself.
-2. Emit `navigation.requested` and `navigation.committed` from the address bar.
-3. Add a native sidecar/status button that opens the generated sidecar status surface.
-4. Add an in-app summary placeholder that creates a held `summarize_page`/`share_page_with_agent` action proposal.
+1. Add a visible in-app action proposal control for page sharing.
+2. Add a visible in-app memory-candidate control.
+3. Add approve/reject controls in the sidecar status page or native shell.
+4. Replace static HTML status with an interactive local sidecar surface.
 
-After that, the same event/action interfaces should be ported into the real Gecko runtime.
+After that, the same event/action/memory interfaces should be ported into the real Gecko runtime.
