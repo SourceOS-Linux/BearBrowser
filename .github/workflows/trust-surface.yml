@@ -1,0 +1,23 @@
+name: Trust Surface
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate-trust-surface:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Require trust surface baseline
+        run: |
+          test -f TRUST_SURFACE.yaml
+          test -f SECURITY.md
+          test -f scripts/doctor
+          test -f scripts/network-surface
+          test -f scripts/policy-surface
+          test -f scripts/purge
+          test -f scripts/prove-clean
