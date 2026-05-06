@@ -50,6 +50,15 @@ python3 scripts/bearbrowser-propose-action.py \
   --out "$actions"
 
 python3 scripts/bearbrowser-propose-action.py \
+  --action-type share_page_with_agent \
+  --profile bootstrap \
+  --actor-type human \
+  --actor-id ci \
+  --target-kind page \
+  --target-label current-page \
+  --out "$actions"
+
+python3 scripts/bearbrowser-propose-action.py \
   --action-type request_credential \
   --profile agent-runtime \
   --actor-type agent \
@@ -58,10 +67,23 @@ python3 scripts/bearbrowser-propose-action.py \
   --target-label login-form \
   --out "$actions"
 
+python3 scripts/bearbrowser-resolve-action.py \
+  --actions "$actions" \
+  --events "$prov" \
+  --latest-held \
+  --decision deny \
+  --actor-type human \
+  --actor-id ci-reviewer \
+  --reason "CI denies held test action." \
+  >/dev/null
+
 python3 scripts/bearbrowser-verify-actions.py --log "$actions"
+python3 scripts/bearbrowser-verify-provenance.py --log "$prov"
 
 grep -q '"state":"observe"' "$actions"
 grep -q '"state":"deny"' "$actions"
+grep -q '"eventType":"policy.decision"' "$prov"
+grep -q '"mode":"manual"' "$prov"
 
 echo "BearBrowser feature plane verified"
 echo "provenance_log=$prov"
