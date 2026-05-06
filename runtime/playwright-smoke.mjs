@@ -13,9 +13,9 @@ const sessionId = process.env.BEARBROWSER_SESSION_ID || `bb-${Date.now()}`;
 const agentId = process.env.BEARBROWSER_AGENT_ID || 'local-smoke';
 const workspaceId = process.env.BEARBROWSER_WORKSPACE_ID || 'local';
 
-// Generate a stable local receipt ID for this session.
-const localReceiptId = crypto.randomBytes(8).toString('hex');
-const receiptId = `urn:srcos:receipt:browser-automation:${localReceiptId}`;
+// Generate the hex suffix for the receipt URN.
+const receiptHexId = crypto.randomBytes(8).toString('hex');
+const receiptId = `urn:srcos:receipt:browser-automation:${receiptHexId}`;
 
 function buildReceipt(status, extra = {}) {
   const receipt = {
@@ -35,6 +35,12 @@ function buildReceipt(status, extra = {}) {
     displayName: `${agentId} (playwright smoke)`,
     ...extra,
   };
+  return receipt;
+}
+
+function emitReceipt(status, extra = {}) {
+  const receipt = buildReceipt(status, extra);
+  console.log(JSON.stringify({ eventType: 'browser.automation.receipt', receipt }, null, 2));
   return receipt;
 }
 
@@ -58,24 +64,19 @@ console.log(JSON.stringify(event, null, 2));
 
 if (!policyDecisionId && mode === 'agent-runtime') {
   console.error('ERROR: BEARBROWSER_POLICY_DECISION_ID is required for live agent-runtime Playwright execution.');
+  // Emit a denied receipt so the session is not silently orphaned.
+  emitReceipt('denied');
   if (!live) {
     console.log('Dry-run mode accepted without live execution.');
-    // Emit a denied receipt so the session is not silently orphaned.
-    const deniedReceipt = buildReceipt('denied');
-    console.log(JSON.stringify({ eventType: 'browser.automation.receipt', receipt: deniedReceipt }, null, 2));
     process.exit(0);
   }
-  // Emit a denied receipt before exiting.
-  const deniedReceipt = buildReceipt('denied');
-  console.log(JSON.stringify({ eventType: 'browser.automation.receipt', receipt: deniedReceipt }, null, 2));
   process.exit(64);
 }
 
 if (!live) {
   console.log('Dry run complete. Set BEARBROWSER_ENABLE_LIVE_PLAYWRIGHT=1 to run a guarded live smoke test.');
-  // Emit an active receipt for observability, then mark ended for the dry-run.
-  const dryReceipt = buildReceipt('ended');
-  console.log(JSON.stringify({ eventType: 'browser.automation.receipt', receipt: dryReceipt }, null, 2));
+  // Emit an ended receipt for observability in dry-run mode.
+  emitReceipt('ended');
   process.exit(0);
 }
 
@@ -83,10 +84,9 @@ const { chromium } = await import('playwright');
 fs.mkdirSync(provenanceDir, { recursive: true });
 
 // Emit and persist the active automation receipt before the transport starts.
-const activeReceipt = buildReceipt('active');
+const activeReceipt = emitReceipt('active');
 const receiptPath = path.join(provenanceDir, `${sessionId}.receipt.json`);
 fs.writeFileSync(receiptPath, JSON.stringify(activeReceipt, null, 2));
-console.log(JSON.stringify({ eventType: 'browser.automation.receipt', receipt: activeReceipt }, null, 2));
 
 fs.writeFileSync(path.join(provenanceDir, `${sessionId}.started.json`), JSON.stringify(event, null, 2));
 
@@ -114,7 +114,7 @@ try {
 } finally {
   await browser.close();
   // Update the receipt to ended state.
-  const endedReceipt = buildReceipt('ended');
+  const endedReceipt = emitReceipt('ended');
   fs.writeFileSync(receiptPath, JSON.stringify(endedReceipt, null, 2));
   console.log(JSON.stringify({
     eventType: 'browser.session.ended',
@@ -124,5 +124,4 @@ try {
     cleanupStatus: 'browserClosed',
     receiptStatus: 'ended'
   }, null, 2));
-  console.log(JSON.stringify({ eventType: 'browser.automation.receipt', receipt: endedReceipt }, null, 2));
 }
