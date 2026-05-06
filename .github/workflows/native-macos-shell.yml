@@ -1,0 +1,37 @@
+name: Native macOS Shell Validation
+
+on:
+  pull_request:
+    paths:
+      - "native/macos/**"
+      - "scripts/repair-macos-app-launcher.sh"
+      - "scripts/verify-native-macos-shell.sh"
+      - ".github/workflows/native-macos-shell.yml"
+  push:
+    branches: [main]
+    paths:
+      - "native/macos/**"
+      - "scripts/repair-macos-app-launcher.sh"
+      - "scripts/verify-native-macos-shell.sh"
+      - ".github/workflows/native-macos-shell.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-native-shell:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          bash -n scripts/repair-macos-app-launcher.sh
+          bash -n scripts/verify-native-macos-shell.sh
+
+      - name: Verify native macOS shell
+        run: |
+          bash scripts/verify-native-macos-shell.sh
