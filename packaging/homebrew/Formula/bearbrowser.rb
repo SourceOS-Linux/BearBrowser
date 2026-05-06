@@ -19,6 +19,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-emit-event").write wrapper_for("bearbrowser-emit-event.py")
     (bin/"bearbrowser-verify-provenance").write wrapper_for("bearbrowser-verify-provenance.py")
     (bin/"bearbrowser-propose-action").write wrapper_for("bearbrowser-propose-action.py")
+    (bin/"bearbrowser-resolve-action").write wrapper_for("bearbrowser-resolve-action.py")
     (bin/"bearbrowser-verify-actions").write wrapper_for("bearbrowser-verify-actions.py")
     (bin/"bearbrowser-sidecar-status").write wrapper_for("bearbrowser-sidecar-status.py")
     (bin/"bearbrowser-verify-sidecar-status").write wrapper_for("verify-sidecar-status.sh")
@@ -67,6 +68,7 @@ class Bearbrowser < Formula
         bearbrowser-emit-event --event-type runtime.health --payload '{"status":"ok"}'
         bearbrowser-verify-provenance
         bearbrowser-propose-action --action-type summarize_page --target-kind page --target-label current-page
+        bearbrowser-resolve-action --latest-held --decision deny --reason 'Local denial.'
         bearbrowser-verify-actions
         bearbrowser-sidecar-status --format html --open
         bearbrowser-verify-sidecar-status
