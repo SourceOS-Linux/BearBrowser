@@ -9,6 +9,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 prov="$tmp/events.jsonl"
 actions="$tmp/actions.jsonl"
+memory="$tmp/memory.jsonl"
 
 python3 scripts/bearbrowser-emit-event.py \
   --event-type runtime.health \
@@ -77,14 +78,53 @@ python3 scripts/bearbrowser-resolve-action.py \
   --reason "CI denies held test action." \
   >/dev/null
 
+python3 scripts/bearbrowser-memory-candidate.py create \
+  --text "Remember that BearBrowser memory writes are candidate-only by default." \
+  --actor-type human \
+  --actor-id ci \
+  --source-kind note \
+  --source-label ci-safe-memory \
+  --memory-log "$memory" \
+  --event-log "$prov" \
+  >/dev/null
+
+python3 scripts/bearbrowser-memory-candidate.py create \
+  --text "sensitive token example must not be stored" \
+  --actor-type human \
+  --actor-id ci \
+  --source-kind note \
+  --source-label ci-sensitive-memory \
+  --memory-log "$memory" \
+  --event-log "$prov" \
+  >/dev/null
+
+python3 scripts/bearbrowser-memory-candidate.py resolve \
+  --latest-candidate \
+  --decision reject \
+  --reason "CI rejects sensitive memory candidate." \
+  --actor-type human \
+  --actor-id ci-reviewer \
+  --memory-log "$memory" \
+  --event-log "$prov" \
+  >/dev/null
+
 python3 scripts/bearbrowser-verify-actions.py --log "$actions"
 python3 scripts/bearbrowser-verify-provenance.py --log "$prov"
+python3 scripts/bearbrowser-verify-memory.py --log "$memory"
 
 grep -q '"state":"observe"' "$actions"
 grep -q '"state":"deny"' "$actions"
 grep -q '"eventType":"policy.decision"' "$prov"
 grep -q '"mode":"manual"' "$prov"
+grep -q '"eventType":"memory.candidate_created"' "$prov"
+grep -q '"eventType":"memory.rejected"' "$prov"
+grep -q '<REDACTED-SENSITIVE-MEMORY-CANDIDATE>' "$memory"
+if grep -q 'sensitive token example must not be stored' "$memory"; then
+  echo "ERROR: sensitive memory candidate text escaped redaction" >&2
+  exit 1
+fi
 
 echo "BearBrowser feature plane verified"
 echo "provenance_log=$prov"
 echo "policy_action_log=$actions"
+echo "memory_log=$memory"
