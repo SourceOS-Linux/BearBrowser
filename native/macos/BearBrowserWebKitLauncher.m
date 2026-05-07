@@ -38,6 +38,11 @@ static NSString *BBRandomHex(NSUInteger bytes) {
   return out;
 }
 
+static NSString *BBShellQuote(NSString *value) {
+  NSString *safe = [value stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"];
+  return [NSString stringWithFormat:@"'%@'", safe];
+}
+
 static void BBAppendLine(NSString *path, NSString *line) {
   NSString *dir = [path stringByDeletingLastPathComponent];
   [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
@@ -163,7 +168,7 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
   BBEmitEvent(@"app.launch", @"allow", @"Native BearBrowser shell launched.", @{ @"bundleId": @"dev.sourceos.BearBrowser" });
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
-  NSRect frame = NSMakeRect(0, 0, 1320, 820);
+  NSRect frame = NSMakeRect(0, 0, 1440, 820);
   self.window = [[NSWindow alloc] initWithContentRect:frame
                                             styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable)
                                               backing:NSBackingStoreBuffered
@@ -183,6 +188,7 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
   NSButton *back = [NSButton buttonWithTitle:@"‹" target:self action:@selector(goBack:)];
   NSButton *fwd = [NSButton buttonWithTitle:@"›" target:self action:@selector(goForward:)];
   NSButton *reload = [NSButton buttonWithTitle:@"↻" target:self action:@selector(reload:)];
+  NSButton *summary = [NSButton buttonWithTitle:@"Summarize Page" target:self action:@selector(summarizePage:)];
   NSButton *share = [NSButton buttonWithTitle:@"Propose Share" target:self action:@selector(proposePageShare:)];
   NSButton *memory = [NSButton buttonWithTitle:@"Memory Candidate" target:self action:@selector(createMemoryCandidate:)];
   NSButton *resolve = [NSButton buttonWithTitle:@"Resolve Held" target:self action:@selector(resolveHeld:)];
@@ -196,18 +202,19 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
     x += 44.0;
   }
 
-  CGFloat right = frame.size.width - 660;
-  [share setFrame:NSMakeRect(right, 9, 124, 30)];
-  [memory setFrame:NSMakeRect(right + 132, 9, 150, 30)];
-  [resolve setFrame:NSMakeRect(right + 290, 9, 118, 30)];
-  [sidecar setFrame:NSMakeRect(right + 416, 9, 132, 30)];
-  for (NSButton *button in @[share, memory, resolve, sidecar]) {
+  CGFloat right = frame.size.width - 810;
+  [summary setFrame:NSMakeRect(right, 9, 132, 30)];
+  [share setFrame:NSMakeRect(right + 140, 9, 124, 30)];
+  [memory setFrame:NSMakeRect(right + 272, 9, 150, 30)];
+  [resolve setFrame:NSMakeRect(right + 430, 9, 118, 30)];
+  [sidecar setFrame:NSMakeRect(right + 556, 9, 132, 30)];
+  for (NSButton *button in @[summary, share, memory, resolve, sidecar]) {
     [button setAutoresizingMask:NSViewMinXMargin];
     [button setBezelStyle:NSBezelStyleRounded];
     [toolbar addSubview:button];
   }
 
-  self.address = [[NSTextField alloc] initWithFrame:NSMakeRect(x + 6, 9, frame.size.width - x - 676, 30)];
+  self.address = [[NSTextField alloc] initWithFrame:NSMakeRect(x + 6, 9, frame.size.width - x - 826, 30)];
   [self.address setAutoresizingMask:NSViewWidthSizable];
   [self.address setDelegate:self];
   [self.address setStringValue:@"bearbrowser://start"];
@@ -266,6 +273,29 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
   alert.informativeText = status == 0 ? @"Interactive Sidecar has been refreshed." : @"Check ~/Library/Logs/BearBrowser/launcher.log and the local governance logs.";
   [alert addButtonWithTitle:@"OK"];
   [alert beginSheetModalForWindow:self.window completionHandler:nil];
+}
+
+- (void)summarizePage:(id)sender {
+  NSString *js = @"(document.body && document.body.innerText ? document.body.innerText : (document.documentElement && document.documentElement.innerText ? document.documentElement.innerText : '')).slice(0, 12000)";
+  [self.webView evaluateJavaScript:js completionHandler:^(id result, NSError *error) {
+    if (error) {
+      BBLog([NSString stringWithFormat:@"summary extraction error=%@", error.localizedDescription]);
+      NSAlert *alert = [[NSAlert alloc] init];
+      alert.messageText = @"Could not summarize page";
+      alert.informativeText = @"BearBrowser could not read visible page text from the current WebKit page.";
+      [alert addButtonWithTitle:@"OK"];
+      [alert beginSheetModalForWindow:self.window completionHandler:nil];
+      return;
+    }
+    NSString *text = [result isKindOfClass:[NSString class]] ? (NSString *)result : @"";
+    NSString *dir = [BBSupportDir() stringByAppendingPathComponent:@"summaries"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"visible-%@.txt", BBRandomHex(8)]];
+    [text writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSString *url = [self currentURLString];
+    NSString *command = [NSString stringWithFormat:@"bearbrowser-page-summary create --text-file %@ --actor-type human --actor-id native-shell --source-kind page --source-url %@ --source-label native-page-summary", BBShellQuote(path), BBShellQuote(url)];
+    [self runCommand:command successMessage:@"Page summary proposed"];
+  }];
 }
 
 - (void)proposePageShare:(id)sender {
