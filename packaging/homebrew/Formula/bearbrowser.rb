@@ -50,6 +50,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-playwright").write wrapper_for("bearbrowser-playwright.sh")
     (bin/"bearbrowser-stagehand").write wrapper_for("bearbrowser-stagehand.sh")
     (bin/"bearbrowser-terminal").write wrapper_for("bearbrowser-terminal.sh")
+    (bin/"bearbrowser-history").write wrapper_for("bearbrowser-history.py")
   end
 
   def wrapper_for(script)
@@ -105,6 +106,9 @@ class Bearbrowser < Formula
         bearbrowser-playwright --dry-run
         bearbrowser-stagehand --dry-run
         bearbrowser-terminal --dry-run
+        bearbrowser-history policy explain --profile agent-runtime --dry-run
+        bearbrowser-history export explain --session demo --profile agent-runtime --dry-run
+        bearbrowser-history redactions --dry-run
 
       Full signed app distribution will use:
         brew install --cask SourceOS-Linux/tap/bearbrowser
@@ -128,5 +132,7 @@ class Bearbrowser < Formula
     assert_match "BearBrowser agent sidecar contract verified", shell_output("#{bin}/bearbrowser-verify-agent-sidecar")
     assert_match "BearBrowser sidecar status verified", shell_output("#{bin}/bearbrowser-verify-sidecar-status")
     assert_match "http://127.0.0.1:", shell_output("#{bin}/bearbrowser-sidecar-server --print-url")
+    assert_match "bearhistory-policy-explain", shell_output("#{bin}/bearbrowser-history policy explain --profile agent-runtime --dry-run")
+    assert_match "bearhistory-export-explain", shell_output("#{bin}/bearbrowser-history export explain --session demo --profile agent-runtime --dry-run")
   end
 end
