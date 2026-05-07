@@ -23,6 +23,8 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-verify-actions").write wrapper_for("bearbrowser-verify-actions.py")
     (bin/"bearbrowser-memory-candidate").write wrapper_for("bearbrowser-memory-candidate.py")
     (bin/"bearbrowser-verify-memory").write wrapper_for("bearbrowser-verify-memory.py")
+    (bin/"bearbrowser-page-summary").write wrapper_for("bearbrowser-page-summary.py")
+    (bin/"bearbrowser-verify-summaries").write wrapper_for("bearbrowser-verify-summaries.py")
     (bin/"bearbrowser-governance-queue").write wrapper_for("bearbrowser-governance-queue.py")
     (bin/"bearbrowser-sidecar-server").write wrapper_for("bearbrowser-sidecar-server.py")
     (bin/"bearbrowser-sidecar-open").write wrapper_for("bearbrowser-sidecar-open.sh")
@@ -80,6 +82,8 @@ class Bearbrowser < Formula
         bearbrowser-memory-candidate create --text 'Remember this only after approval.'
         bearbrowser-memory-candidate resolve --latest-candidate --decision reject --reason 'Not useful.'
         bearbrowser-verify-memory
+        bearbrowser-page-summary create --text 'Read-only summary candidate.'
+        bearbrowser-verify-summaries
         bearbrowser-governance-queue
         bearbrowser-sidecar-open --open
         bearbrowser-sidecar-server --print-url
@@ -129,6 +133,8 @@ class Bearbrowser < Formula
     assert_match "browser.playwright", shell_output("#{bin}/bearbrowser-automation-surfaces")
     assert_match "BearBrowser provenance", shell_output("#{bin}/bearbrowser-emit-event --event-type runtime.health --payload '{\"status\":\"test\"}'")
     assert_match "BearBrowser policy action", shell_output("#{bin}/bearbrowser-propose-action --action-type summarize_page --target-kind page --target-label test")
+    assert_match "BearBrowser page summary", shell_output("#{bin}/bearbrowser-page-summary create --text 'test page summary' --source-label test")
+    assert_match "BearBrowser page summary log verified", shell_output("#{bin}/bearbrowser-verify-summaries")
     assert_match "BearBrowser agent sidecar contract verified", shell_output("#{bin}/bearbrowser-verify-agent-sidecar")
     assert_match "BearBrowser sidecar status verified", shell_output("#{bin}/bearbrowser-verify-sidecar-status")
     assert_match "http://127.0.0.1:", shell_output("#{bin}/bearbrowser-sidecar-server --print-url")
