@@ -14,9 +14,12 @@ on:
       - "scripts/bearbrowser-memory-candidate.py"
       - "scripts/bearbrowser-verify-memory.py"
       - "scripts/bearbrowser-governance-queue.py"
+      - "scripts/bearbrowser-sidecar-server.py"
+      - "scripts/bearbrowser-sidecar-open.sh"
       - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
       - "scripts/verify-sidecar-status.sh"
+      - "scripts/verify-interactive-sidecar.sh"
       - "scripts/verify-agent-sidecar-contract.py"
       - ".github/workflows/feature-plane.yml"
   push:
@@ -33,9 +36,12 @@ on:
       - "scripts/bearbrowser-memory-candidate.py"
       - "scripts/bearbrowser-verify-memory.py"
       - "scripts/bearbrowser-governance-queue.py"
+      - "scripts/bearbrowser-sidecar-server.py"
+      - "scripts/bearbrowser-sidecar-open.sh"
       - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
       - "scripts/verify-sidecar-status.sh"
+      - "scripts/verify-interactive-sidecar.sh"
       - "scripts/verify-agent-sidecar-contract.py"
       - ".github/workflows/feature-plane.yml"
   workflow_dispatch:
@@ -62,6 +68,7 @@ jobs:
             scripts/bearbrowser-memory-candidate.py \
             scripts/bearbrowser-verify-memory.py \
             scripts/bearbrowser-governance-queue.py \
+            scripts/bearbrowser-sidecar-server.py \
             scripts/bearbrowser-sidecar-status.py \
             scripts/verify-agent-sidecar-contract.py
 
@@ -69,6 +76,8 @@ jobs:
         run: |
           bash -n scripts/verify-feature-plane.sh
           bash -n scripts/verify-sidecar-status.sh
+          bash -n scripts/verify-interactive-sidecar.sh
+          bash -n scripts/bearbrowser-sidecar-open.sh
 
       - name: Validate feature plane
         run: |
@@ -77,6 +86,10 @@ jobs:
       - name: Validate sidecar status renderer
         run: |
           bash scripts/verify-sidecar-status.sh
+
+      - name: Validate interactive sidecar
+        run: |
+          bash scripts/verify-interactive-sidecar.sh
 
       - name: Validate agent sidecar contract
         run: |
