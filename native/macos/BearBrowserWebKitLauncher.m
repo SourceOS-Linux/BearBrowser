@@ -241,17 +241,29 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
   return self.webView.URL.absoluteString ?: @"bearbrowser://start";
 }
 
-- (void)runCommand:(NSString *)command successMessage:(NSString *)successMessage {
+- (NSString *)runCommandAndCaptureOutput:(NSString *)command status:(int *)status {
   NSTask *task = [[NSTask alloc] init];
+  NSPipe *pipe = [NSPipe pipe];
   task.launchPath = @"/bin/bash";
   task.arguments = @[@"-lc", [NSString stringWithFormat:@"PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; %@", command]];
+  task.standardOutput = pipe;
+  task.standardError = pipe;
   [task launch];
   [task waitUntilExit];
-  BBLog([NSString stringWithFormat:@"command exit=%d command=%@", task.terminationStatus, command]);
+  if (status) { *status = task.terminationStatus; }
+  NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+  NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+  return [output stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
+- (void)runCommand:(NSString *)command successMessage:(NSString *)successMessage {
+  int status = 0;
+  NSString *output = [self runCommandAndCaptureOutput:command status:&status];
+  BBLog([NSString stringWithFormat:@"command exit=%d command=%@ output=%@", status, command, output]);
   [self openSidecarStatus:nil];
   NSAlert *alert = [[NSAlert alloc] init];
-  alert.messageText = task.terminationStatus == 0 ? successMessage : @"BearBrowser command failed";
-  alert.informativeText = task.terminationStatus == 0 ? @"Sidecar Status has been refreshed." : @"Check ~/Library/Logs/BearBrowser/launcher.log and the local governance logs.";
+  alert.messageText = status == 0 ? successMessage : @"BearBrowser command failed";
+  alert.informativeText = status == 0 ? @"Interactive Sidecar has been refreshed." : @"Check ~/Library/Logs/BearBrowser/launcher.log and the local governance logs.";
   [alert addButtonWithTitle:@"OK"];
   [alert beginSheetModalForWindow:self.window completionHandler:nil];
 }
@@ -309,25 +321,15 @@ static void BBCreateMemoryCandidate(NSString *text, NSString *sourceURL, NSStrin
 }
 
 - (void)openSidecarStatus:(id)sender {
-  NSString *support = BBSupportDir();
-  NSString *sidecarDir = [support stringByAppendingPathComponent:@"sidecar"];
-  [[NSFileManager defaultManager] createDirectoryAtPath:sidecarDir withIntermediateDirectories:YES attributes:nil error:nil];
-  NSString *htmlPath = [sidecarDir stringByAppendingPathComponent:@"status.html"];
-
-  NSTask *task = [[NSTask alloc] init];
-  task.launchPath = @"/bin/bash";
-  task.arguments = @[@"-lc", [NSString stringWithFormat:@"PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin; if command -v bearbrowser-sidecar-status >/dev/null 2>&1; then bearbrowser-sidecar-status --format html --out '%@'; fi", htmlPath]];
-  [task launch];
-  [task waitUntilExit];
-
-  BBProposeAction(@"share_page_with_agent", @"page", @"sidecar-status-open", [self currentURLString], @"medium", @"hold", YES, @"Opening sidecar status records page context sharing as a held local-default action.");
-  BBEmitEvent(@"page.shared_with_agent", @"hold", @"Sidecar status requested; page sharing remains held by local default policy.", @{ @"url": [self currentURLString], @"surface": @"sidecar-status" });
-
-  NSURL *url = [NSURL fileURLWithPath:htmlPath];
-  if ([[NSFileManager defaultManager] fileExistsAtPath:htmlPath]) {
-    [self.webView loadFileURL:url allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
+  int status = 0;
+  NSString *output = [self runCommandAndCaptureOutput:@"bearbrowser-sidecar-open --print-url" status:&status];
+  BBLog([NSString stringWithFormat:@"interactive sidecar status=%d url=%@", status, output]);
+  BBEmitEvent(@"automation.observed", @"observe", @"Interactive sidecar opened; no agent authority granted.", @{ @"url": [self currentURLString], @"surface": @"interactive-sidecar" });
+  if (status == 0 && [output hasPrefix:@"http://127.0.0.1:"]) {
+    NSURL *url = [NSURL URLWithString:output];
+    [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
   } else {
-    [self.webView loadHTMLString:@"<h1>BearBrowser Sidecar Status</h1><p>Status renderer command is not installed yet. Reinstall the Homebrew formula.</p>" baseURL:nil];
+    [self.webView loadHTMLString:@"<h1>BearBrowser Interactive Sidecar</h1><p>Sidecar server could not start. Reinstall the Homebrew formula and run bearbrowser-verify-interactive-sidecar.</p>" baseURL:nil];
   }
 }
 
