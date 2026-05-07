@@ -55,6 +55,14 @@ if command -v brew >/dev/null 2>&1; then
   fi
 fi
 
+printf '\nSourceOS control plane\n'
+if python3 "$repo_root/scripts/verify-sourceos-control-plane.py"; then
+  printf 'ok: SourceOS control-plane manifests verified\n'
+else
+  printf 'error: SourceOS control-plane manifest verification failed\n' >&2
+  missing=1
+fi
+
 printf '\nAutomation surfaces\n'
 for cmd in node npx playwright carbonyl browsh elinks lynx w3m links; do
   if command -v "$cmd" >/dev/null 2>&1; then
