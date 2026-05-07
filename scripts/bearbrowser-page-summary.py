@@ -42,6 +42,17 @@ def sensitive_like(text: str) -> bool:
     return bool(SENSITIVE_RE.search(text))
 
 
+def load_text(args: argparse.Namespace) -> str:
+    if args.text_file:
+        path = Path(args.text_file).expanduser()
+        if not path.exists():
+            raise SystemExit(f"ERROR: --text-file not found: {path}")
+        return path.read_text(encoding="utf-8", errors="replace")
+    if args.text:
+        return args.text
+    raise SystemExit("ERROR: pass --text or --text-file")
+
+
 def safe_excerpt(text: str, limit: int = 900) -> str:
     compact = " ".join(text.split())
     if sensitive_like(compact):
@@ -129,10 +140,11 @@ def build_summary(args: argparse.Namespace, decision_id: str) -> dict[str, Any]:
     if args.source_kind not in VALID_SOURCE_KINDS:
         raise SystemExit(f"ERROR: invalid source kind: {args.source_kind}")
 
-    redacted = sensitive_like(args.text)
+    text = load_text(args)
+    redacted = sensitive_like(text)
     summary_id = f"sum-{secrets.token_hex(16)}"
-    excerpt = safe_excerpt(args.text)
-    summary_text = summarize_text(args.text)
+    excerpt = safe_excerpt(text)
+    summary_text = summarize_text(text)
     words = 0 if excerpt.startswith("<REDACTED") else len(excerpt.split())
     payload_class = "secret-blocked" if redacted else args.payload_class
     return {
@@ -171,7 +183,8 @@ def build_summary(args: argparse.Namespace, decision_id: str) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Create a BearBrowser local page summary proposal")
     parser.add_argument("create", nargs="?", help="Create a summary proposal")
-    parser.add_argument("--text", required=True)
+    parser.add_argument("--text", default="")
+    parser.add_argument("--text-file", default="")
     parser.add_argument("--actor-type", default="human")
     parser.add_argument("--actor-id", default="local-user")
     parser.add_argument("--source-kind", default="page")
