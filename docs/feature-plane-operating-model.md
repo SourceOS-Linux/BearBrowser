@@ -1,6 +1,6 @@
 # BearBrowser Feature Plane Operating Model
 
-This document defines the first product feature plane for BearBrowser: local provenance, policy-visible actions, local memory candidates, governance queue, and the interactive agent sidecar surface.
+This document defines the first product feature plane for BearBrowser: local provenance, policy-visible actions, local memory candidates, read-only page summaries, governance queue, and the interactive agent sidecar surface.
 
 The goal is to make BearBrowser agentic by design without granting agents ambient authority.
 
@@ -14,6 +14,7 @@ It is intentionally engine-portable:
 - The Gecko runtime can emit deeper navigation/tab/download/credential events later.
 - Automation wrappers can emit observe/action proposal events now.
 - Memory candidates can be proposed, held, committed, or rejected without a production engine.
+- Page summaries can be proposed in read-only mode without mutation or memory writes.
 - The governance queue can show unresolved held actions and pending memory.
 - The interactive sidecar can render and resolve local governance state without waiting for a production browser engine.
 
@@ -25,6 +26,7 @@ Default local state paths:
 ~/Library/Application Support/BearBrowser/provenance/events.jsonl
 ~/Library/Application Support/BearBrowser/policy/actions.jsonl
 ~/Library/Application Support/BearBrowser/memory/candidates.jsonl
+~/Library/Application Support/BearBrowser/summaries/page-summaries.jsonl
 ~/Library/Application Support/BearBrowser/sidecar/status.html
 ~/Library/Application Support/BearBrowser/sidecar/server-token
 ```
@@ -35,6 +37,7 @@ Linux equivalents should move under XDG paths:
 $XDG_STATE_HOME/bearbrowser/provenance/events.jsonl
 $XDG_STATE_HOME/bearbrowser/policy/actions.jsonl
 $XDG_STATE_HOME/bearbrowser/memory/candidates.jsonl
+$XDG_STATE_HOME/bearbrowser/summaries/page-summaries.jsonl
 $XDG_STATE_HOME/bearbrowser/sidecar/status.html
 $XDG_STATE_HOME/bearbrowser/sidecar/server-token
 ```
@@ -115,6 +118,55 @@ Required properties:
 - Cross-tab sharing, uploads, automation, and memory writes default to `hold`.
 - Held actions can be manually allowed or denied through a follow-up action record.
 - Manual resolution emits a `policy.decision` provenance event.
+
+## Page Summaries
+
+Page summaries describe read-only local observations of visible page text.
+
+Schema:
+
+```text
+schemas/page-summary.schema.json
+```
+
+Manager:
+
+```text
+scripts/bearbrowser-page-summary.py
+```
+
+Verifier:
+
+```text
+scripts/bearbrowser-verify-summaries.py
+```
+
+Installed commands:
+
+```text
+bearbrowser-page-summary
+bearbrowser-verify-summaries
+```
+
+Required properties:
+
+- Page summaries are observational and default to policy decision `observe`.
+- Summary creation emits `automation.observed`.
+- Summary creation creates a `summarize_page` policy action.
+- Summary records must have `mutationAllowed=false`.
+- Summary records do not create memory records.
+- Sensitive-looking page excerpts are blocked and stored as `<REDACTED-SENSITIVE-PAGE-EXCERPT>`.
+
+Example:
+
+```bash
+bearbrowser-page-summary create \
+  --text 'BearBrowser is a governed browser surface.' \
+  --source-kind page \
+  --source-label example-page
+
+bearbrowser-verify-summaries
+```
 
 ## Memory Candidates
 
@@ -244,6 +296,7 @@ Security rules:
 - Does not expose raw secret values.
 - Uses existing local resolver scripts for allow/deny/commit/reject.
 - Resolution writes action, memory, and provenance logs.
+- Displays recent read-only page summaries.
 
 Example:
 
@@ -259,6 +312,7 @@ The native WebKit shell exposes the first in-app governance loop.
 
 Current controls:
 
+- `Summarize Page`: extracts visible page text, creates a read-only `summarize_page` action and page-summary record, then refreshes the sidecar.
 - `Propose Share`: creates a held `share_page_with_agent` action and emits `page.shared_with_agent`.
 - `Memory Candidate`: prompts for candidate text, creates a held `write_memory_candidate` action, writes a memory candidate, and emits `memory.candidate_created`.
 - `Resolve Held`: lets the user allow or deny the latest held action, or commit or reject the latest memory candidate.
@@ -340,7 +394,7 @@ Agents observe and propose; PolicyFabric and the user grant authority.
 
 ## Static Sidecar Status Surface
 
-The static sidecar status surface renders local event/action/memory state. It remains useful for diagnostics and CI, but the native shell now prefers the interactive sidecar server.
+The static sidecar status surface renders local event/action/memory/summary state. It remains useful for diagnostics and CI, but the native shell now prefers the interactive sidecar server.
 
 Renderer:
 
@@ -379,16 +433,18 @@ Workflow:
 
 CI validates:
 
-- Python syntax for event/action/memory/queue/static-sidecar/interactive-sidecar scripts.
+- Python syntax for event/action/summary/memory/queue/static-sidecar/interactive-sidecar scripts.
 - Shell syntax for feature verifiers.
 - Provenance redaction invariants.
 - Policy action classification and manual resolution invariants.
+- Page summary observation and redaction invariants.
 - Governance queue counts before and after resolution.
 - Memory candidate lifecycle invariants.
 - Sensitive-looking memory candidate blocking.
 - Interactive localhost sidecar token and resolution flows.
+- Interactive and static sidecar summary visibility.
 - Agent sidecar contract invariants.
-- Static sidecar status HTML/JSON generation, including memory visibility.
+- Static sidecar status HTML/JSON generation, including memory and summary visibility.
 
 Native shell workflow:
 
@@ -400,6 +456,7 @@ Native shell CI validates:
 
 - source and landing page existence;
 - native governance controls;
+- native page summary control;
 - native event emission strings;
 - native interactive sidecar integration;
 - native macOS compile on `macos-latest`;
@@ -425,6 +482,7 @@ bearbrowser-sidecar-open --open
 bearbrowser-verify-interactive-sidecar
 bearbrowser-verify-provenance
 bearbrowser-verify-actions
+bearbrowser-verify-summaries --allow-empty
 bearbrowser-verify-memory --allow-empty
 bearbrowser-verify-agent-sidecar
 bearbrowser-verify-native-shell
@@ -434,6 +492,7 @@ bearbrowser-status
 Then dogfood the native shell controls directly:
 
 ```text
+Summarize Page
 Propose Share
 Memory Candidate
 Resolve Held
@@ -444,18 +503,18 @@ Expected results:
 
 - BearBrowser opens as native BearBrowser.
 - `app.launch` is emitted automatically by `bearbrowser-open` and by the native shell.
-- Native controls create held actions and memory candidates.
+- Native controls create read-only page summaries, held actions, and memory candidates.
 - `Resolve Held` can allow/deny/commit/reject from inside BearBrowser.
 - `Sidecar Status` loads the interactive tokenized localhost sidecar.
-- Interactive sidecar can allow/deny held actions and commit/reject memory candidates.
+- Interactive sidecar can allow/deny held actions, commit/reject memory candidates, and display recent page summaries.
 - Governance queue shows pending items before resolution and clears after resolution.
-- Provenance, action, memory, agent sidecar, interactive sidecar, and native shell verifiers pass.
+- Provenance, action, summary, memory, agent sidecar, interactive sidecar, and native shell verifiers pass.
 
 ## Next Implementation Step
 
-The next product step is to add a read-only current-page summary proposal surface:
+The next product step is to add selected-tab comparison:
 
-1. Capture visible page text metadata safely from the native shell.
-2. Create `summarize_page` action proposals without mutation.
-3. Render the proposal in the interactive sidecar.
-4. Keep the same provenance/action/memory interfaces so this can later move into the Gecko runtime.
+1. Record explicit tab/page selection metadata.
+2. Create `compare_tabs` action proposals that default to `hold`.
+3. Render selected comparison inputs in the interactive sidecar.
+4. Keep the same provenance/action/memory/summary interfaces so this can later move into the Gecko runtime.
