@@ -37,6 +37,12 @@ EVENT_TYPES = {
     "memory.rejected",
     "policy.decision",
     "runtime.health",
+    "browser.session.start",
+    "browser.capture.create",
+    "browser.download.create",
+    "browser.upload.create",
+    "browser.automation.run",
+    "browser.diagnostics.export_redacted",
 }
 
 SURFACES = {

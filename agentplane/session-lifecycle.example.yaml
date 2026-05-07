@@ -55,3 +55,12 @@ spec:
     policyDecisions: PolicyFabric
     provenanceEvents: AgentPlane
     workspaceState: ProphetWorkspace
+  workspaceOperations:
+    contract: agentplane/workspace-operation-plane.yaml
+    types:
+      - browser.session.start
+      - browser.capture.create
+      - browser.download.create
+      - browser.upload.create
+      - browser.automation.run
+      - browser.diagnostics.export_redacted

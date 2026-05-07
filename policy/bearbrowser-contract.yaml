@@ -88,6 +88,7 @@ spec:
         noAmbientCloudCredentialAccess: true
         allowedMountClasses:
           - agent-downloads
+          - agent-uploads
           - agent-profile
           - agent-captures
           - agent-cache
@@ -134,3 +135,27 @@ spec:
     eventSink: AgentPlane
     policyDecisionSink: PolicyFabric
     workspaceVisibilitySink: ProphetWorkspace
+  workspaceOperations:
+    required: true
+    operationContract: agentplane/workspace-operation-plane.yaml
+    requiredTypes:
+      - browser.session.start
+      - browser.capture.create
+      - browser.download.create
+      - browser.upload.create
+      - browser.automation.run
+      - browser.diagnostics.export_redacted
+    operationEventLifecycle:
+      - start
+      - progress
+      - failure
+      - retry
+      - cancel
+      - complete
+    policyAuthority: PolicyFabric
+    policyMediatedTypes:
+      - browser.capture.create
+      - browser.download.create
+      - browser.upload.create
+      - browser.automation.run
+      - browser.diagnostics.export_redacted
