@@ -10,6 +10,7 @@ trap 'rm -rf "$tmp"' EXIT
 prov="$tmp/events.jsonl"
 actions="$tmp/actions.jsonl"
 memory="$tmp/memory.jsonl"
+queue="$tmp/queue.json"
 
 python3 scripts/bearbrowser-emit-event.py \
   --event-type runtime.health \
@@ -68,6 +69,14 @@ python3 scripts/bearbrowser-propose-action.py \
   --target-label login-form \
   --out "$actions"
 
+python3 scripts/bearbrowser-governance-queue.py \
+  --actions "$actions" \
+  --memory "$memory" \
+  --format json > "$queue"
+
+grep -q '"heldActionCount": 1' "$queue"
+grep -q '"pendingMemoryCount": 0' "$queue"
+
 python3 scripts/bearbrowser-resolve-action.py \
   --actions "$actions" \
   --events "$prov" \
@@ -87,6 +96,14 @@ python3 scripts/bearbrowser-memory-candidate.py create \
   --memory-log "$memory" \
   --event-log "$prov" \
   >/dev/null
+
+python3 scripts/bearbrowser-governance-queue.py \
+  --actions "$actions" \
+  --memory "$memory" \
+  --format json > "$queue"
+
+grep -q '"heldActionCount": 0' "$queue"
+grep -q '"pendingMemoryCount": 1' "$queue"
 
 python3 scripts/bearbrowser-memory-candidate.py create \
   --text "sensitive token example must not be stored" \
@@ -128,3 +145,4 @@ echo "BearBrowser feature plane verified"
 echo "provenance_log=$prov"
 echo "policy_action_log=$actions"
 echo "memory_log=$memory"
+echo "queue_log=$queue"
