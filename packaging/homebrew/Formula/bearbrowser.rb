@@ -23,6 +23,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-verify-actions").write wrapper_for("bearbrowser-verify-actions.py")
     (bin/"bearbrowser-memory-candidate").write wrapper_for("bearbrowser-memory-candidate.py")
     (bin/"bearbrowser-verify-memory").write wrapper_for("bearbrowser-verify-memory.py")
+    (bin/"bearbrowser-governance-queue").write wrapper_for("bearbrowser-governance-queue.py")
     (bin/"bearbrowser-sidecar-status").write wrapper_for("bearbrowser-sidecar-status.py")
     (bin/"bearbrowser-verify-sidecar-status").write wrapper_for("verify-sidecar-status.sh")
     (bin/"bearbrowser-verify-agent-sidecar").write wrapper_for("verify-agent-sidecar-contract.py")
@@ -75,6 +76,7 @@ class Bearbrowser < Formula
         bearbrowser-memory-candidate create --text 'Remember this only after approval.'
         bearbrowser-memory-candidate resolve --latest-candidate --decision reject --reason 'Not useful.'
         bearbrowser-verify-memory
+        bearbrowser-governance-queue
         bearbrowser-sidecar-status --format html --open
         bearbrowser-verify-sidecar-status
         bearbrowser-verify-agent-sidecar
