@@ -15,6 +15,7 @@ from typing import Any
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 
 def support_dir() -> Path:
@@ -95,6 +96,15 @@ def pending_memory(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def esc(value: Any) -> str:
     return html.escape(str(value), quote=True)
+
+
+def tool_script(name: str) -> list[str]:
+    mapping = {
+        "bearbrowser-resolve-action": "bearbrowser-resolve-action.py",
+        "bearbrowser-memory-candidate": "bearbrowser-memory-candidate.py",
+    }
+    script = SCRIPT_DIR / mapping[name]
+    return [sys.executable, str(script)]
 
 
 def run_command(command: list[str]) -> tuple[int, str]:
@@ -224,19 +234,19 @@ class Handler(BaseHTTPRequestHandler):
         message = "No action taken."
         if parsed.path == "/action/allow":
             action_id = form.get("action_id", "")
-            code, out = run_command(["bearbrowser-resolve-action", "--action-id", action_id, "--decision", "allow", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Allowed from interactive sidecar."])
+            code, out = run_command(tool_script("bearbrowser-resolve-action") + ["--action-id", action_id, "--decision", "allow", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Allowed from interactive sidecar."])
             message = "Allowed held action." if code == 0 else f"Allow failed: {out}"
         elif parsed.path == "/action/deny":
             action_id = form.get("action_id", "")
-            code, out = run_command(["bearbrowser-resolve-action", "--action-id", action_id, "--decision", "deny", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Denied from interactive sidecar."])
+            code, out = run_command(tool_script("bearbrowser-resolve-action") + ["--action-id", action_id, "--decision", "deny", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Denied from interactive sidecar."])
             message = "Denied held action." if code == 0 else f"Deny failed: {out}"
         elif parsed.path == "/memory/commit":
             memory_id = form.get("memory_id", "")
-            code, out = run_command(["bearbrowser-memory-candidate", "resolve", "--memory-id", memory_id, "--decision", "commit", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Committed from interactive sidecar."])
+            code, out = run_command(tool_script("bearbrowser-memory-candidate") + ["resolve", "--memory-id", memory_id, "--decision", "commit", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Committed from interactive sidecar."])
             message = "Committed memory candidate." if code == 0 else f"Commit failed: {out}"
         elif parsed.path == "/memory/reject":
             memory_id = form.get("memory_id", "")
-            code, out = run_command(["bearbrowser-memory-candidate", "resolve", "--memory-id", memory_id, "--decision", "reject", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Rejected from interactive sidecar."])
+            code, out = run_command(tool_script("bearbrowser-memory-candidate") + ["resolve", "--memory-id", memory_id, "--decision", "reject", "--actor-type", "human", "--actor-id", "sidecar", "--reason", "Rejected from interactive sidecar."])
             message = "Rejected memory candidate." if code == 0 else f"Reject failed: {out}"
         self.send_html(render_page(self.server.token, message))  # type: ignore[attr-defined]
 
