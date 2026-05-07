@@ -33,6 +33,7 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-verify-interactive-sidecar").write wrapper_for("verify-interactive-sidecar.sh")
     (bin/"bearbrowser-verify-agent-sidecar").write wrapper_for("verify-agent-sidecar-contract.py")
     (bin/"bearbrowser-verify-native-shell").write wrapper_for("verify-native-macos-shell.sh")
+    (bin/"bearbrowser-verify-control-plane").write wrapper_for("verify-sourceos-control-plane.py")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-install-app-launcher").write wrapper_for("install-macos-app-launcher.sh")
     (bin/"bearbrowser-repair-app-launcher").write wrapper_for("repair-macos-app-launcher.sh")
@@ -92,6 +93,7 @@ class Bearbrowser < Formula
         bearbrowser-verify-sidecar-status
         bearbrowser-verify-agent-sidecar
         bearbrowser-verify-native-shell
+        bearbrowser-verify-control-plane
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
@@ -137,6 +139,7 @@ class Bearbrowser < Formula
     assert_match "BearBrowser page summary log verified", shell_output("#{bin}/bearbrowser-verify-summaries")
     assert_match "BearBrowser agent sidecar contract verified", shell_output("#{bin}/bearbrowser-verify-agent-sidecar")
     assert_match "BearBrowser sidecar status verified", shell_output("#{bin}/bearbrowser-verify-sidecar-status")
+    assert_match "BearBrowser SourceOS control-plane manifests verified", shell_output("#{bin}/bearbrowser-verify-control-plane")
     assert_match "http://127.0.0.1:", shell_output("#{bin}/bearbrowser-sidecar-server --print-url")
     assert_match "bearhistory-policy-explain", shell_output("#{bin}/bearbrowser-history policy explain --profile agent-runtime --dry-run")
     assert_match "bearhistory-export-explain", shell_output("#{bin}/bearbrowser-history export explain --session demo --profile agent-runtime --dry-run")
