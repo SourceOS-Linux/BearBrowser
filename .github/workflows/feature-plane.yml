@@ -13,6 +13,8 @@ on:
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/bearbrowser-memory-candidate.py"
       - "scripts/bearbrowser-verify-memory.py"
+      - "scripts/bearbrowser-page-summary.py"
+      - "scripts/bearbrowser-verify-summaries.py"
       - "scripts/bearbrowser-governance-queue.py"
       - "scripts/bearbrowser-sidecar-server.py"
       - "scripts/bearbrowser-sidecar-open.sh"
@@ -35,6 +37,8 @@ on:
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/bearbrowser-memory-candidate.py"
       - "scripts/bearbrowser-verify-memory.py"
+      - "scripts/bearbrowser-page-summary.py"
+      - "scripts/bearbrowser-verify-summaries.py"
       - "scripts/bearbrowser-governance-queue.py"
       - "scripts/bearbrowser-sidecar-server.py"
       - "scripts/bearbrowser-sidecar-open.sh"
@@ -67,6 +71,8 @@ jobs:
             scripts/bearbrowser-verify-actions.py \
             scripts/bearbrowser-memory-candidate.py \
             scripts/bearbrowser-verify-memory.py \
+            scripts/bearbrowser-page-summary.py \
+            scripts/bearbrowser-verify-summaries.py \
             scripts/bearbrowser-governance-queue.py \
             scripts/bearbrowser-sidecar-server.py \
             scripts/bearbrowser-sidecar-status.py \
