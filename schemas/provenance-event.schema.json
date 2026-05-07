@@ -55,8 +55,7 @@
         "memory.committed",
         "memory.rejected",
         "policy.decision",
-        "runtime.health"
-        ,
+        "runtime.health",
         "browser.session.start",
         "browser.capture.create",
         "browser.download.create",

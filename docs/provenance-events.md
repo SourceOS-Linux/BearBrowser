@@ -34,7 +34,7 @@ Each event should include:
 - `decision` for policy events
 - `reason` for denied actions
 
-Events must not contain passwords, payment card values, passkey private material, biometric material, tokens, cookies, auth headers, prompt content, sensitive IDs, or other secret values.
+Events must not contain passwords, payment card values, passkeys private material, biometric material, tokens, cookies, auth headers, prompt content, sensitive IDs, or other secret values.
 
 ## Required events
 
