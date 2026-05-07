@@ -24,8 +24,11 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-memory-candidate").write wrapper_for("bearbrowser-memory-candidate.py")
     (bin/"bearbrowser-verify-memory").write wrapper_for("bearbrowser-verify-memory.py")
     (bin/"bearbrowser-governance-queue").write wrapper_for("bearbrowser-governance-queue.py")
+    (bin/"bearbrowser-sidecar-server").write wrapper_for("bearbrowser-sidecar-server.py")
+    (bin/"bearbrowser-sidecar-open").write wrapper_for("bearbrowser-sidecar-open.sh")
     (bin/"bearbrowser-sidecar-status").write wrapper_for("bearbrowser-sidecar-status.py")
     (bin/"bearbrowser-verify-sidecar-status").write wrapper_for("verify-sidecar-status.sh")
+    (bin/"bearbrowser-verify-interactive-sidecar").write wrapper_for("verify-interactive-sidecar.sh")
     (bin/"bearbrowser-verify-agent-sidecar").write wrapper_for("verify-agent-sidecar-contract.py")
     (bin/"bearbrowser-verify-native-shell").write wrapper_for("verify-native-macos-shell.sh")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
@@ -77,7 +80,10 @@ class Bearbrowser < Formula
         bearbrowser-memory-candidate resolve --latest-candidate --decision reject --reason 'Not useful.'
         bearbrowser-verify-memory
         bearbrowser-governance-queue
+        bearbrowser-sidecar-open --open
+        bearbrowser-sidecar-server --print-url
         bearbrowser-sidecar-status --format html --open
+        bearbrowser-verify-interactive-sidecar
         bearbrowser-verify-sidecar-status
         bearbrowser-verify-agent-sidecar
         bearbrowser-verify-native-shell
@@ -121,5 +127,6 @@ class Bearbrowser < Formula
     assert_match "BearBrowser policy action", shell_output("#{bin}/bearbrowser-propose-action --action-type summarize_page --target-kind page --target-label test")
     assert_match "BearBrowser agent sidecar contract verified", shell_output("#{bin}/bearbrowser-verify-agent-sidecar")
     assert_match "BearBrowser sidecar status verified", shell_output("#{bin}/bearbrowser-verify-sidecar-status")
+    assert_match "http://127.0.0.1:", shell_output("#{bin}/bearbrowser-sidecar-server --print-url")
   end
 end
