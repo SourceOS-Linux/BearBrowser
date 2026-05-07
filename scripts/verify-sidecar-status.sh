@@ -10,6 +10,7 @@ trap 'rm -rf "$tmp"' EXIT
 prov="$tmp/events.jsonl"
 actions="$tmp/actions.jsonl"
 memory="$tmp/memory.jsonl"
+summaries="$tmp/summaries.jsonl"
 html="$tmp/status.html"
 json="$tmp/status.json"
 
@@ -42,22 +43,35 @@ python3 scripts/bearbrowser-memory-candidate.py create \
   --memory-log "$memory" \
   --event-log "$prov" >/dev/null
 
+python3 scripts/bearbrowser-page-summary.py create \
+  --text "BearBrowser summary status renders read-only page summary proposals." \
+  --actor-type human \
+  --actor-id ci \
+  --source-kind page \
+  --source-label ci-sidecar-summary \
+  --summary-log "$summaries" \
+  --event-log "$prov" \
+  --action-log "$actions" >/dev/null
+
 python3 scripts/bearbrowser-sidecar-status.py \
   --events "$prov" \
   --actions "$actions" \
   --memory "$memory" \
+  --summaries "$summaries" \
   --format text
 
 python3 scripts/bearbrowser-sidecar-status.py \
   --events "$prov" \
   --actions "$actions" \
   --memory "$memory" \
+  --summaries "$summaries" \
   --format json > "$json"
 
 python3 scripts/bearbrowser-sidecar-status.py \
   --events "$prov" \
   --actions "$actions" \
   --memory "$memory" \
+  --summaries "$summaries" \
   --format html \
   --out "$html"
 
@@ -68,6 +82,9 @@ grep -q 'local-sidecar-ready' "$json"
 grep -q 'share_page_with_agent' "$html"
 grep -q 'Pending Memory Candidates' "$html"
 grep -q 'ci-sidecar-memory' "$html"
+grep -q 'Recent Page Summaries' "$html"
+grep -q 'ci-sidecar-summary' "$html"
 grep -q '"pendingMemoryCount": 1' "$json"
+grep -q '"summaryCount": 1' "$json"
 
 echo "BearBrowser sidecar status verified"
