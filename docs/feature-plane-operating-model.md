@@ -1,6 +1,6 @@
 # BearBrowser Feature Plane Operating Model
 
-This document defines the first product feature plane for BearBrowser: local provenance, policy-visible actions, local memory candidates, governance queue, and the agent sidecar status surface.
+This document defines the first product feature plane for BearBrowser: local provenance, policy-visible actions, local memory candidates, governance queue, and the interactive agent sidecar surface.
 
 The goal is to make BearBrowser agentic by design without granting agents ambient authority.
 
@@ -15,7 +15,7 @@ It is intentionally engine-portable:
 - Automation wrappers can emit observe/action proposal events now.
 - Memory candidates can be proposed, held, committed, or rejected without a production engine.
 - The governance queue can show unresolved held actions and pending memory.
-- The sidecar can render local state without waiting for a production browser engine.
+- The interactive sidecar can render and resolve local governance state without waiting for a production browser engine.
 
 ## Local State Layout
 
@@ -26,6 +26,7 @@ Default local state paths:
 ~/Library/Application Support/BearBrowser/policy/actions.jsonl
 ~/Library/Application Support/BearBrowser/memory/candidates.jsonl
 ~/Library/Application Support/BearBrowser/sidecar/status.html
+~/Library/Application Support/BearBrowser/sidecar/server-token
 ```
 
 Linux equivalents should move under XDG paths:
@@ -35,6 +36,7 @@ $XDG_STATE_HOME/bearbrowser/provenance/events.jsonl
 $XDG_STATE_HOME/bearbrowser/policy/actions.jsonl
 $XDG_STATE_HOME/bearbrowser/memory/candidates.jsonl
 $XDG_STATE_HOME/bearbrowser/sidecar/status.html
+$XDG_STATE_HOME/bearbrowser/sidecar/server-token
 ```
 
 ## Provenance Events
@@ -204,6 +206,53 @@ bearbrowser-governance-queue --fail-on-pending
 
 The queue is intentionally local and conservative. It should not silently resolve anything.
 
+## Interactive Local Sidecar
+
+The interactive local sidecar is a localhost-only HTTP server with token-gated resolution forms.
+
+Server:
+
+```text
+scripts/bearbrowser-sidecar-server.py
+```
+
+Launcher:
+
+```text
+scripts/bearbrowser-sidecar-open.sh
+```
+
+Verifier:
+
+```text
+scripts/verify-interactive-sidecar.sh
+```
+
+Installed commands:
+
+```text
+bearbrowser-sidecar-server
+bearbrowser-sidecar-open
+bearbrowser-verify-interactive-sidecar
+```
+
+Security rules:
+
+- Binds only to `127.0.0.1` or `localhost`.
+- Uses a local token in `~/Library/Application Support/BearBrowser/sidecar/server-token`.
+- Rejects non-token requests.
+- Does not expose raw secret values.
+- Uses existing local resolver scripts for allow/deny/commit/reject.
+- Resolution writes action, memory, and provenance logs.
+
+Example:
+
+```bash
+bearbrowser-sidecar-open --open
+bearbrowser-sidecar-server --print-url
+bearbrowser-verify-interactive-sidecar
+```
+
 ## Native Shell Controls
 
 The native WebKit shell exposes the first in-app governance loop.
@@ -213,7 +262,7 @@ Current controls:
 - `Propose Share`: creates a held `share_page_with_agent` action and emits `page.shared_with_agent`.
 - `Memory Candidate`: prompts for candidate text, creates a held `write_memory_candidate` action, writes a memory candidate, and emits `memory.candidate_created`.
 - `Resolve Held`: lets the user allow or deny the latest held action, or commit or reject the latest memory candidate.
-- `Sidecar Status`: renders local event/action/memory state inside the native shell.
+- `Sidecar Status`: starts or reuses the interactive localhost sidecar and loads its tokenized URL in the native shell.
 
 Native source:
 
@@ -289,9 +338,9 @@ The governing principle is:
 Agents observe and propose; PolicyFabric and the user grant authority.
 ```
 
-## Sidecar Status Surface
+## Static Sidecar Status Surface
 
-The sidecar status surface renders local event/action/memory state.
+The static sidecar status surface renders local event/action/memory state. It remains useful for diagnostics and CI, but the native shell now prefers the interactive sidecar server.
 
 Renderer:
 
@@ -320,8 +369,6 @@ bearbrowser-sidecar-status --format json
 bearbrowser-sidecar-status --format html --open
 ```
 
-The HTML output is not the final sidebar UI. It is the first local status surface for dogfooding and validating product semantics.
-
 ## CI Validation
 
 Workflow:
@@ -332,15 +379,16 @@ Workflow:
 
 CI validates:
 
-- Python syntax for event/action/memory/queue/sidecar scripts.
+- Python syntax for event/action/memory/queue/static-sidecar/interactive-sidecar scripts.
 - Shell syntax for feature verifiers.
 - Provenance redaction invariants.
 - Policy action classification and manual resolution invariants.
 - Governance queue counts before and after resolution.
 - Memory candidate lifecycle invariants.
 - Sensitive-looking memory candidate blocking.
+- Interactive localhost sidecar token and resolution flows.
 - Agent sidecar contract invariants.
-- Sidecar status HTML/JSON generation, including memory visibility.
+- Static sidecar status HTML/JSON generation, including memory visibility.
 
 Native shell workflow:
 
@@ -353,6 +401,7 @@ Native shell CI validates:
 - source and landing page existence;
 - native governance controls;
 - native event emission strings;
+- native interactive sidecar integration;
 - native macOS compile on `macos-latest`;
 - no release artifacts.
 
@@ -372,7 +421,8 @@ bearbrowser-open
 sleep 2
 
 bearbrowser-governance-queue
-bearbrowser-sidecar-status --format html --open
+bearbrowser-sidecar-open --open
+bearbrowser-verify-interactive-sidecar
 bearbrowser-verify-provenance
 bearbrowser-verify-actions
 bearbrowser-verify-memory --allow-empty
@@ -396,15 +446,16 @@ Expected results:
 - `app.launch` is emitted automatically by `bearbrowser-open` and by the native shell.
 - Native controls create held actions and memory candidates.
 - `Resolve Held` can allow/deny/commit/reject from inside BearBrowser.
-- Sidecar status shows event/action/memory counts and recent records.
+- `Sidecar Status` loads the interactive tokenized localhost sidecar.
+- Interactive sidecar can allow/deny held actions and commit/reject memory candidates.
 - Governance queue shows pending items before resolution and clears after resolution.
-- Provenance, action, memory, agent sidecar, and native shell verifiers pass.
+- Provenance, action, memory, agent sidecar, interactive sidecar, and native shell verifiers pass.
 
 ## Next Implementation Step
 
-The next product step is to turn the static sidecar status surface into an interactive local sidecar:
+The next product step is to add a read-only current-page summary proposal surface:
 
-1. Add local HTML controls for allow/deny held actions.
-2. Add local HTML controls for commit/reject memory candidates.
-3. Add a read-only current-page summary proposal surface.
+1. Capture visible page text metadata safely from the native shell.
+2. Create `summarize_page` action proposals without mutation.
+3. Render the proposal in the interactive sidecar.
 4. Keep the same provenance/action/memory interfaces so this can later move into the Gecko runtime.
