@@ -35,6 +35,14 @@ python3 scripts/bearbrowser-memory-candidate.py create \
   --source-label ci-interactive-sidecar \
   >/dev/null
 
+python3 scripts/bearbrowser-page-summary.py create \
+  --text "Interactive sidecar renders read-only page summary proposals." \
+  --actor-type human \
+  --actor-id ci \
+  --source-kind page \
+  --source-label ci-interactive-summary \
+  >/dev/null
+
 url="$(python3 scripts/bearbrowser-sidecar-server.py --port "$port" --print-url)"
 python3 scripts/bearbrowser-sidecar-server.py --port "$port" >"$tmp/server.log" 2>&1 &
 server_pid=$!
@@ -60,11 +68,13 @@ PY
 
 grep -q 'BearBrowser Governance Queue' "$tmp/page.html"
 grep -q 'ci-interactive-sidecar' "$tmp/page.html"
+grep -q 'Recent Page Summaries' "$tmp/page.html"
+grep -q 'ci-interactive-summary' "$tmp/page.html"
 grep -q 'Allow' "$tmp/page.html"
 grep -q 'Reject' "$tmp/page.html"
 
 action_id="$(python3 - <<'PY'
-import json, os, pathlib
+import json, pathlib
 path = pathlib.Path.home() / 'Library/Application Support/BearBrowser/policy/actions.jsonl'
 for line in path.read_text().splitlines():
     item = json.loads(line)
@@ -75,7 +85,7 @@ PY
 )"
 
 memory_id="$(python3 - <<'PY'
-import json, os, pathlib
+import json, pathlib
 path = pathlib.Path.home() / 'Library/Application Support/BearBrowser/memory/candidates.jsonl'
 for line in path.read_text().splitlines():
     item = json.loads(line)
@@ -113,6 +123,7 @@ PY
 
 python3 scripts/bearbrowser-verify-actions.py
 python3 scripts/bearbrowser-verify-memory.py
+python3 scripts/bearbrowser-verify-summaries.py
 python3 scripts/bearbrowser-verify-provenance.py
 
 python3 scripts/bearbrowser-governance-queue.py --format json >"$tmp/queue.json"
