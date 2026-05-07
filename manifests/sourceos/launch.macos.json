@@ -1,0 +1,45 @@
+{
+  "schema_version": "sourceos.launch_manifest.v0.1",
+  "product_id": "dev.sourceos.BearBrowser",
+  "display_name": "BearBrowser",
+  "bundle_identity": {
+    "bundle_id": "dev.sourceos.BearBrowser",
+    "expected_process_name": "BearBrowser",
+    "upstream_engine": "LibreWolf/Firefox/Gecko provenance allowed only in About, source, and license surfaces"
+  },
+  "entrypoint": {
+    "absolute_path": "/Applications/BearBrowser.app/Contents/MacOS/BearBrowser",
+    "args": []
+  },
+  "environment": {
+    "inherit_user_shell": false,
+    "path": [
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin"
+    ],
+    "allowed_variables": [
+      "HOME",
+      "TMPDIR",
+      "XDG_RUNTIME_DIR",
+      "BEARBROWSER_HOME",
+      "SOURCEOS_PRODUCT_ID"
+    ],
+    "denied_variables": [
+      "PYTHONPATH",
+      "NODE_PATH",
+      "GEM_HOME",
+      "CARGO_HOME",
+      "JAVA_HOME",
+      "NIX_PATH"
+    ]
+  },
+  "identity_invariants": {
+    "dock_name": "BearBrowser",
+    "menu_name": "BearBrowser",
+    "crash_report_name": "BearBrowser",
+    "profile_path_policy": "MUST include BearBrowser product identity and MUST NOT expose Firefox, Mozilla, Gecko, or LibreWolf as the user-facing product profile.",
+    "helper_prefix": "BearBrowser"
+  }
+}
