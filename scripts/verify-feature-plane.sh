@@ -10,7 +10,9 @@ trap 'rm -rf "$tmp"' EXIT
 prov="$tmp/events.jsonl"
 actions="$tmp/actions.jsonl"
 memory="$tmp/memory.jsonl"
+summaries="$tmp/summaries.jsonl"
 queue="$tmp/queue.json"
+summary_text="$tmp/summary-text.txt"
 
 python3 scripts/bearbrowser-emit-event.py \
   --event-type runtime.health \
@@ -39,6 +41,42 @@ python3 scripts/bearbrowser-verify-provenance.py --log "$prov"
 grep -q '<REDACTED>' "$prov"
 if grep -q 'must-redact' "$prov"; then
   echo "ERROR: secret-like value escaped provenance redaction" >&2
+  exit 1
+fi
+
+cat > "$summary_text" <<'TEXT'
+BearBrowser is a governed local browser. It records provenance, classifies policy actions, and keeps memory writes candidate-only until explicit approval.
+TEXT
+
+python3 scripts/bearbrowser-page-summary.py create \
+  --text-file "$summary_text" \
+  --actor-type human \
+  --actor-id ci \
+  --source-kind page \
+  --source-label ci-summary-page \
+  --summary-log "$summaries" \
+  --event-log "$prov" \
+  --action-log "$actions" \
+  >/dev/null
+
+python3 scripts/bearbrowser-page-summary.py create \
+  --text "sensitive token example must not be summarized" \
+  --actor-type human \
+  --actor-id ci \
+  --source-kind page \
+  --source-label ci-sensitive-summary \
+  --summary-log "$summaries" \
+  --event-log "$prov" \
+  --action-log "$actions" \
+  >/dev/null
+
+python3 scripts/bearbrowser-verify-summaries.py --log "$summaries"
+
+grep -q '"actionType":"summarize_page"' "$actions"
+grep -q '"eventType":"automation.observed"' "$prov"
+grep -q '<REDACTED-SENSITIVE-PAGE-EXCERPT>' "$summaries"
+if grep -q 'sensitive token example must not be summarized' "$summaries"; then
+  echo "ERROR: sensitive summary text escaped redaction" >&2
   exit 1
 fi
 
@@ -128,6 +166,7 @@ python3 scripts/bearbrowser-memory-candidate.py resolve \
 python3 scripts/bearbrowser-verify-actions.py --log "$actions"
 python3 scripts/bearbrowser-verify-provenance.py --log "$prov"
 python3 scripts/bearbrowser-verify-memory.py --log "$memory"
+python3 scripts/bearbrowser-verify-summaries.py --log "$summaries"
 
 grep -q '"state":"observe"' "$actions"
 grep -q '"state":"deny"' "$actions"
@@ -145,4 +184,5 @@ echo "BearBrowser feature plane verified"
 echo "provenance_log=$prov"
 echo "policy_action_log=$actions"
 echo "memory_log=$memory"
+echo "summary_log=$summaries"
 echo "queue_log=$queue"
