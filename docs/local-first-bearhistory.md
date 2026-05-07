@@ -88,6 +88,37 @@ BearHistory may export agent-runtime events into OpsHistory when:
 
 Human-secure events are not exported to OpsHistory by default.
 
+## Dry-run command surface
+
+This implementation slice adds `bearbrowser-history` as a dry-run contract surface. The command does not read browser profiles, cookies, credentials, history databases, downloads, captures, or automation traces.
+
+Commands:
+
+```bash
+bearbrowser-history policy explain --profile human-secure --dry-run
+bearbrowser-history policy explain --profile agent-runtime --dry-run
+bearbrowser-history export explain --session demo --profile agent-runtime --dry-run
+bearbrowser-history redactions --dry-run
+```
+
+Expected posture:
+
+- human-secure export outcome is `deny`;
+- agent-runtime export outcome is `metadata-only` until PolicyFabric and Agent Registry permit stronger behavior;
+- credentials, cookies, and ambient session material are always absent in this slice;
+- redaction posture is critical priority and invalidates downstream OpsHistory exports, context packs, and memory writebacks.
+
+## Future service model
+
+The future service boundary is `bearhistoryd`, represented by `urn:srcos:local-first-service:bearhistoryd`.
+
+Expected local endpoint names:
+
+- `org.sourceos.BearHistory`;
+- `org.sourceos.BearHistory.Push`;
+- `org.sourceos.BearHistory.Redaction`;
+- `org.sourceos.BearHistory.Export`.
+
 ## Non-goals
 
 BearHistory does not provide:
@@ -110,3 +141,12 @@ BearBrowser should expose a doctor/explain path for BearHistory policy:
 - policy decision IDs;
 - blocked export reasons;
 - redaction status.
+
+## Validation
+
+The Homebrew Formula exposes `bearbrowser-history` and checks:
+
+```bash
+bearbrowser-history policy explain --profile agent-runtime --dry-run
+bearbrowser-history export explain --session demo --profile agent-runtime --dry-run
+```
