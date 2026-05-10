@@ -43,6 +43,15 @@ python3 scripts/bearbrowser-page-summary.py create \
   --source-label ci-interactive-summary \
   >/dev/null
 
+python3 scripts/bearbrowser-page-comparison.py create \
+  --left-text "Interactive sidecar renders held page comparison proposals." \
+  --right-text "Held comparison proposals are visible and auditable." \
+  --left-kind page \
+  --right-kind note \
+  --left-label ci-interactive-left-comparison \
+  --right-label ci-interactive-right-comparison \
+  >/dev/null
+
 url="$(python3 scripts/bearbrowser-sidecar-server.py --port "$port" --print-url)"
 python3 scripts/bearbrowser-sidecar-server.py --port "$port" >"$tmp/server.log" 2>&1 &
 server_pid=$!
@@ -70,6 +79,8 @@ grep -q 'BearBrowser Governance Queue' "$tmp/page.html"
 grep -q 'ci-interactive-sidecar' "$tmp/page.html"
 grep -q 'Recent Page Summaries' "$tmp/page.html"
 grep -q 'ci-interactive-summary' "$tmp/page.html"
+grep -q 'Recent Page Comparisons' "$tmp/page.html"
+grep -q 'ci-interactive-left-comparison' "$tmp/page.html"
 grep -q 'Allow' "$tmp/page.html"
 grep -q 'Reject' "$tmp/page.html"
 
@@ -124,10 +135,11 @@ PY
 python3 scripts/bearbrowser-verify-actions.py
 python3 scripts/bearbrowser-verify-memory.py
 python3 scripts/bearbrowser-verify-summaries.py
+python3 scripts/bearbrowser-verify-comparisons.py
 python3 scripts/bearbrowser-verify-provenance.py
 
 python3 scripts/bearbrowser-governance-queue.py --format json >"$tmp/queue.json"
-grep -q '"heldActionCount": 0' "$tmp/queue.json"
+grep -q '"heldActionCount": 1' "$tmp/queue.json"
 grep -q '"pendingMemoryCount": 0' "$tmp/queue.json"
 
 python3 scripts/bearbrowser-sidecar-server.py --host 0.0.0.0 --print-url >/tmp/bearbrowser-sidecar-invalid 2>&1 && {
