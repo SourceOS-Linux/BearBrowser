@@ -17,6 +17,29 @@ spec:
     requireSessionToken: true
     requireEphemeralPort: true
     denyCredentialExport: true
+    operationContract: agentplane/workspace-operation-plane.yaml
+  workspaceOperations:
+    requiredTypes:
+      - browser.session.start
+      - browser.capture.create
+      - browser.download.create
+      - browser.upload.create
+      - browser.automation.run
+      - browser.diagnostics.export_redacted
+    operationEvents:
+      - start
+      - progress
+      - failure
+      - retry
+      - cancel
+      - complete
+    trustBoundaryRecords:
+      required: true
+      dimensions:
+        - externalSite
+        - connector
+        - authDomain
+        - thirdPartyAutomation
   events:
     required:
       - browser.session.started

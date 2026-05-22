@@ -2,6 +2,20 @@
 
 BearBrowser emits provenance events so AgentPlane, PolicyFabric, and Prophet Workspace can reconstruct browser activity without relying on opaque agent logs.
 
+## Workspace Operation Plane mapping
+
+BearBrowser browser side effects must map to WorkspaceOperations:
+
+- `browser.session.start` -> `BrowserSession`
+- `browser.capture.create` -> `WebCapture`
+- `browser.download.create` -> `DownloadArtifact`
+- `browser.upload.create` -> `UploadArtifact`
+- `browser.automation.run` -> `BrowserAutomationRun`
+- `browser.diagnostics.export_redacted` -> `BrowserDiagnosticBundle`
+
+Each operation emits `OperationEvent` lifecycle states: `start`, `progress`, `failure`, `retry`, `cancel`, and `complete`.
+Operation records require actor attribution (`user`, `agent`, `system`, or `connector`) and TrustBoundary metadata (`externalSite`, `connector`, `authDomain`, `thirdPartyAutomation`).
+
 ## Event envelope
 
 Each event should include:
@@ -20,7 +34,7 @@ Each event should include:
 - `decision` for policy events
 - `reason` for denied actions
 
-Events must not contain passwords, payment card values, passkey private material, biometric material, tokens, cookies, or other secret values.
+Events must not contain passwords, payment card values, passkeys private material, biometric material, tokens, cookies, auth headers, prompt content, sensitive IDs, or other secret values.
 
 ## Required events
 
