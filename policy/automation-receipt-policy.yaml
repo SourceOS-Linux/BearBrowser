@@ -1,0 +1,62 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: AutomationReceiptPolicy
+metadata:
+  name: bearbrowser-automation-receipt-policy
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/surface: automation-receipt
+spec:
+  description: >-
+    Runtime policy rules governing BrowserAutomationReceipt creation, validation,
+    revocation, and orphan handling. Every automation transport start must produce
+    a receipt before the transport is permitted to operate.
+
+  sessionStart:
+    requireReceipt: true
+    requireOwnerRef: true
+    requirePolicyDecisionRef: true
+    defaultDecision: deny
+    receiptMustBeUserVisible: true
+    receiptMustBeRevocable: true
+
+  receiptLifecycle:
+    onTransportStart:
+      action: createReceipt
+      emitEvent: automation.action_requested
+      statusOnCreation: active
+    onPolicyDenied:
+      action: createReceiptWithTerminalState
+      status: denied
+      emitEvent: automation.action_denied
+    onRevoke:
+      action: updateReceiptStatus
+      status: revoked
+      setRevokedAt: now
+      terminateTransport: true
+      invalidateSessionToken: true
+      emitEvent: automation.action_denied
+    onSessionEnd:
+      action: updateReceiptStatus
+      status: ended
+      emitEvent: automation.observed
+
+  orphanHandling:
+    definition: "An automation event that cannot be matched to an active, owner-bearing receipt."
+    defaultAction: quarantine
+    allowedActions:
+      - quarantine
+      - reject
+    logMode: compactReceiptRef
+    neverSilentlyAccept: true
+
+  missingOwner:
+    action: reject
+    reason: "No automation session may run without an owner."
+
+  logging:
+    normalMode: compactReceiptRef
+    debugMode: fullTopologyOnlyWhenExplicitlyEnabled
+    neverLogHighLeakageTopologyInNormalMode: true
+
+  receiptSchema: schemas/browser-automation-receipt.schema.json
+  uiContract: automation/automation-session-ui.yaml
