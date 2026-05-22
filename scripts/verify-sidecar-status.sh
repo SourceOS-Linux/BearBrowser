@@ -10,8 +10,6 @@ trap 'rm -rf "$tmp"' EXIT
 prov="$tmp/events.jsonl"
 actions="$tmp/actions.jsonl"
 memory="$tmp/memory.jsonl"
-summaries="$tmp/summaries.jsonl"
-comparisons="$tmp/comparisons.jsonl"
 html="$tmp/status.html"
 json="$tmp/status.json"
 
@@ -44,49 +42,22 @@ python3 scripts/bearbrowser-memory-candidate.py create \
   --memory-log "$memory" \
   --event-log "$prov" >/dev/null
 
-python3 scripts/bearbrowser-page-summary.py create \
-  --text "BearBrowser summary status renders read-only page summary proposals." \
-  --actor-type human \
-  --actor-id ci \
-  --source-kind page \
-  --source-label ci-sidecar-summary \
-  --summary-log "$summaries" \
-  --event-log "$prov" \
-  --action-log "$actions" >/dev/null
-
-python3 scripts/bearbrowser-page-comparison.py create \
-  --left-text "BearBrowser sidecar status renders comparison records." \
-  --right-text "Comparison records are held by default and visible in local status." \
-  --left-kind page \
-  --right-kind note \
-  --left-label ci-left-comparison \
-  --right-label ci-right-comparison \
-  --comparison-log "$comparisons" \
-  --event-log "$prov" \
-  --action-log "$actions" >/dev/null
-
 python3 scripts/bearbrowser-sidecar-status.py \
   --events "$prov" \
   --actions "$actions" \
   --memory "$memory" \
-  --summaries "$summaries" \
-  --comparisons "$comparisons" \
   --format text
 
 python3 scripts/bearbrowser-sidecar-status.py \
   --events "$prov" \
   --actions "$actions" \
   --memory "$memory" \
-  --summaries "$summaries" \
-  --comparisons "$comparisons" \
   --format json > "$json"
 
 python3 scripts/bearbrowser-sidecar-status.py \
   --events "$prov" \
   --actions "$actions" \
   --memory "$memory" \
-  --summaries "$summaries" \
-  --comparisons "$comparisons" \
   --format html \
   --out "$html"
 
@@ -96,13 +67,7 @@ grep -q 'BearBrowser Sidecar Status' "$html"
 grep -q 'local-sidecar-ready' "$json"
 grep -q 'share_page_with_agent' "$html"
 grep -q 'Pending Memory Candidates' "$html"
-grep -q 'ci-sidecar-memory' "$html"
-grep -q 'Recent Page Summaries' "$html"
-grep -q 'ci-sidecar-summary' "$html"
-grep -q 'Recent Page Comparisons' "$html"
-grep -q 'ci-left-comparison' "$html"
+grep -q 'sidecar status renders pending memory candidates' "$html"
 grep -q '"pendingMemoryCount": 1' "$json"
-grep -q '"summaryCount": 1' "$json"
-grep -q '"comparisonCount": 1' "$json"
 
 echo "BearBrowser sidecar status verified"

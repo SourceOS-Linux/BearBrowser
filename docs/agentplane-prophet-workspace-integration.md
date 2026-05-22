@@ -34,6 +34,7 @@ Commands must include or resolve:
 - Downloads, captures, profile state, and provenance are governed mounts.
 - Remote debugging is denied unless explicitly granted.
 - Terminal browser backends are capability classes, not authority grants.
+- Durable browser automation/capture/download/upload state is admitted through Workspace Operation Plane records only.
 
 ## Prophet Workspace state
 
@@ -79,4 +80,4 @@ Prophet Workspace adapter:
 
 ## Events
 
-BearBrowser uses the event contract in `docs/provenance-events.md` and the lifecycle example in `agentplane/session-lifecycle.example.yaml`.
+BearBrowser uses the event contract in `docs/provenance-events.md`, lifecycle example in `agentplane/session-lifecycle.example.yaml`, and the Workspace Operation Plane contract in `agentplane/workspace-operation-plane.yaml`.
