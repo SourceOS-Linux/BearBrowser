@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/agent-harness-browser-receipts.schema.json",
+  "title": "AgentHarnessBrowserReceipts",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "browserSessionReceipt", "browserActionReceipt", "browserDownloadReceipt", "browserCredentialUseReceipt"],
+  "properties": {
+    "schemaVersion": { "const": "v0.1" },
+    "kind": { "const": "AgentHarnessBrowserReceipts" },
+    "browserSessionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sessionId", "actorRef", "workspaceRef", "runtimeProfile", "policyAdmissionRef", "networkProfile", "credentialPosture", "mode", "agentplaneRunRef"],
+      "properties": {
+        "sessionId": { "type": "string" },
+        "actorRef": { "type": "string" },
+        "workspaceRef": { "type": "string" },
+        "runtimeProfile": { "type": "string" },
+        "policyAdmissionRef": { "type": "string" },
+        "networkProfile": { "type": "string" },
+        "credentialPosture": { "type": "string", "enum": ["none", "available-but-unused", "used-with-policy", "blocked"] },
+        "mode": { "type": "string", "enum": ["visible", "headless"] },
+        "agentplaneRunRef": { "type": "string" }
+      }
+    },
+    "browserActionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actionId", "browserSessionRef", "url", "actionType", "sideEffectClass", "policyDecisionRef", "credentialUse", "resultStatus"],
+      "properties": {
+        "actionId": { "type": "string" },
+        "browserSessionRef": { "type": "string" },
+        "url": { "type": "string" },
+        "actionType": { "type": "string", "enum": ["navigate", "click", "type", "extract", "screenshot", "download", "upload", "form-submit", "login", "credential-use", "account-setting-change", "message-send", "purchase-or-order", "ticket-or-record-create"] },
+        "sideEffectClass": { "type": "string", "enum": ["none", "read-only", "external-write", "credential", "download", "upload"] },
+        "policyDecisionRef": { "type": "string" },
+        "credentialUse": { "type": "boolean" },
+        "artifactPointerRefs": { "type": "array", "items": { "type": "string" } },
+        "resultStatus": { "type": "string", "enum": ["succeeded", "failed", "blocked", "needs-human-review"] }
+      }
+    },
+    "browserDownloadReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["downloadId", "sourceUrl", "sha256", "mediaType", "sizeBytes", "quarantineState", "memoryMeshPointerRef", "policyDecisionRef"],
+      "properties": {
+        "downloadId": { "type": "string" },
+        "sourceUrl": { "type": "string" },
+        "sha256": { "type": "string" },
+        "mediaType": { "type": "string" },
+        "sizeBytes": { "type": "integer" },
+        "quarantineState": { "type": "string", "enum": ["not-required", "quarantined", "released", "blocked"] },
+        "memoryMeshPointerRef": { "type": "string" },
+        "policyDecisionRef": { "type": "string" }
+      }
+    },
+    "browserCredentialUseReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credentialEventId", "browserSessionRef", "credentialScope", "policyDecisionRef", "rawCredentialStored", "resultStatus"],
+      "properties": {
+        "credentialEventId": { "type": "string" },
+        "browserSessionRef": { "type": "string" },
+        "credentialScope": { "type": "string" },
+        "policyDecisionRef": { "type": "string" },
+        "humanControlEventRef": { "type": "string" },
+        "rawCredentialStored": { "type": "boolean" },
+        "resultStatus": { "type": "string", "enum": ["succeeded", "failed", "blocked", "needs-human-review"] }
+      }
+    }
+  }
+}
