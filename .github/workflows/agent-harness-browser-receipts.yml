@@ -1,0 +1,37 @@
+name: Agent Harness Browser Receipts
+
+on:
+  pull_request:
+    paths:
+      - 'docs/agent-harness-browser-receipts.md'
+      - 'schemas/agent-harness-browser-receipts.schema.json'
+      - 'examples/agent-harness-browser-receipts.example.json'
+      - 'scripts/bearbrowser-verify-agent-harness-receipts.py'
+      - '.github/workflows/agent-harness-browser-receipts.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/agent-harness-browser-receipts.md'
+      - 'schemas/agent-harness-browser-receipts.schema.json'
+      - 'examples/agent-harness-browser-receipts.example.json'
+      - 'scripts/bearbrowser-verify-agent-harness-receipts.py'
+      - '.github/workflows/agent-harness-browser-receipts.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-agent-harness-browser-receipts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Validate BearBrowser Agent Harness receipts
+        run: python3 scripts/bearbrowser-verify-agent-harness-receipts.py
