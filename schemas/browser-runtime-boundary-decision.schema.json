@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sourceos.dev/bearbrowser/browser-runtime-boundary-decision.schema.json",
+  "title": "BearBrowser Runtime Boundary Decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "decisionId",
+    "surface",
+    "actor",
+    "requestedAction",
+    "policyDecisionId",
+    "credentialBoundary",
+    "automationBoundary",
+    "workspaceBoundary",
+    "redactionBoundary",
+    "performedAction",
+    "evidenceRefs"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "bearbrowser.runtime-boundary.v1" },
+    "kind": { "const": "BrowserRuntimeBoundaryDecision" },
+    "decisionId": { "type": "string", "minLength": 1 },
+    "surface": { "type": "string", "enum": ["human-secure-browser", "agent-browser-runtime", "automation-surface", "credential-broker", "workspace-bridge"] },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["human", "agent", "service"] },
+        "id": { "type": "string", "minLength": 1 },
+        "agentRegistryRef": { "type": ["string", "null"] }
+      }
+    },
+    "requestedAction": { "type": "string", "minLength": 1 },
+    "policyDecisionId": { "type": "string", "minLength": 1 },
+    "credentialBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credentialAccessRequested", "credentialExportAllowed", "inheritsHumanCredentials", "osMediatedOnly"],
+      "properties": {
+        "credentialAccessRequested": { "type": "boolean" },
+        "credentialExportAllowed": { "const": false },
+        "inheritsHumanCredentials": { "const": false },
+        "osMediatedOnly": { "type": "boolean" }
+      }
+    },
+    "automationBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automationRequested", "nonLoopbackControlAllowed", "nativeExecutionAllowed"],
+      "properties": {
+        "automationRequested": { "type": "boolean" },
+        "nonLoopbackControlAllowed": { "const": false },
+        "nativeExecutionAllowed": { "const": false }
+      }
+    },
+    "workspaceBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["downloadOrWorkspaceBridgeRequested", "declaredWorkspaceScopeOnly"],
+      "properties": {
+        "downloadOrWorkspaceBridgeRequested": { "type": "boolean" },
+        "declaredWorkspaceScopeOnly": { "const": true }
+      }
+    },
+    "redactionBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["secretValuesLogged", "sessionMaterialLogged", "paymentMaterialLogged"],
+      "properties": {
+        "secretValuesLogged": { "const": false },
+        "sessionMaterialLogged": { "const": false },
+        "paymentMaterialLogged": { "const": false }
+      }
+    },
+    "performedAction": { "const": false },
+    "evidenceRefs": { "type": "array", "minItems": 1, "items": { "type": "string" }, "uniqueItems": true },
+    "notes": { "type": "string" }
+  }
+}
