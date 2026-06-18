@@ -105,10 +105,25 @@ jobs:
         run: cd build-repo && make check-patchfail
       - name: Build BearBrowser
         run: cd build-repo && make bootstrap && make build
-      - name: Measure the real binary (geckodriver)
+      - name: Set up measurement deps
+        run: cd overlay && npm ci || (cd overlay && npm install)
+      - name: Measure the REAL binary (geckodriver — authoritative)
         run: |
-          # The built binary lives under build-repo/bearbrowser-*/obj-*/dist/.
-          # measure-fingerprint.mjs uses Playwright (Juggler) and cannot drive a
-          # stock build — drive the binary via geckodriver/Marionette instead and
-          # reuse the same PROBE. (Adapter: see docs T3 plan §0.6.) Placeholder:
-          echo "TODO: geckodriver run of measure PROBE against BEARBROWSER_BIN"
+          # Locate the built binary (Linux: dist/bin/{firefox,bearbrowser};
+          # macOS: dist/*.app/Contents/MacOS/*). measure-fingerprint.mjs --bin
+          # drives it via geckodriver — Playwright (Juggler) can't drive a stock
+          # build. This is the authoritative measurement: it sees what Playwright
+          # masks (e.g. RFP timezone, real letterboxing).
+          bin="$(find build-repo -type f \( -name firefox -o -name bearbrowser \) -path '*dist*' 2>/dev/null | grep -vE '\.dSYM' | head -1)"
+          if [ -z "$bin" ]; then echo "::error::built binary not found under build-repo dist"; exit 1; fi
+          echo "measuring: $bin"
+          export PATH="$PWD/overlay/node_modules/.bin:$PATH"
+          node overlay/scripts/measure-fingerprint.mjs --profile human-secure  --bin "$bin" --json > fp-real-human-secure.json
+          node overlay/scripts/measure-fingerprint.mjs --profile agent-runtime --bin "$bin" --json > fp-real-agent-runtime.json
+          echo "human-secure (real binary): $(jq -r '.neutralized' fp-real-human-secure.json)/$(jq -r '.total' fp-real-human-secure.json)"
+          jq -r '.rows[] | select(.status=="LEAKING") | "  LEAK: \(.vector)"' fp-real-human-secure.json
+      - name: Upload real-binary scorecards
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-binary-scorecards
+          path: fp-real-*.json

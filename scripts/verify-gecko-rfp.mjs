@@ -351,13 +351,16 @@ async function runtimeProbe(profile) {
     const r = await page.evaluate(RUNTIME_PROBE);
     const results = [];
     const add = (pass, label, detail) => results.push({ pass, label, detail });
-    // RFP spoofs the timezone to a fixed UTC+0, no-DST cohort value. Firefox
-    // reports the IANA string as "Atlantic/Reykjavik" (not literally "UTC") —
-    // both are privacy-equivalent (offset 0, no location leak, checked below).
-    // Accept either so the cohort string isn't a false negative.
-    add(r.timezone === 'UTC' || r.timezone === 'Atlantic/Reykjavik',
-      'rfp_timezone_neutral', `timezone=${r.timezone}`);
-    add(r.tzOffset === 0, 'rfp_tz_offset_zero', `getTimezoneOffset=${r.tzOffset}`);
+    // TIMEZONE — indicative only here, NOT authoritative. Playwright sets the
+    // TZ environment variable, which MASKS whether RFP actually spoofs the
+    // timezone: a real-launch test via geckodriver (RFP on, hwConcurrency=2)
+    // showed tz=America/New_York, offset=240 — i.e. RFP timezone was NOT applied,
+    // yet Playwright reports offset 0. So Phase-B timezone "passes" can be false.
+    // The authoritative check is `measure-fingerprint.mjs --bin` (geckodriver
+    // drives the real binary with no TZ override). Reported, never gated.
+    const tzNeutral = r.timezone === 'UTC' || r.timezone === 'Atlantic/Reykjavik';
+    add(true, 'rfp_timezone_indicative',
+      `timezone=${r.timezone} offset=${r.tzOffset} (${tzNeutral && r.tzOffset === 0 ? 'neutral under Playwright' : 'NOT neutral'}) — VERIFY on real binary`);
     add(r.hwConcurrency === 2, 'rfp_hardwareConcurrency_2', `hardwareConcurrency=${r.hwConcurrency}`);
     add(r.languages === '["en-US","en"]' || r.languages === '["en-US"]',
       'rfp_languages_en', `languages=${r.languages}`);

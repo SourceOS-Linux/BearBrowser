@@ -183,7 +183,13 @@ const PROBE = `async () => {
   return r;
 }`;
 
-async function collect(prefs) {
+// Engine resolution: with --bin <path> or $BEARBROWSER_BIN, drive the REAL
+// (stock LibreWolf/BearBrowser) binary via geckodriver — Playwright can only
+// drive its own Juggler build, so the real binary needs WebDriver/Marionette.
+// Otherwise use Playwright's bundled Firefox (good for the config-level baseline).
+const BIN = (() => { const i = argv.indexOf('--bin'); return i >= 0 ? argv[i + 1] : process.env.BEARBROWSER_BIN || null; })();
+
+async function collectViaPlaywright(prefs) {
   const { firefox } = await import('playwright');
   const browser = await firefox.launch({ headless: true, firefoxUserPrefs: prefs });
   try {
@@ -193,6 +199,29 @@ async function collect(prefs) {
   } finally {
     await browser.close();
   }
+}
+
+async function collectViaGeckodriver(prefs, binPath) {
+  const { Builder } = await import('selenium-webdriver');
+  const fx = await import('selenium-webdriver/firefox.js');
+  const options = new fx.Options();
+  options.setBinary(binPath);
+  options.addArguments('-headless');
+  for (const [k, v] of Object.entries(prefs)) options.setPreference(k, v);
+  const driver = await new Builder().forBrowser('firefox').setFirefoxOptions(options).build();
+  try {
+    await driver.get('about:blank');
+    // PROBE is an async arrow; run it and hand the result to the async callback.
+    return await driver.executeAsyncScript(
+      'const cb = arguments[arguments.length - 1];' +
+      '(async () => { try { cb(await (' + PROBE + ')()); } catch (e) { cb({ ERR: String(e) }); } })();');
+  } finally {
+    await driver.quit();
+  }
+}
+
+async function collect(prefs) {
+  return BIN ? collectViaGeckodriver(prefs, BIN) : collectViaPlaywright(prefs);
 }
 
 // ── high-entropy vectors and how to judge each ───────────────────────────────
