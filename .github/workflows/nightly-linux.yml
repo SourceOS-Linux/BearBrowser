@@ -13,9 +13,39 @@ on:
 
 jobs:
   nightly-linux:
-    name: Build and package (Linux x86_64)
+    name: Build (${{ matrix.distro }})
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: ubuntu
+            container: ""
+            pkg_update: sudo apt-get update -qq
+            pkg_install: >-
+              sudo apt-get install -y --no-install-recommends
+              build-essential curl git python3 python3-pip
+              libgtk-3-dev libdbus-glib-1-dev libxt-dev
+              libx11-xcb-dev libxcb-shm0-dev libxcb-composite0-dev
+              nasm yasm libpulse-dev libasound2-dev zip unzip
+            artifact_suffix: linux-x86_64-ubuntu
+            appimage_suffix: x86_64
+
+          - distro: fedora
+            container: fedora:41
+            pkg_update: dnf makecache -q
+            pkg_install: >-
+              dnf install -y
+              gcc gcc-c++ make python3 python3-pip git curl which
+              gtk3-devel dbus-glib-devel libXt-devel libXcomposite-devel
+              libxcb-devel pulseaudio-libs-devel alsa-lib-devel
+              nasm yasm zip unzip findutils diffutils patch
+            artifact_suffix: linux-x86_64-fedora
+            appimage_suffix: x86_64-fedora
+
+    container: ${{ matrix.container != '' && matrix.container || null }}
 
     env:
       MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
@@ -29,21 +59,15 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential curl git python3 python3-pip \
-            libgtk-3-dev libdbus-glib-1-dev libxt-dev \
-            libx11-xcb-dev libxcb-shm0-dev libxcb-composite0-dev \
-            nasm yasm \
-            libpulse-dev libasound2-dev \
-            zip unzip
+          ${{ matrix.pkg_update }}
+          ${{ matrix.pkg_install }}
 
       - name: Cache Mozilla toolchain
         uses: actions/cache@v4
         with:
           path: .mozbuild
-          key: mozbuild-${{ env.VERSION }}-ubuntu24-v1
-          restore-keys: mozbuild-${{ env.VERSION }}-ubuntu24-
+          key: mozbuild-${{ env.VERSION }}-${{ matrix.distro }}-v1
+          restore-keys: mozbuild-${{ env.VERSION }}-${{ matrix.distro }}-
 
       - name: Cache Firefox source tarball
         uses: actions/cache@v4
@@ -57,7 +81,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ env.VERSION }}-ubuntu24-v1
+          key: cargo-${{ env.VERSION }}-${{ matrix.distro }}-v1
 
       - name: Set up workspace from LibreWolf mirror
         run: |
@@ -89,10 +113,9 @@ jobs:
         run: |
           DATE=$(date +%Y%m%d)
           OBJ="build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}/obj-x86_64-pc-linux-gnu"
-          DIST="$OBJ/dist"
-          TAR="BearBrowser-${{ env.VERSION }}-${DATE}-linux-x86_64.tar.bz2"
+          TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.bz2"
           mkdir -p build/nightly
-          tar -C "$DIST" -cjf "build/nightly/${TAR}" bearbrowser/
+          tar -C "${OBJ}/dist" -cjf "build/nightly/${TAR}" bearbrowser/
           echo "name=${TAR}" >> $GITHUB_OUTPUT
           echo "path=build/nightly/${TAR}" >> $GITHUB_OUTPUT
 
@@ -103,12 +126,9 @@ jobs:
           bash scripts/package-linux-appimage.sh \
             --workspace "build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}" \
             --out-dir build/nightly \
-            --version ${{ env.VERSION }} || echo "AppImage packaging failed (non-fatal)" >&2
-          APPIMG="BearBrowser-${{ env.VERSION }}-${DATE}-x86_64.AppImage"
-          if [ -f "build/nightly/${APPIMG}" ]; then
-            echo "name=${APPIMG}" >> $GITHUB_OUTPUT
-            echo "path=build/nightly/${APPIMG}" >> $GITHUB_OUTPUT
-          fi
+            --version ${{ env.VERSION }} || echo "AppImage packaging non-fatal" >&2
+          APPIMG="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.appimage_suffix }}.AppImage"
+          [ -f "build/nightly/${APPIMG}" ] && echo "name=${APPIMG}" >> $GITHUB_OUTPUT && echo "path=build/nightly/${APPIMG}" >> $GITHUB_OUTPUT || true
 
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v4
@@ -136,16 +156,12 @@ jobs:
           [ -f "${{ steps.tarball.outputs.path }}" ] && ASSETS+=("${{ steps.tarball.outputs.path }}")
           [ -n "${{ steps.appimage.outputs.path }}" ] && [ -f "${{ steps.appimage.outputs.path }}" ] && ASSETS+=("${{ steps.appimage.outputs.path }}")
           if [ ${#ASSETS[@]} -gt 0 ]; then
-            # Append to same-day release created by macOS job, or create if first
             gh release upload "$TAG" "${ASSETS[@]}" --clobber 2>/dev/null || \
             gh release create "$TAG" "${ASSETS[@]}" \
               --title "BearBrowser Nightly ${DATE}" \
-              --notes "Automated nightly build from \`main\` — Linux x86_64.
+              --notes "Automated nightly build — Linux (${{ matrix.distro }}).
 
-**Not signed. Developer use only.**
-
-Tarball: extract and run \`bearbrowser/bearbrowser\`.
-AppImage: \`chmod +x BearBrowser-*.AppImage && ./BearBrowser-*.AppImage\`
+Not signed. Developer use only.
 
 Commit: \`${{ github.sha }}\`
 Firefox base: ${{ env.VERSION }}" \

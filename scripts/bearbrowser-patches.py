@@ -182,7 +182,8 @@ def bearbrowser_patches():
 
     # Fix StaticPrefList.yaml: move bearbrowser.* prefs to correct alphabetical position
     # (webgl-permission.patch inserts them after layout.* but they must precede bidi.*).
-    # The canonical bearbrowser.* block includes BearBlocker prefs + webgl prefs in order.
+    # The canonical bearbrowser.* block — alphabetical order is mandatory.
+    # Covers BearBlocker, BearNav, BearSponsor, runtime identity, and webgl prefs.
     pref_yaml = Path("modules/libpref/init/StaticPrefList.yaml")
     if pref_yaml.exists():
         _yaml = pref_yaml.read_text()
@@ -192,8 +193,12 @@ def bearbrowser_patches():
             "#---------------------------------------------------------------------------\n"
             "\n- name: bearbrowser.bearblocker.cosmetic.enabled\n  type: RelaxedAtomicBool\n"
             "  value: true\n  mirror: always\n"
+            "\n- name: bearbrowser.nav.keyboard.enabled\n  type: RelaxedAtomicBool\n"
+            "  value: true\n  mirror: always\n"
             "\n- name: bearbrowser.runtime.agent\n  type: RelaxedAtomicBool\n"
             "  value: false\n  mirror: always\n"
+            "\n- name: bearbrowser.sponsorblock.enabled\n  type: RelaxedAtomicBool\n"
+            "  value: true\n  mirror: always\n"
             "\n- name: bearbrowser.webgl.prompt\n  type: RelaxedAtomicBool\n"
             "  value: true\n  mirror: always\n"
             "\n- name: bearbrowser.webgl.prompt.hide\n  type: RelaxedAtomicBool\n"
@@ -256,18 +261,23 @@ def bearbrowser_patches():
         print("-> Created browser/bearblocker/moz.build")
 
     # Step 3: Install JSWindowActor files into browser/actors/
-    _actors_src = Path("../settings/bearblocker")
-    for _actor_file in [
-        "BearBlockerChild.sys.mjs",
-        "BearBlockerParent.sys.mjs",
-        "BearBlockerPolicy.sys.mjs",
-    ]:
+    # Source dirs: settings/bearblocker/ (BearBlocker) and settings/actors/ (BearSponsor, BearNav)
+    _actor_sources = {
+        "BearBlockerChild.sys.mjs":  Path("../settings/bearblocker"),
+        "BearBlockerParent.sys.mjs": Path("../settings/bearblocker"),
+        "BearBlockerPolicy.sys.mjs": Path("../settings/bearblocker"),
+        "BearSponsorChild.sys.mjs":  Path("../settings/actors"),
+        "BearSponsorParent.sys.mjs": Path("../settings/actors"),
+        "BearNavChild.sys.mjs":      Path("../settings/actors"),
+        "BearNavParent.sys.mjs":     Path("../settings/actors"),
+    }
+    for _actor_file, _actors_src in _actor_sources.items():
         _src = _actors_src / _actor_file
         if _src.exists():
             _shutil.copy(str(_src), str(Path("browser/actors") / _actor_file))
             print(f"-> Installed {_actor_file} to browser/actors/")
         else:
-            print(f"warning: {_src} not found — BearBlocker actor missing")
+            print(f"warning: {_src} not found — actor missing")
 
     # Step 4: Add browser/bearblocker to browser/moz.build DIRS
     _browser_mozbuild = Path("browser/moz.build")
@@ -281,31 +291,35 @@ def bearbrowser_patches():
             _browser_mozbuild.write_text(_bm)
             print("-> Added bearblocker to browser/moz.build DIRS")
 
-    # Step 5: Add BearBlocker actor files to browser/actors/moz.build
+    # Step 5: Add all BearBrowser actor files to browser/actors/moz.build
     _actors_mozbuild = Path("browser/actors/moz.build")
     if _actors_mozbuild.exists():
         _am = _actors_mozbuild.read_text()
         if "BearBlockerChild.sys.mjs" not in _am:
-            _bb_actor_entry = (
+            _bear_actor_entry = (
                 '\nFINAL_TARGET_FILES.actors += [\n'
                 '    "BearBlockerChild.sys.mjs",\n'
                 '    "BearBlockerParent.sys.mjs",\n'
                 '    "BearBlockerPolicy.sys.mjs",\n'
+                '    "BearNavChild.sys.mjs",\n'
+                '    "BearNavParent.sys.mjs",\n'
+                '    "BearSponsorChild.sys.mjs",\n'
+                '    "BearSponsorParent.sys.mjs",\n'
                 ']\n'
             )
             _am = _am.replace(
                 "\nBROWSER_CHROME_MANIFESTS",
-                _bb_actor_entry + "\nBROWSER_CHROME_MANIFESTS",
+                _bear_actor_entry + "\nBROWSER_CHROME_MANIFESTS",
             )
             _actors_mozbuild.write_text(_am)
-            print("-> Added BearBlocker actors to browser/actors/moz.build")
+            print("-> Added BearBrowser actors to browser/actors/moz.build")
 
-    # Step 6: Register BearBlocker JSWindowActor in DesktopActorRegistry
+    # Step 6: Register all BearBrowser JSWindowActors in DesktopActorRegistry
     _registry = Path("browser/components/DesktopActorRegistry.sys.mjs")
     if _registry.exists():
         _reg = _registry.read_text()
         if "BearBlocker:" not in _reg:
-            _bb_actor_reg = (
+            _bear_actor_reg = (
                 '\n  BearBlocker: {\n'
                 '    parent: {\n'
                 '      esModuleURI: "resource:///actors/BearBlockerParent.sys.mjs",\n'
@@ -321,13 +335,42 @@ def bearbrowser_patches():
                 '    allFrames: true,\n'
                 '    enablePreference: "bearbrowser.bearblocker.cosmetic.enabled",\n'
                 '  },\n'
+                '\n  BearNav: {\n'
+                '    parent: {\n'
+                '      esModuleURI: "resource:///actors/BearNavParent.sys.mjs",\n'
+                '    },\n'
+                '    child: {\n'
+                '      esModuleURI: "resource:///actors/BearNavChild.sys.mjs",\n'
+                '      events: {\n'
+                '        keydown: { mozSystemGroup: false },\n'
+                '      },\n'
+                '    },\n'
+                '    matches: ["https://*/*", "http://*/*"],\n'
+                '    allFrames: false,\n'
+                '    enablePreference: "bearbrowser.nav.keyboard.enabled",\n'
+                '  },\n'
+                '\n  BearSponsor: {\n'
+                '    parent: {\n'
+                '      esModuleURI: "resource:///actors/BearSponsorParent.sys.mjs",\n'
+                '    },\n'
+                '    child: {\n'
+                '      esModuleURI: "resource:///actors/BearSponsorChild.sys.mjs",\n'
+                '      events: {\n'
+                '        DOMContentLoaded: {},\n'
+                '        pageshow: { mozSystemGroup: true },\n'
+                '      },\n'
+                '    },\n'
+                '    matches: ["https://www.youtube.com/*", "https://youtube.com/*"],\n'
+                '    allFrames: false,\n'
+                '    enablePreference: "bearbrowser.sponsorblock.enabled",\n'
+                '  },\n'
             )
             _reg = _reg.replace(
                 "let JSWINDOWACTORS = {",
-                "let JSWINDOWACTORS = {" + _bb_actor_reg,
+                "let JSWINDOWACTORS = {" + _bear_actor_reg,
             )
             _registry.write_text(_reg)
-            print("-> Registered BearBlocker in DesktopActorRegistry")
+            print("-> Registered BearBlocker, BearNav, BearSponsor in DesktopActorRegistry")
 
     leave_srcdir()
 

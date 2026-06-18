@@ -241,3 +241,17 @@ user_pref("browser.xfocontent", true);
 // instead of a separate window. 0 = no restriction; new windows become tabs.
 // Improves usability without any privacy regression.
 user_pref("browser.link.open_newwindow.restriction", 0);
+
+// ── BearBlocker — native adblock-rust content classifier ─────────────────────
+user_pref("privacy.trackingprotection.content.protection.enabled", true);
+user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource:///bearblocker/bearblocker-ads.txt|resource:///bearblocker/bearblocker-privacy.txt");
+user_pref("bearbrowser.bearblocker.cosmetic.enabled", true);
+
+// ── BearNav — native keyboard navigation ─────────────────────────────────────
+// f=link hints, j/k=scroll, d/u=half page, gg=top, G=bottom, H/L=back/forward
+user_pref("bearbrowser.nav.keyboard.enabled", true);
+
+// ── BearSponsor — native SponsorBlock integration ────────────────────────────
+// Skips sponsored segments on YouTube using hash-based SponsorBlock API.
+// Only 4 hex chars of SHA-256(videoId) are sent; full ID stays local.
+user_pref("bearbrowser.sponsorblock.enabled", true);

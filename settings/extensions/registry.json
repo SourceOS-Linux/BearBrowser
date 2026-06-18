@@ -62,9 +62,9 @@
     {
       "id": "vimium-c@gdh1995.cn",
       "name": "Vimium C",
-      "disposition": "allowlist",
-      "allowlist_tier": "manual-unseal",
-      "rationale": "Keyboard nav only, no network requests, open source. No meaningful attack surface."
+      "disposition": "native",
+      "native_replacement": "BearNav (BearNavChild/BearNavParent JSWindowActor) — f=link hints, j/k/d/u scroll, gg/G, H/L history, / URL bar",
+      "rationale": "Natively implemented as a privileged JSWindowActor. No extension needed."
     },
 
     {
@@ -173,9 +173,9 @@
     {
       "id": "sponsorBlocker@ajay.app",
       "name": "SponsorBlock",
-      "disposition": "allowlist",
-      "allowlist_tier": "manual-unseal",
-      "rationale": "Sends hashed video IDs to SponsorBlock API (no PII). Legitimate use case. Note: segments data is community-contributed, open-source backend."
+      "disposition": "native",
+      "native_replacement": "BearSponsor (BearSponsorChild/BearSponsorParent JSWindowActor) — hash-based API, 4-char SHA-256 prefix only, no full videoId sent",
+      "rationale": "Natively implemented with better privacy guarantees than the extension (extension sends full video hash; BearSponsor sends only 4-char prefix)."
     },
 
     {

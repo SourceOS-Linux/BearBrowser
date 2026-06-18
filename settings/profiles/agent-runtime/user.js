@@ -311,3 +311,7 @@ user_pref("bearbrowser.debugger.force_detach", true);
 // Silence console API events to the interactive console; CDP log listeners are
 // separate and remain functional.
 user_pref("bearbrowser.console.logging_disabled", true);
+
+// BearNav and BearSponsor are human UX features — disable for agent sessions.
+user_pref("bearbrowser.nav.keyboard.enabled", false);
+user_pref("bearbrowser.sponsorblock.enabled", false);
