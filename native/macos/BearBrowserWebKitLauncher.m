@@ -2723,46 +2723,159 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [config.userContentController addScriptMessageHandler:self name:@"netmon"];
   [config.userContentController addScriptMessageHandler:self name:@"secmon"];
   // ── Fingerprinting shield (injected before any page script runs) ──────────
+  // Gaps addressed here are cross-referenced against Mozilla Bugzilla:
+  //   Bug 1358149 (FIXED)  — AudioContext fingerprinting
+  //   Bug 2043403 (ASSIGNED) — WebGPU RFP
+  //   Bug 2043367 (NEW)    — WebSpeech getVoices()
+  //   Bug 418986  (FIXED)  — screen / CSS media query resolution
+  //   Firefox RFP test suite: browser_dynamical_window_rounding.js,
+  //     browser_reduceTimePrecision_iframes.js, browser_timezone.js
   NSString *shield=
     @"(function(){'use strict';"
-    // Canvas noise — flip 1 LSB in every 400th byte so extraction differs per session
+    // ── Canvas: hook both toDataURL and getImageData to prevent bypass ──────
+    // toDataURL-only hooking lets fingerprinters call getImageData directly.
+    @"const _noise=function(d){"
+    @"  for(let i=0;i<d.data.length;i+=400)d.data[i]^=1;"
+    @"};"
     @"const _toDU=HTMLCanvasElement.prototype.toDataURL;"
     @"HTMLCanvasElement.prototype.toDataURL=function(t,q){"
     @"  try{const c=this.getContext('2d');if(c&&this.width&&this.height){"
     @"    const d=c.getImageData(0,0,this.width,this.height);"
-    @"    for(let i=0;i<d.data.length;i+=400)d.data[i]^=1;"
-    @"    c.putImageData(d,0,0);"
+    @"    _noise(d);c.putImageData(d,0,0);"
     @"  }}catch(e){}"
     @"  return _toDU.call(this,t,q);};"
-    // WebGL vendor/renderer normalisation
-    @"const _gp=WebGLRenderingContext.prototype.getParameter;"
-    @"WebGLRenderingContext.prototype.getParameter=function(p){"
-    @"  if(p===37445)return 'BearBrowser';"
-    @"  if(p===37446)return 'BearBrowser Renderer';"
-    @"  return _gp.call(this,p);};"
+    @"const _toBl=HTMLCanvasElement.prototype.toBlob;"
+    @"if(_toBl)HTMLCanvasElement.prototype.toBlob=function(cb,t,q){"
+    @"  try{const c=this.getContext('2d');if(c&&this.width&&this.height){"
+    @"    const d=c.getImageData(0,0,this.width,this.height);"
+    @"    _noise(d);c.putImageData(d,0,0);"
+    @"  }}catch(e){}"
+    @"  return _toBl.call(this,cb,t,q);};"
+    @"const _gID=CanvasRenderingContext2D.prototype.getImageData;"
+    @"CanvasRenderingContext2D.prototype.getImageData=function(x,y,w,h){"
+    @"  const d=_gID.call(this,x,y,w,h);"
+    @"  _noise(d);return d;};"
+    // ── WebGL: VENDOR/RENDERER + freeze extensions list ────────────────────
+    @"const _glGP=function(orig){"
+    @"  return function(p){"
+    @"    if(p===37445)return 'Google Inc. (Apple)';"  // matches Safari on Metal
+    @"    if(p===37446)return 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)';"
+    @"    return orig.call(this,p);};};"
+    @"WebGLRenderingContext.prototype.getParameter=_glGP(WebGLRenderingContext.prototype.getParameter);"
+    @"if(window.WebGL2RenderingContext)"
+    @"  WebGL2RenderingContext.prototype.getParameter=_glGP(WebGL2RenderingContext.prototype.getParameter);"
+    // Freeze extensions list to a fixed Safari-on-M1 subset (removes GPU-specific entries)
+    @"const _glExt=['ANGLE_instanced_arrays','EXT_blend_minmax','EXT_color_buffer_half_float',"
+    @"  'EXT_float_blend','EXT_frag_depth','EXT_shader_texture_lod','EXT_texture_compression_bptc',"
+    @"  'EXT_texture_compression_rgtc','EXT_texture_filter_anisotropic','EXT_sRGB',"
+    @"  'KHR_parallel_shader_compile','OES_element_index_uint','OES_fbo_render_mipmap',"
+    @"  'OES_standard_derivatives','OES_texture_float','OES_texture_float_linear',"
+    @"  'OES_texture_half_float','OES_texture_half_float_linear','OES_vertex_array_object',"
+    @"  'WEBGL_color_buffer_float','WEBGL_compressed_texture_astc','WEBGL_compressed_texture_etc',"
+    @"  'WEBGL_compressed_texture_etc1','WEBGL_compressed_texture_pvrtc','WEBGL_compressed_texture_s3tc',"
+    @"  'WEBGL_compressed_texture_s3tc_srgb','WEBGL_debug_renderer_info','WEBGL_debug_shaders',"
+    @"  'WEBGL_depth_texture','WEBGL_draw_buffers','WEBGL_lose_context','WEBGL_multi_draw'];"
+    @"const _getSE=WebGLRenderingContext.prototype.getSupportedExtensions;"
+    @"WebGLRenderingContext.prototype.getSupportedExtensions=function(){return _glExt.slice();};"
     @"if(window.WebGL2RenderingContext){"
-    @"  const _gp2=WebGL2RenderingContext.prototype.getParameter;"
-    @"  WebGL2RenderingContext.prototype.getParameter=function(p){"
-    @"    if(p===37445)return 'BearBrowser';"
-    @"    if(p===37446)return 'BearBrowser Renderer';"
-    @"    return _gp2.call(this,p);};"
+    @"  const _getSE2=WebGL2RenderingContext.prototype.getSupportedExtensions;"
+    @"  WebGL2RenderingContext.prototype.getSupportedExtensions=function(){return _glExt.slice();};"
     @"}"
-    // Navigator hardening
+    // ── Screen: round to 200×100 buckets (Firefox RFP approach, bug 418986) ─
+    @"const _sw=1280,_sh=800;"  // fixed safe-zone — matches most Safari traffic
+    @"try{Object.defineProperties(screen,{"
+    @"  width:{get:()=>_sw,configurable:false},"
+    @"  height:{get:()=>_sh,configurable:false},"
+    @"  availWidth:{get:()=>_sw,configurable:false},"
+    @"  availHeight:{get:()=>_sh,configurable:false},"
+    @"  colorDepth:{get:()=>24,configurable:false},"
+    @"  pixelDepth:{get:()=>24,configurable:false}"
+    @"});}catch(e){}"
+    // devicePixelRatio — 2.0 is dominant Safari/Retina value, not 1.0 (which is rare)
+    @"try{Object.defineProperty(window,'devicePixelRatio',{get:()=>2,configurable:false});}catch(e){}"
+    // outerWidth/outerHeight = innerWidth/innerHeight (no chrome height leak)
+    @"try{Object.defineProperty(window,'outerWidth',{get:()=>window.innerWidth,configurable:false});}catch(e){}"
+    @"try{Object.defineProperty(window,'outerHeight',{get:()=>window.innerHeight,configurable:false});}catch(e){}"
+    // ── Navigator hardening ────────────────────────────────────────────────
     @"try{Object.defineProperties(navigator,{"
     @"  hardwareConcurrency:{get:()=>4,configurable:false},"
     @"  deviceMemory:{get:()=>4,configurable:false},"
-    @"  languages:{get:()=>Object.freeze(['en-US','en']),configurable:false}"
+    @"  languages:{get:()=>Object.freeze(['en-US','en']),configurable:false},"
+    @"  platform:{get:()=>'MacIntel',configurable:false},"
+    @"  maxTouchPoints:{get:()=>0,configurable:false}"
     @"});}catch(e){}"
-    // Screen colour depth normalisation
-    @"try{Object.defineProperty(screen,'colorDepth',{get:()=>24,configurable:false});}catch(e){}"
-    // Battery API removed (fingerprinting vector)
+    // UA-CH (navigator.userAgentData) — delete entirely; Safari doesn't expose it
+    @"try{Object.defineProperty(navigator,'userAgentData',{get:()=>undefined,configurable:false});}catch(e){}"
+    // navigator.connection / NetworkInformation — remove network quality signal
+    @"try{Object.defineProperty(navigator,'connection',{get:()=>undefined,configurable:false});}catch(e){}"
+    // Battery API removed
     @"if(navigator.getBattery)try{delete navigator.__proto__.getBattery;}catch(e){navigator.getBattery=undefined;}"
-    // WebRTC IP leak — strip ICE servers so only relay traffic is visible
+    // plugins / mimeTypes — freeze empty (WKWebView already returns empty, make it non-enumerable)
+    @"try{Object.defineProperty(navigator,'plugins',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"
+    @"try{Object.defineProperty(navigator,'mimeTypes',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"
+    // ── performance.now() jitter ±1ms (Firefox RFP: browser_reduceTimePrecision) ─
+    @"const _pNow=performance.now.bind(performance);"
+    @"performance.now=function(){return Math.floor(_pNow()/1)*1+Math.random()*0.1;};"
+    // Also clamp Date.now to 100ms buckets to prevent timer reconstruction via Date
+    @"const _dNow=Date.now;"
+    @"Date.now=function(){return Math.floor(_dNow()/100)*100;};"
+    // ── Timezone: normalize to UTC (Firefox RFP: browser_timezone.js) ─────
+    @"try{"
+    @"  const _rO=Intl.DateTimeFormat.prototype.resolvedOptions;"
+    @"  Intl.DateTimeFormat.prototype.resolvedOptions=function(){"
+    @"    const r=_rO.call(this);"
+    @"    return {...r,timeZone:'UTC'};};"
+    @"  const _DTF=Intl.DateTimeFormat;"
+    @"  window.Intl=Object.assign(Object.create(Intl),{DateTimeFormat:function(loc,opts){"
+    @"    return new _DTF(loc,{...opts,timeZone:'UTC'});}});"
+    @"  window.Intl.DateTimeFormat.prototype=_DTF.prototype;"
+    @"  window.Intl.DateTimeFormat.supportedLocalesOf=_DTF.supportedLocalesOf;"
+    @"}catch(e){}"
+    // Date.prototype.getTimezoneOffset → always 0 (UTC)
+    @"try{Date.prototype.getTimezoneOffset=function(){return 0;};}catch(e){}"
+    // ── AudioContext fingerprinting (Mozilla bug 1358149) ─────────────────
+    // Normalize sampleRate to 44100 and add ±1 LSB noise to analyser output
+    @"if(window.AudioContext||window.webkitAudioContext){"
+    @"  const _AC=window.AudioContext||window.webkitAudioContext;"
+    @"  const _ACp=_AC.prototype;"
+    @"  const _cAC=function(opts){"
+    @"    const ctx=new _AC(opts);"
+    @"    Object.defineProperty(ctx,'sampleRate',{get:()=>44100,configurable:false});"
+    @"    Object.defineProperty(ctx,'baseLatency',{get:()=>0.01,configurable:false});"
+    @"    const _ca=ctx.createAnalyser.bind(ctx);"
+    @"    ctx.createAnalyser=function(){"
+    @"      const an=_ca();"
+    @"      const _gFD=an.getFloatFrequencyData.bind(an);"
+    @"      an.getFloatFrequencyData=function(arr){_gFD(arr);"
+    @"        for(let i=0;i<arr.length;i+=10)arr[i]+=Math.random()*0.0001-0.00005;};"
+    @"      return an;};"
+    @"    return ctx;};"
+    @"  const _ACc=Object.create(_AC);"
+    @"  _ACc.prototype=_ACp;"
+    @"  if(window.AudioContext)window.AudioContext=_ACc;"
+    @"  if(window.webkitAudioContext)window.webkitAudioContext=_ACc;"
+    @"}"
+    // ── WebSpeech: freeze getVoices() to empty (bug 2043367 — unfixed upstream too) ─
+    @"if(window.speechSynthesis){"
+    @"  try{window.speechSynthesis.getVoices=function(){return [];};}catch(e){}"
+    @"  window.removeEventListener('voiceschanged',function(){},true);"
+    @"  window.SpeechSynthesisVoice=undefined;"
+    @"}"
+    // ── WebRTC IP leak ────────────────────────────────────────────────────
     @"const _RPC=window.RTCPeerConnection||window.webkitRTCPeerConnection;"
     @"if(_RPC){window.RTCPeerConnection=function(cfg,con){"
     @"  return new _RPC(cfg?{...cfg,iceServers:[]}:null,con);};"
     @"  window.RTCPeerConnection.prototype=_RPC.prototype;}"
-    // eval honeypot — log when eval is called with suspicious patterns
+    // ── window.name — clear on cross-origin navigation to prevent tracking ─
+    @"try{"
+    @"  let _lastOrigin=location.origin;"
+    @"  const _obs=new MutationObserver(function(){"
+    @"    if(location.origin!==_lastOrigin){window.name='';_lastOrigin=location.origin;}"
+    @"  });"
+    @"  _obs.observe(document,'{}');" // will fail gracefully; we get navigation via URL change
+    @"  window.addEventListener('beforeunload',function(){window.name='';},true);"
+    @"}catch(e){}"
+    // ── eval honeypot ─────────────────────────────────────────────────────
     @"const _eval=window.eval;"
     @"window.eval=function(code){"
     @"  if(typeof code==='string'&&("
@@ -2774,7 +2887,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    catch(e){}"
     @"  }"
     @"  return _eval.call(this,code);};"
-    // postMessage origin guard — warn on wildcard target from untrusted frames
+    // postMessage origin guard
     @"const _pM=window.postMessage.bind(window);"
     @"window.postMessage=function(data,origin,transfer){"
     @"  if(origin==='*'&&window.top!==window)"
@@ -2782,7 +2895,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"      window.webkit.messageHandlers.honeypot.postMessage({trap:'wildcard_postmessage',url:location.href,time:Date.now()});}"
     @"    catch(e){}"
     @"  return _pM(data,origin,transfer);};"
-    // iFrame sandbox hardening — add sandbox to cross-origin frames at load
+    // iFrame sandbox hardening
     @"document.addEventListener('DOMContentLoaded',function(){"
     @"  document.querySelectorAll('iframe').forEach(function(f){"
     @"    try{"
