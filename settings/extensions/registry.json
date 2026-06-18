@@ -1,0 +1,202 @@
+{
+  "_comment": "BearBrowser extension registry. Disposition for every evaluated extension. 'native' = capability already built into BearBrowser. 'allowlist' = safe to unseal for human-secure. 'blocked' = unconditionally blocked. 'review' = not yet evaluated.",
+  "version": "1",
+  "extensions": [
+
+    {
+      "id": "uBlock0@raymondhill.net",
+      "name": "uBlock Origin",
+      "disposition": "native",
+      "native_replacement": "BearBlocker (adblock-rust ContentClassifierService + JSWindowActor cosmetic filter)",
+      "rationale": "Full native replacement with tighter integration. Extension surface eliminated."
+    },
+
+    {
+      "id": "{d10d0bf8-f5b5-c8b4-a8b9-2b9bec5a6a72}",
+      "name": "Adblock Plus",
+      "disposition": "native",
+      "native_replacement": "BearBlocker",
+      "rationale": "Same engine (adblock-rust), worse integration. Replaced natively."
+    },
+
+    {
+      "id": "jid1-MnnxcxisBPnSXQ@jetpack",
+      "name": "Privacy Badger",
+      "disposition": "native",
+      "native_replacement": "ETP strict mode + BearBlocker privacy filter list",
+      "rationale": "Heuristic tracker blocking covered by Firefox ETP strict + our curated lists."
+    },
+
+    {
+      "id": "https-everywhere@eff.org",
+      "name": "HTTPS Everywhere",
+      "disposition": "native",
+      "native_replacement": "dom.security.https_only_mode = true (user.js)",
+      "rationale": "Firefox native HTTPS-only mode is more complete than the extension."
+    },
+
+    {
+      "id": "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
+      "name": "Video DownloadHelper",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "Legitimate use case, no telemetry. Requires explicit unseal per-session."
+    },
+
+    {
+      "id": "{446900e4-71c2-419f-a6a7-df9c091e268b}",
+      "name": "Bitwarden",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "Open-source, self-hostable. No external telemetry if self-hosted. Acceptable for human-secure with explicit unseal. Never for agent-runtime."
+    },
+
+    {
+      "id": "react-devtools@mozilla.org",
+      "name": "React Developer Tools",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "Dev-only, no network activity. Safe to unseal during development sessions."
+    },
+
+    {
+      "id": "vimium-c@gdh1995.cn",
+      "name": "Vimium C",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "Keyboard nav only, no network requests, open source. No meaningful attack surface."
+    },
+
+    {
+      "id": "treestyletab@piro.sakura.ne.jp",
+      "name": "Tree Style Tab",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "UI-only, no telemetry. Acceptable for power users who explicitly unseal."
+    },
+
+    {
+      "id": "zotero@chnm.gmu.edu",
+      "name": "Zotero Connector",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "Research tool, communicates only with local Zotero app on 127.0.0.1. Safe to unseal."
+    },
+
+    {
+      "id": "87677a2c-072e-11db-abcd-0800200c9a66",
+      "name": "Grammarly",
+      "disposition": "blocked",
+      "rationale": "Exfiltrates all typed text to Grammarly servers. Incompatible with privacy model. No unseal path."
+    },
+
+    {
+      "id": "honeybadger@savings.com",
+      "name": "Honey (PayPal)",
+      "disposition": "blocked",
+      "rationale": "Affiliate tracking, purchase surveillance, sends browsing data to PayPal. Unconditionally blocked."
+    },
+
+    {
+      "id": "capital-one-shopping@capitalone.com",
+      "name": "Capital One Shopping",
+      "disposition": "blocked",
+      "rationale": "Same class as Honey. Affiliate and purchase surveillance."
+    },
+
+    {
+      "id": "savefrom@savefrom.net",
+      "name": "SaveFrom.net Helper",
+      "disposition": "blocked",
+      "rationale": "Known malvertising vector. Injects scripts, monetizes downloads. Unconditionally blocked."
+    },
+
+    {
+      "id": "{5793e598-bbcf-4c21-9a63-3f5660b16c41}",
+      "name": "Avast Online Security",
+      "disposition": "blocked",
+      "rationale": "Avast has a documented history of selling browsing data. Blocked regardless of claimed functionality."
+    },
+
+    {
+      "id": "avg@avg.com",
+      "name": "AVG Online Security",
+      "disposition": "blocked",
+      "rationale": "Same as Avast (same company, same data practices)."
+    },
+
+    {
+      "id": "support@lastpass.com",
+      "name": "LastPass",
+      "disposition": "blocked",
+      "rationale": "Multiple breaches. Sends vault metadata to LastPass servers. Replaced by Bitwarden (manual-unseal) or desktop credential manager."
+    },
+
+    {
+      "id": "{74145f27-f039-47ce-a470-a662b129930a}",
+      "name": "Ghostery",
+      "disposition": "blocked",
+      "rationale": "Historical data-sharing practices. Native BearBlocker covers the blocking use case without the extension surface."
+    },
+
+    {
+      "id": "addon@darkreader.org",
+      "name": "Dark Reader",
+      "disposition": "native",
+      "native_replacement": "System prefers-color-scheme + Firefox layout.css.prefers-color-scheme.content-override",
+      "rationale": "OS dark mode propagates through Firefox natively. For sites that don't respect it, add userContent.css rules."
+    },
+
+    {
+      "id": "{2e5ff8c8-32fe-46d0-9fc8-6b8986621f3c}",
+      "name": "SearchPreview",
+      "disposition": "blocked",
+      "rationale": "Sends search queries to SearchPreview servers for thumbnail generation."
+    },
+
+    {
+      "id": "jid0-GXjLLfbCoAx0LcltEdFrEkQdQPI@jetpack",
+      "name": "Disconnect",
+      "disposition": "native",
+      "native_replacement": "ETP strict mode uses Disconnect tracker lists natively",
+      "rationale": "Firefox ETP strict ships the Disconnect list. Extension is redundant."
+    },
+
+    {
+      "id": "{7b1bf0b6-a1b9-42b0-b75d-252036438bdc}",
+      "name": "YouTube High Definition",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "No external calls, UI quality-of-life. Low risk."
+    },
+
+    {
+      "id": "sponsorBlocker@ajay.app",
+      "name": "SponsorBlock",
+      "disposition": "allowlist",
+      "allowlist_tier": "manual-unseal",
+      "rationale": "Sends hashed video IDs to SponsorBlock API (no PII). Legitimate use case. Note: segments data is community-contributed, open-source backend."
+    },
+
+    {
+      "id": "{531906d3-e22f-4a6c-a102-8057b88a1a63}",
+      "name": "User-Agent Switcher and Manager",
+      "disposition": "blocked",
+      "rationale": "Overrides RFP-managed UA string. Undermines fingerprint resistance. BearBrowser manages UA via prefs."
+    },
+
+    {
+      "id": "firefox@tampermonkey.net",
+      "name": "Tampermonkey",
+      "disposition": "review",
+      "rationale": "Userscript injection surface. Could be allowlisted for power users with audited scripts. Needs explicit policy decision — not currently approved."
+    },
+
+    {
+      "id": "violentmonkey@git.io",
+      "name": "Violentmonkey",
+      "disposition": "review",
+      "rationale": "Open-source Tampermonkey alternative. Same risk profile. Pending explicit policy decision."
+    }
+  ]
+}
