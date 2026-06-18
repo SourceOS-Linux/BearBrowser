@@ -40,6 +40,7 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -236,6 +237,21 @@ function auditProfile(profile) {
   // network.trr.uri). They must agree, and must not point at an ECS endpoint.
   const polFile = path.join(repoRoot, 'settings', 'profiles', profile, 'policies.json');
   if (existsSync(polFile)) {
+    // policies.json is documented JSONC in source; the build strips comments via
+    // strip-json-comments.py before Firefox reads it (Firefox rejects a commented
+    // policies.json wholesale, silently disabling ALL policies). Validate that the
+    // source still strips to valid strict JSON, so a structural break (trailing
+    // comma, etc.) fails here instead of silently nuking every locked policy.
+    const stripper = path.join(repoRoot, 'scripts', 'strip-json-comments.py');
+    if (existsSync(stripper)) {
+      try {
+        execSync(`python3 "${stripper}" --check "${polFile}"`, { stdio: 'pipe' });
+        add(true, 'policies.json strips to valid JSON', 'ok');
+      } catch (e) {
+        const msg = (e.stderr || e.stdout || e.message || '').toString().trim().split('\n').pop();
+        add(false, 'policies.json strips to valid JSON', `strip-json-comments --check failed: ${msg}`);
+      }
+    }
     const polText = readFileSync(polFile, 'utf8');
     const pm = polText.match(/"ProviderURL"\s*:\s*"([^"]+)"/);
     if (pm) {
