@@ -3817,6 +3817,11 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   wv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
   // Present as Safari so sites like Google don't reject WKWebView's bare UA
   wv.customUserAgent=@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15";
+  // Force Aqua/light appearance so CSS system color keywords (Canvas, ButtonText,
+  // etc.) always resolve to light-mode RGB values — consistent with the JS shield's
+  // matchMedia('prefers-color-scheme: light') override. Without this, a dark-mode
+  // OS would produce different computed RGB values, leaking the OS theme.
+  wv.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   wv.navigationDelegate=self; wv.UIDelegate=self;
   wv.allowsBackForwardNavigationGestures=YES; wv.allowsLinkPreview=YES;
   // PiP enabled on macOS via configuration (allowsPictureInPictureMediaPlayback is iOS-only)
@@ -4467,6 +4472,7 @@ static NSString *kFaviconJS=@"(function(){"
                                      configuration:cfg];
   newWV.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
   newWV.customUserAgent=@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15";
+  newWV.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   newWV.navigationDelegate=self; newWV.UIDelegate=self;
   newWV.allowsBackForwardNavigationGestures=YES; newWV.allowsLinkPreview=YES;
   [newWV addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
