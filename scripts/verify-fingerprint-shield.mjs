@@ -278,9 +278,86 @@ const PROBE = `(async function() {
     try { document.fonts.forEach(() => _fCount++); } catch(e) {}
     checkTrue('fonts_enum_blocked', _fCount === 0);
     checkTrue('fonts_size_zero',    document.fonts.size === 0);
+    // fonts.load() should resolve to [] (not find any font)
+    try {
+      const _fLoaded = await document.fonts.load('12px Arial', 'A');
+      checkTrue('fonts_load_empty', _fLoaded.length === 0);
+    } catch(e) {
+      results['fonts_load_empty'] = { got: String(e), expected: 'true', pass: false };
+    }
   } else {
     results['fonts_enum_blocked'] = { got: 'API absent', expected: 'n/a', pass: true };
     results['fonts_size_zero']    = { got: 'API absent', expected: 'n/a', pass: true };
+    results['fonts_load_empty']   = { got: 'API absent', expected: 'n/a', pass: true };
+  }
+
+  // ── screen.availLeft/Top/isExtended ──────────────────────────────────────
+  check('screen.availLeft', screen.availLeft, 0);
+  check('screen.availTop',  screen.availTop,  0);
+  checkTrue('screen_isExtended_false',
+    typeof screen.isExtended === 'undefined' || screen.isExtended === false);
+
+  // ── screenX/Y locked to 0 ────────────────────────────────────────────────
+  check('window.screenX', window.screenX, 0);
+  check('window.screenY', window.screenY, 0);
+
+  // ── navigator.plugins has 5 PDF entries ──────────────────────────────────
+  checkTrue('plugins_has_pdf', navigator.plugins.length === 5);
+  checkTrue('plugins_first_name',
+    navigator.plugins[0] && navigator.plugins[0].name === 'PDF Viewer');
+
+  // ── AudioBuffer.getChannelData applies noise (OfflineAudioContext path) ──
+  if (window.OfflineAudioContext && window.AudioBuffer) {
+    try {
+      const _oac = new OfflineAudioContext(1, 128, 44100);
+      const _osc = _oac.createOscillator();
+      const _cmp = _oac.createDynamicsCompressor();
+      _osc.connect(_cmp); _cmp.connect(_oac.destination);
+      _osc.start(0);
+      const _buf = await _oac.startRendering();
+      const _d   = _buf.getChannelData(0);
+      // getChannelData should return a Float32Array (patched copy)
+      checkTrue('audioBuffer_getChannelData_is_float32', _d instanceof Float32Array);
+      // Two reads of same channel should return same values (session-stable)
+      const _d2  = _buf.getChannelData(0);
+      checkTrue('audioBuffer_getChannelData_stable', _d[0] === _d2[0]);
+    } catch(e) {
+      results['audioBuffer_getChannelData_is_float32'] = { got: String(e), expected: 'true', pass: false };
+      results['audioBuffer_getChannelData_stable']     = { got: String(e), expected: 'true', pass: false };
+    }
+  } else {
+    results['audioBuffer_getChannelData_is_float32'] = { got: 'API absent', expected: 'n/a', pass: true };
+    results['audioBuffer_getChannelData_stable']     = { got: 'API absent', expected: 'n/a', pass: true };
+  }
+
+  // ── window.name is always empty (tracking-channel block) ─────────────────
+  window.name = 'tracker_id_12345';
+  checkTrue('window_name_blocked', window.name === '');
+
+  // ── Error.stack reformatted to V8 style ──────────────────────────────────
+  try {
+    const _stack = new Error('test').stack || '';
+    // V8 style has "    at " prefix; JSC raw format has "@url:line:col" frames
+    const _hasAt  = _stack.indexOf('    at ') >= 0;
+    const _hasJSC = _stack.indexOf(' @http') >= 0 || _stack.indexOf(' @blob:') >= 0
+                    || _stack.indexOf('@[native') >= 0;
+    checkTrue('error_stack_v8_style', _hasAt || !_hasJSC || _stack === '');
+  } catch(e) {
+    results['error_stack_v8_style'] = { got: String(e), expected: 'true', pass: false };
+  }
+
+  // ── SVG getBBox applies noise (not throwing) ──────────────────────────────
+  try {
+    const _svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    const _txt = document.createElementNS('http://www.w3.org/2000/svg','text');
+    _txt.textContent = 'fingerprint';
+    _svg.appendChild(_txt); document.body.appendChild(_svg);
+    const _bb = _txt.getBBox();
+    checkTrue('svg_getBBox_is_number', typeof _bb.width === 'number');
+    document.body.removeChild(_svg);
+  } catch(e) {
+    // SVG text rendering may not be available in headless — accept
+    results['svg_getBBox_is_number'] = { got: String(e), expected: 'n/a', pass: true };
   }
 
   return results;

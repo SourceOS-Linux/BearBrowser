@@ -2838,6 +2838,11 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  height:{get:()=>_sh,configurable:false},"
     @"  availWidth:{get:()=>_sw,configurable:false},"
     @"  availHeight:{get:()=>_sh,configurable:false},"
+    // availLeft/Top expose dock/taskbar size and multi-monitor offsets
+    @"  availLeft:{get:()=>0,configurable:false},"
+    @"  availTop:{get:()=>0,configurable:false},"
+    // isExtended reveals if a second display is attached (strong monitor fingerprint)
+    @"  isExtended:{get:()=>false,configurable:false},"
     @"  colorDepth:{get:()=>24,configurable:false},"
     @"  pixelDepth:{get:()=>24,configurable:false}"
     @"});}catch(e){}"
@@ -2846,6 +2851,11 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // outerWidth/outerHeight = innerWidth/innerHeight (no chrome height leak)
     @"try{Object.defineProperty(window,'outerWidth',{get:()=>window.innerWidth,configurable:false});}catch(e){}"
     @"try{Object.defineProperty(window,'outerHeight',{get:()=>window.innerHeight,configurable:false});}catch(e){}"
+    // screenX/screenY — window position on desktop; reveals monitor layout and multi-display
+    @"try{Object.defineProperty(window,'screenX',{get:()=>0,configurable:false});}catch(e){}"
+    @"try{Object.defineProperty(window,'screenY',{get:()=>0,configurable:false});}catch(e){}"
+    @"try{Object.defineProperty(window,'screenLeft',{get:()=>0,configurable:false});}catch(e){}"
+    @"try{Object.defineProperty(window,'screenTop',{get:()=>0,configurable:false});}catch(e){}"
     // ── Navigator hardening ────────────────────────────────────────────────
     @"try{Object.defineProperties(navigator,{"
     @"  hardwareConcurrency:{get:()=>4,configurable:false},"
@@ -2873,9 +2883,41 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // Firefox-only properties that leak Gecko even when UA claims Safari
     @"try{if('oscpu'in navigator)Object.defineProperty(navigator,'oscpu',{get:()=>undefined,configurable:false});}catch(e){}"
     @"try{if('buildID'in navigator)Object.defineProperty(navigator,'buildID',{get:()=>undefined,configurable:false});}catch(e){}"
-    // plugins / mimeTypes — freeze empty (WKWebView already returns empty, make it non-enumerable)
-    @"try{Object.defineProperty(navigator,'plugins',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"
-    @"try{Object.defineProperty(navigator,'mimeTypes',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"
+    // plugins / mimeTypes — replicate the standard Chrome/Safari 5-entry PDF plugin set.
+    // An empty PluginArray is the single clearest WKWebView signal to fingerprinters.
+    // All modern browsers (Chrome 109+, Safari 17+) return exactly these 5 plugins.
+    @"try{(function(){"
+    @"  function _mkMT(type,plug){"
+    @"    return{type:type,suffixes:'pdf',description:'Portable Document Format',"
+    @"      enabledPlugin:plug};}"
+    @"  function _mkP(name,file){"
+    @"    const p=Object.create(null);"
+    @"    p.name=name;p.description='Portable Document Format';p.filename=file;"
+    @"    const mt0=_mkMT('application/pdf',p);const mt1=_mkMT('text/pdf',p);"
+    @"    p[0]=mt0;p[1]=mt1;p.length=2;"
+    @"    p.item=function(i){return p[i];};p.namedItem=function(n){"
+    @"      return n==='application/pdf'?mt0:n==='text/pdf'?mt1:null;};"
+    @"    p[Symbol.iterator]=function*(){yield p[0];yield p[1];};"
+    @"    return p;}"
+    @"  const _pl=['PDF Viewer','Chrome PDF Viewer','Chromium PDF Viewer',"
+    @"             'Microsoft Edge PDF Viewer','WebKit built-in PDF'];"
+    @"  const _pa=Object.create(null);"
+    @"  const _plugins=_pl.map(function(n){return _mkP(n,'internal-pdf-viewer');});"
+    @"  _plugins.forEach(function(p,i){_pa[i]=p;});_pa.length=_plugins.length;"
+    @"  _pa.item=function(i){return _pa[i];};"
+    @"  _pa.namedItem=function(n){for(let i=0;i<_pa.length;i++)if(_pa[i].name===n)return _pa[i];return null;};"
+    @"  _pa.refresh=function(){};_pa[Symbol.iterator]=function*(){"
+    @"    for(let i=0;i<_pa.length;i++)yield _pa[i];};"
+    @"  Object.defineProperty(navigator,'plugins',{get:function(){return _pa;},configurable:false});"
+    // MimeTypeArray — application/pdf and text/pdf pointing back to first plugin
+    @"  const _ma=Object.create(null);const _mt0=_mkMT('application/pdf',_plugins[0]);"
+    @"  const _mt1=_mkMT('text/pdf',_plugins[0]);"
+    @"  _ma[0]=_mt0;_ma[1]=_mt1;_ma.length=2;"
+    @"  _ma.item=function(i){return _ma[i];};"
+    @"  _ma.namedItem=function(n){return n==='application/pdf'?_mt0:n==='text/pdf'?_mt1:null;};"
+    @"  _ma[Symbol.iterator]=function*(){yield _ma[0];yield _ma[1];};"
+    @"  Object.defineProperty(navigator,'mimeTypes',{get:function(){return _ma;},configurable:false});"
+    @"})();}catch(e){}"
     // ── performance.now() — 1ms integer floor, no sub-ms jitter ─────────────
     // Pure floor to integer ms. Adding random jitter within the bucket is
     // counterproductive: it leaks the bucket boundary via averaging attacks.
@@ -2925,6 +2967,28 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  if(window.AudioContext)window.AudioContext=_cAC;"
     @"  if(window.webkitAudioContext)window.webkitAudioContext=_cAC;"
     @"}"
+    // ── AudioBuffer noise — OfflineAudioContext fingerprint path ──────────
+    // The dominant audio fingerprint (EFF coveryourtracks, fingerprintjs) uses
+    // OfflineAudioContext + OscillatorNode + DynamicsCompressor then reads the
+    // rendered buffer via AudioBuffer.getChannelData(). The result is a
+    // CPU/FPU-specific float array that produces a unique ~32-bit hash.
+    // Our AnalyserNode noise above is the wrong path. Fix: intercept
+    // getChannelData/copyFromChannel on the returned AudioBuffer and add a
+    // session-stable ±1e-7 offset to every Nth sample.
+    @"try{if(window.AudioBuffer){"
+    @"  const _aOff=(Math.random()-0.5)*2e-7;"  // imperceptible, stable per session
+    @"  const _gCD=AudioBuffer.prototype.getChannelData;"
+    @"  AudioBuffer.prototype.getChannelData=_nat(function(ch){"
+    @"    const d=_gCD.call(this,ch);"
+    @"    const c=new Float32Array(d);"  // copy — don't mutate the internal buffer
+    @"    for(let i=0;i<c.length;i+=100)c[i]=Math.fround(c[i]+_aOff);"
+    @"    return c;},'getChannelData');"
+    @"  const _cFC=AudioBuffer.prototype.copyFromChannel;"
+    @"  AudioBuffer.prototype.copyFromChannel=_nat(function(dest,ch,off){"
+    @"    _cFC.call(this,dest,ch,off);"
+    @"    for(let i=0;i<dest.length;i+=100)dest[i]=Math.fround(dest[i]+_aOff);"
+    @"  },'copyFromChannel');"
+    @"}}catch(e){}"
     // ── WebSpeech: freeze getVoices() to empty (bug 2043367 — unfixed upstream too) ─
     @"if(window.speechSynthesis){"
     // Override via Object.defineProperty on the prototype for maximum coverage:
@@ -2945,13 +3009,19 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"if(_RPC){window.RTCPeerConnection=function(cfg,con){"
     @"  return new _RPC(cfg?{...cfg,iceServers:[]}:null,con);};"
     @"  window.RTCPeerConnection.prototype=_RPC.prototype;}"
-    // ── window.name — clear on cross-origin navigation to prevent tracking ─
+    // ── window.name — cross-origin tracking channel ──────────────────────
+    // window.name persists across same-tab navigations to other origins and is a
+    // classic tracking vector (site sets name = userId, navigates away, partner
+    // reads it back). Clear it on cross-origin navigation AND block writes with
+    // a no-op setter so the current page can't seed it in the first place.
+    // Shadow window.name FIRST (separate try so MutationObserver failure can't block it)
+    @"try{Object.defineProperty(window,'name',{get:function(){return '';},set:function(){},configurable:false});}catch(e){}"
     @"try{"
     @"  let _lastOrigin=location.origin;"
     @"  const _obs=new MutationObserver(function(){"
     @"    if(location.origin!==_lastOrigin){window.name='';_lastOrigin=location.origin;}"
     @"  });"
-    @"  _obs.observe(document,'{}');" // will fail gracefully; we get navigation via URL change
+    @"  _obs.observe(document,{childList:true,subtree:false});"
     @"  window.addEventListener('beforeunload',function(){window.name='';},true);"
     @"}catch(e){}"
     // ── WebGPU — delete navigator.gpu entirely (Bug 2043403) ─────────────
@@ -2992,7 +3062,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  try{FontFaceSet.prototype.check=function(){return false;};}catch(e){}"
     @"  if(document.fonts&&document.fonts.check)"
     @"    try{document.fonts.check=function(){return false;};}catch(e){}"
-    // document.fonts.load() — let it proceed (needed for web fonts), just block check()
+    // document.fonts.load() — fingerprinters probe font presence by calling
+    // load() and checking whether it resolves with an entry. Return [] always.
+    @"  try{FontFaceSet.prototype.load=function(){return Promise.resolve([]);};}catch(e){}"
     @"})();"
     // ── requestAnimationFrame timing (Firefox browser_animationapi_iframes.js) ─
     // rAF timestamps are high-resolution and can be used to fingerprint frame timing
@@ -3324,6 +3396,55 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    RTCRtpReceiver.getCapabilities=_nat(function(kind){"
     @"      return _rFilter(kind,_rRC.call(RTCRtpReceiver,kind));},'getCapabilities');}}"
     @"}catch(e){}"
+    // ── SVG text geometry — platform text rendering fingerprinting ───────
+    // getBBox() and getComputedTextLength() on SVG text elements produce
+    // platform-specific float values that reveal the OS text stack (CoreText
+    // on macOS, DirectWrite on Windows). creepjs and pixelscan probe these.
+    // Apply the same session-stable ±0.1 offset used for Element BCR.
+    @"(function(){"
+    @"  try{"
+    @"    const _svgOff=(Math.random()-0.5)*0.2;"
+    @"    if(window.SVGGraphicsElement){"
+    @"      const _gBB=SVGGraphicsElement.prototype.getBBox;"
+    @"      SVGGraphicsElement.prototype.getBBox=_nat(function(opts){"
+    @"        const r=_gBB.call(this,opts);"
+    @"        return{x:r.x+_svgOff,y:r.y+_svgOff,width:r.width,height:r.height};"
+    @"      },'getBBox');}"
+    @"    if(window.SVGTextContentElement){"
+    @"      const _gCTL=SVGTextContentElement.prototype.getComputedTextLength;"
+    @"      SVGTextContentElement.prototype.getComputedTextLength=_nat(function(){"
+    @"        const l=_gCTL.call(this);"
+    @"        return Math.max(0,l+_svgOff);},'getComputedTextLength');"
+    @"      const _gSSL=SVGTextContentElement.prototype.getSubStringLength;"
+    @"      SVGTextContentElement.prototype.getSubStringLength=_nat(function(i,n){"
+    @"        const l=_gSSL.call(this,i,n);"
+    @"        return Math.max(0,l+_svgOff);},'getSubStringLength');}"
+    @"  }catch(e){}"
+    @"})();"
+    // ── Error.stack JSC→V8 format normalisation ──────────────────────────
+    // JavaScriptCore uses `fn@file:line:col` stack trace format.
+    // V8 (Chrome) uses `at fn (file:line:col)`. creepjs detects the JSC format
+    // to identify WebKit-based browsers. Reformat JSC-style frames to V8-style.
+    // Note: \n in ObjC strings becomes actual newlines via the extractor;
+    // use String.fromCharCode(10) for the newline delimiter in the JS split/join.
+    @"try{"
+    @"  const _errSD=Object.getOwnPropertyDescriptor(Error.prototype,'stack');"
+    @"  if(_errSD&&_errSD.get){"
+    @"    const _origStack=_errSD.get;"
+    @"    const _NL=String.fromCharCode(10);"
+    @"    Object.defineProperty(Error.prototype,'stack',{"
+    @"      get:function(){"
+    @"        const s=_origStack.call(this);"
+    @"        if(typeof s!=='string')return s;"
+    @"        return s.split(_NL).map(function(l){"
+    @"          const m=l.match(/^(.*)@(.*:[0-9]+:[0-9]+)$/);"
+    @"          if(!m)return l;"
+    @"          const fn=m[1]||'<anonymous>';"
+    @"          return'    at '+fn+' ('+m[2]+')';"
+    @"        }).join(_NL);},"
+    @"      configurable:true});"
+    @"  }"
+    @"}catch(e){}"
     // ── document.fonts enumeration — font presence oracle ────────────────
     // Iterating FontFaceSet reveals which system fonts were matched by CSS.
     // We already return false from check(); also block iteration so list-based
@@ -3380,6 +3501,16 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  try{if(window.Range){"
     @"    _nat(Range.prototype.getBoundingClientRect,'getBoundingClientRect');"
     @"    _nat(Range.prototype.getClientRects,'getClientRects');}}catch(e){}"
+    @"  try{if(window.AudioBuffer){"
+    @"    _nat(AudioBuffer.prototype.getChannelData,'getChannelData');"
+    @"    _nat(AudioBuffer.prototype.copyFromChannel,'copyFromChannel');}}catch(e){}"
+    @"  try{if(window.SVGGraphicsElement)"
+    @"    _nat(SVGGraphicsElement.prototype.getBBox,'getBBox');}catch(e){}"
+    @"  try{if(window.SVGTextContentElement){"
+    @"    _nat(SVGTextContentElement.prototype.getComputedTextLength,'getComputedTextLength');"
+    @"    _nat(SVGTextContentElement.prototype.getSubStringLength,'getSubStringLength');}}catch(e){}"
+    @"  try{if(window.FontFaceSet)"
+    @"    _nat(FontFaceSet.prototype.load,'load');}catch(e){}"
     @"  if(window.WebGL2RenderingContext){"
     @"    try{_nat(WebGL2RenderingContext.prototype.getParameter,'getParameter');}catch(e){}"
     @"    try{_nat(WebGL2RenderingContext.prototype.getSupportedExtensions,'getSupportedExtensions');}catch(e){}}"
