@@ -2,12 +2,35 @@
 // Applied on top of LibreWolf defaults. Values here take precedence.
 // Do not add agent-runtime concerns to this file — see profiles/agent-runtime/user.js.
 
-// ── DNS-over-HTTPS ────────────────────────────────────────────────────────────
-// Mode 3 = strict DoH only; refuse to fall back to plaintext DNS.
+// ── DNS-over-HTTPS (Quad9, strict) ────────────────────────────────────────────
+// Quad9 (Swiss non-profit foundation, GDPR jurisdiction) is preferred over
+// Cloudflare: no commercial data incentive, and — critically — Quad9 does NOT
+// forward EDNS Client Subnet (RFC 7871) to authoritative servers, so it
+// structurally leaks less of the client than ECS-forwarding resolvers do.
+//   9.9.9.9  = filtered (malware/phishing block + DNSSEC validation, NO ECS) ← used
+//   9.9.9.10 = unfiltered, no DNSSEC, NO ECS   (swap the IP below to opt out of filtering)
+//   9.9.9.11 = block + DNSSEC + ECS-FORWARDING (do NOT use — leaks subnet)
+// Mode 3 = TRR-only, hard-fail: Firefox never silently falls back to plaintext
+// system DNS for web traffic (only captive-portal/bootstrap probes use native DNS).
 user_pref("network.trr.mode", 3);
-user_pref("network.trr.uri", "https://1.1.1.1/dns-query");
-user_pref("network.trr.bootstrapAddress", "1.1.1.1");
+// IP-form DoH URL: Quad9's TLS cert SAN includes the anycast IP, so no bootstrap
+// hostname lookup is needed (same pattern as the prior 1.1.1.1 config).
+// NOTE: the previous config set network.trr.bootstrapAddress — a pref REMOVED in
+// Firefox 89 (bug 1703216; renamed to network.trr.bootstrapAddr). It was a silent
+// no-op. Dropped entirely here since IP-form DoH requires no bootstrap.
+user_pref("network.trr.uri", "https://9.9.9.9/dns-query");
+user_pref("network.trr.custom_uri", "https://9.9.9.9/dns-query");
 user_pref("network.trr.confirmationNS", "skip");
+// Suppress EDNS Client Subnet on the wire (scope /0) — defense-in-depth on top
+// of Quad9 already not forwarding it (RFC 7871).
+user_pref("network.trr.disable-ECS", true);
+// DNS-rebinding guard: reject RFC1918/private-IP answers from the resolver so a
+// hostile/compromised resolver can't map a public name onto an internal host.
+user_pref("network.trr.allow-rfc1918", false);
+// Do not send a User-Agent or other identifying headers to the DoH resolver.
+user_pref("network.trr.send_user-agent-headers", false);
+// EDNS(0) message padding (RFC 8467) to blunt size-based query analysis.
+user_pref("network.trr.padding", true);
 
 // ── Google Safe Browsing — belt-and-suspenders removal ───────────────────────
 // LibreWolf strips this at build time; these prefs ensure it stays off even if
@@ -155,6 +178,17 @@ user_pref("network.http.http3.enable", true);
 // Suppress network-layer connection coalescing leaks
 user_pref("network.http.altsvc.enabled", false);
 user_pref("network.http.altsvc.oe", false);
+// HTTP/3 discovery: with Alt-Svc disabled above, HTTP/3 is advertised to us only
+// via DNS HTTPS/SVCB resource records (RFC 9460). Keep that path on, and let the
+// same HTTPS RR drive HTTP->HTTPS upgrades.
+user_pref("network.dns.use_https_rr_as_altsvc", true);
+user_pref("network.dns.upgrade_with_https_rr", true);
+// Encrypted ClientHello (ECH): the HTTPS RR can carry an ECHConfig that encrypts
+// SNI — closing the last cleartext leak of which host you're visiting. Strict
+// upside: opportunistic, so sites without an ECHConfig still use cleartext SNI,
+// but a published ECHConfig is never silently downgraded.
+user_pref("network.dns.echconfig.enabled", true);
+user_pref("network.dns.http3_echconfig.enabled", true);
 
 // ── HTTPS-Only mode ───────────────────────────────────────────────────────────
 user_pref("dom.security.https_only_mode", true);

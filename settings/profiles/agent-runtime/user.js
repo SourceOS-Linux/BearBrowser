@@ -134,11 +134,20 @@ user_pref("privacy.firstparty.isolate", false); // dFPI supersedes legacy FPI; a
 // removes the 0-RTT replay surface. Mirrors human-secure.
 user_pref("security.tls.enable_0rtt_data", false);
 
-// DNS over HTTPS — strict mode, no fallback to OS resolver.
-// Prevents DNS-level eavesdropping and poisoning.
+// DNS over HTTPS — Quad9, strict mode, no fallback to OS resolver.
+// Quad9 (Swiss non-profit, GDPR) preferred over Cloudflare: no commercial data
+// incentive, and does NOT forward EDNS Client Subnet (RFC 7871) to authoritative
+// servers. 9.9.9.9 = filtered + DNSSEC + NO ECS (9.9.9.11 forwards ECS — avoid).
+// IP-form URL needs no bootstrap (cert SAN covers the IP). Mirrors human-secure.
 user_pref("network.trr.mode", 3); // 3 = TRR only, hard-fail
-user_pref("network.trr.uri", "https://1.1.1.1/dns-query");
-user_pref("network.trr.custom_uri", "https://1.1.1.1/dns-query");
+user_pref("network.trr.uri", "https://9.9.9.9/dns-query");
+user_pref("network.trr.custom_uri", "https://9.9.9.9/dns-query");
+user_pref("network.trr.confirmationNS", "skip");
+// ECS suppression, DNS-rebinding guard, no-UA-to-resolver, query padding.
+user_pref("network.trr.disable-ECS", true);
+user_pref("network.trr.allow-rfc1918", false);
+user_pref("network.trr.send_user-agent-headers", false);
+user_pref("network.trr.padding", true);
 
 // No link prefetch, no speculative pre-connections.
 // These make network requests that agents have not explicitly authorised.

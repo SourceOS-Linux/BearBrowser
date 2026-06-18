@@ -144,7 +144,7 @@
     // -------------------------------------------------------------------------
     "DNSOverHTTPS": {
       "Enabled": true,
-      "ProviderURL": "https://1.1.1.1/dns-query",
+      "ProviderURL": "https://9.9.9.9/dns-query",
       "Fallback": false,
       "Locked": true
     },

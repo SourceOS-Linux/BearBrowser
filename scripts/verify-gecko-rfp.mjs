@@ -85,6 +85,20 @@ const REQUIRED = {
   'privacy.partition.network_state': true,
   // Defense-in-depth: no 0-RTT early data (removes the QUIC/TLS replay surface).
   'security.tls.enable_0rtt_data': false,
+  // DNS-over-HTTPS privacy invariants.
+  'network.trr.mode': 3,                    // strict TRR-only, no plaintext fallback
+  'network.trr.disable-ECS': true,          // suppress EDNS Client Subnet (RFC 7871)
+  'network.trr.allow-rfc1918': false,       // reject private-IP answers (DNS rebinding)
+  'network.trr.send_user-agent-headers': false, // no UA leak to the resolver
+};
+
+// Pref values that must NOT contain certain substrings. Catches selecting a
+// resolver endpoint that re-introduces a vector we deliberately avoid.
+const FORBIDDEN_VALUE_SUBSTRINGS = {
+  'network.trr.uri': [
+    ['9.9.9.11', 'Quad9 ECS-forwarding endpoint — leaks client subnet (use 9.9.9.9 or 9.9.9.10)'],
+    ['dns11.quad9', 'Quad9 ECS-forwarding endpoint — leaks client subnet'],
+  ],
 };
 
 // Removed / deprecated prefs that are silent no-ops in current Firefox. Their
@@ -118,6 +132,8 @@ const HARMFUL_IF_FALSE = {
 const KNOWN_TYPOS = {
   'network.http.http3.enabled': 'network.http.http3.enable',
   'privacy.resistFingerprinting.letterboxing.enabled': 'privacy.resistFingerprinting.letterboxing',
+  // Renamed in Firefox 89 (bug 1703216); the long form is a silent no-op.
+  'network.trr.bootstrapAddress': 'network.trr.bootstrapAddr',
 };
 
 // ── user.js parser ────────────────────────────────────────────────────────────
@@ -188,6 +204,17 @@ function auditProfile(profile) {
       isFalse ? `= false at line ${prefs.get(name).line} — ${why}` : 'ok');
   }
 
+  // FORBIDDEN value substrings
+  for (const [name, rules] of Object.entries(FORBIDDEN_VALUE_SUBSTRINGS)) {
+    if (!prefs.has(name)) continue;
+    const v = String(prefs.get(name).value);
+    for (const [sub, why] of rules) {
+      const hit = v.includes(sub);
+      add(!hit, `safe-value ${name}`,
+        hit ? `contains "${sub}" — ${why}` : `ok (${v})`);
+    }
+  }
+
   // TYPOS absent
   for (const [bad_, canonical] of Object.entries(KNOWN_TYPOS)) {
     const present = prefs.has(bad_);
@@ -202,6 +229,29 @@ function auditProfile(profile) {
     add(true, 'no-duplicate-keys', 'clean');
   } else {
     for (const d of dups) add(false, 'no-duplicate-keys', `"${d.name}" re-set at line ${d.line}`);
+  }
+
+  // Cross-file DoH consistency: policies.json DNSOverHTTPS.ProviderURL is the
+  // authoritative provider (a Locked policy silently overrides user.js's
+  // network.trr.uri). They must agree, and must not point at an ECS endpoint.
+  const polFile = path.join(repoRoot, 'settings', 'profiles', profile, 'policies.json');
+  if (existsSync(polFile)) {
+    const polText = readFileSync(polFile, 'utf8');
+    const pm = polText.match(/"ProviderURL"\s*:\s*"([^"]+)"/);
+    if (pm) {
+      const polUrl = pm[1];
+      // not an ECS-forwarding endpoint
+      const ecsHit = polUrl.includes('9.9.9.11') || polUrl.includes('dns11.quad9');
+      add(!ecsHit, 'policies DoH not ECS endpoint',
+        ecsHit ? `policies.json ProviderURL=${polUrl} forwards ECS` : `ok (${polUrl})`);
+      // agrees with user.js network.trr.uri
+      if (prefs.has('network.trr.uri')) {
+        const trrUrl = prefs.get('network.trr.uri').value;
+        const match = polUrl === trrUrl;
+        add(match, 'DoH provider user.js<->policies.json consistent',
+          match ? `both = ${polUrl}` : `policies.json=${polUrl} but user.js network.trr.uri=${trrUrl} — Locked policy would override user.js`);
+      }
+    }
   }
 
   const failed = results.filter((r) => !r.pass).length;
