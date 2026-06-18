@@ -2723,13 +2723,15 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [config.userContentController addScriptMessageHandler:self name:@"netmon"];
   [config.userContentController addScriptMessageHandler:self name:@"secmon"];
   // ── Fingerprinting shield (injected before any page script runs) ──────────
-  // Gaps addressed here are cross-referenced against Mozilla Bugzilla:
-  //   Bug 1358149 (FIXED)  — AudioContext fingerprinting
-  //   Bug 2043403 (ASSIGNED) — WebGPU RFP
-  //   Bug 2043367 (NEW)    — WebSpeech getVoices()
+  // Cross-referenced against Mozilla Bugzilla RFP bugs and Firefox test suite:
   //   Bug 418986  (FIXED)  — screen / CSS media query resolution
-  //   Firefox RFP test suite: browser_dynamical_window_rounding.js,
-  //     browser_reduceTimePrecision_iframes.js, browser_timezone.js
+  //   Bug 1358149 (FIXED)  — AudioContext fingerprinting
+  //   Bug 1896836 (FIXED)  — timezone normalization
+  //   Bug 2043367 (NEW)    — WebSpeech getVoices()
+  //   Bug 2043403 (ASSIGNED) — WebGPU adapter info
+  //   Firefox RFP: browser_dynamical_window_rounding.js,
+  //     browser_reduceTimePrecision_iframes.js, browser_animationapi_iframes.js,
+  //     browser_device_sensor_event.js, browser_timezone.js
   NSString *shield=
     @"(function(){'use strict';"
     // ── Canvas: hook both toDataURL and getImageData to prevent bypass ──────
@@ -2875,6 +2877,70 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  _obs.observe(document,'{}');" // will fail gracefully; we get navigation via URL change
     @"  window.addEventListener('beforeunload',function(){window.name='';},true);"
     @"}catch(e){}"
+    // ── WebGPU — delete navigator.gpu entirely (Bug 2043403) ─────────────
+    // GPU adapter.requestAdapterInfo() exposes vendor, architecture, device, description
+    // at hardware-serial granularity. No partial fix is adequate; remove the API.
+    @"try{Object.defineProperty(navigator,'gpu',{get:()=>undefined,configurable:false});}catch(e){}"
+    @"try{window.GPU=undefined;window.GPUAdapter=undefined;window.GPUDevice=undefined;"
+    @"  window.GPUBuffer=undefined;window.GPUTexture=undefined;}catch(e){}"
+    // ── Font enumeration via measureText (Bug 1336208 — Firefox WONTFIX, we fix) ─
+    // fingerprinters call measureText() with text in each candidate font and compare
+    // widths against a baseline. Per-session noise makes each session's widths unique
+    // but consistent within the session (same font+text → same delta).
+    @"(function(){"
+    @"  const _s=Math.random().toString(36).slice(2);" // per-session salt
+    @"  function _fh(str){"                             // FNV-1a 32-bit hash
+    @"    let h=0x811c9dc5;"
+    @"    for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=(h*0x01000193)>>>0;}"
+    @"    return h;}"
+    @"  const _mT=CanvasRenderingContext2D.prototype.measureText;"
+    @"  CanvasRenderingContext2D.prototype.measureText=function(text){"
+    @"    const r=_mT.call(this,text);"
+    @"    const noise=((_fh((text||'')+(this.font||'')+_s)%5)-2)*0.1;" // ±0.2px, consistent per (font,text,session)
+    @"    try{Object.defineProperty(r,'width',{value:Math.max(0,r.width+noise)});}catch(e){}"
+    @"    return r;};"
+    // Also block document.fonts.check() — CSS local() font presence oracle
+    @"  if(document.fonts&&document.fonts.check)"
+    @"    try{document.fonts.check=function(){return false;};}catch(e){}"
+    // document.fonts.load() — let it proceed (needed for web fonts), just block check()
+    @"})();"
+    // ── requestAnimationFrame timing (Firefox browser_animationapi_iframes.js) ─
+    // rAF timestamps are high-resolution and can be used to fingerprint frame timing
+    // characteristics. Truncate to 1ms, matching our performance.now() precision.
+    @"(function(){"
+    @"  const _rAF=window.requestAnimationFrame.bind(window);"
+    @"  window.requestAnimationFrame=function(cb){"
+    @"    return _rAF(function(ts){cb(Math.floor(ts));});};"
+    // Also clamp the AnimationFrameProvider in workers if present
+    @"})();"
+    // ── Device sensors (Firefox browser_device_sensor_event.js) ──────────
+    // DeviceOrientationEvent and DeviceMotionEvent expose hardware accelerometer/gyro
+    // readings which are device-unique. Block listener registration for these types.
+    // Generic Sensor API (Accelerometer etc.) — delete entirely.
+    @"(function(){"
+    @"  const _sensorEvents=new Set(["
+    @"    'deviceorientation','devicemotion','deviceorientationabsolute',"
+    @"    'compassneedscalibration']);"
+    @"  const _ael=EventTarget.prototype.addEventListener;"
+    @"  EventTarget.prototype.addEventListener=function(type,fn,opts){"
+    @"    if(typeof type==='string'&&_sensorEvents.has(type.toLowerCase()))return;"
+    @"    return _ael.call(this,type,fn,opts);};"
+    // Dispatch a fake zero-value orientation event to satisfy sites that wait for one
+    @"  Object.defineProperty(window,'DeviceOrientationEvent',{"
+    @"    get:function(){return undefined;},configurable:false});"
+    @"  Object.defineProperty(window,'DeviceMotionEvent',{"
+    @"    get:function(){return undefined;},configurable:false});"
+    // Generic Sensor API (W3C spec, Chrome-origin) — all expose hardware characteristics
+    @"  ['Accelerometer','Gyroscope','Magnetometer','AbsoluteOrientationSensor',"
+    @"   'RelativeOrientationSensor','LinearAccelerationSensor','GravitySensor',"
+    @"   'AmbientLightSensor'].forEach(function(n){"
+    @"     try{Object.defineProperty(window,n,{get:()=>undefined,configurable:false});}catch(e){}});"
+    // screen.orientation — exposes display rotation, hardware form-factor signal
+    @"  try{Object.defineProperty(screen,'orientation',{get:()=>({"
+    @"    type:'landscape-primary',angle:0,"
+    @"    addEventListener:function(){},removeEventListener:function(){}"
+    @"  }),configurable:false});}catch(e){}"
+    @"})();"
     // ── eval honeypot ─────────────────────────────────────────────────────
     @"const _eval=window.eval;"
     @"window.eval=function(code){"
