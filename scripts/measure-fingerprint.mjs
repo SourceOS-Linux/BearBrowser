@@ -139,6 +139,25 @@ const PROBE = `async () => {
     let det = 0; for (const f of fonts) if (w("'" + f + "'," + base) !== baseW) det++;
     r.fontsDetected = det + '/' + fonts.length;
   } catch(e) { r.fontsDetected = 'ERR'; }
+  // WebRTC ICE local-IP leak. mDNS (*.local) candidates are obfuscated and not a
+  // real IP leak; only a raw private/public IP counts. 'clean' = no raw IP exposed.
+  r.webrtcLeak = await new Promise((resolve) => {
+    let pc;
+    try { pc = new RTCPeerConnection({ iceServers: [] }); } catch(e) { return resolve('clean'); }
+    if (!pc || !pc.createDataChannel) return resolve('clean');
+    const ips = new Set(); let done = false;
+    const finish = () => { if (!done) { done = true; resolve(ips.size ? 'LEAK:' + [...ips].join(',') : 'clean'); } };
+    try { pc.createDataChannel('x'); } catch(e) {}
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return finish();
+      const cand = e.candidate.candidate || '';
+      if (cand.includes('.local')) return;
+      const m = cand.match(/(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/);
+      if (m) ips.add(m[0]);
+    };
+    pc.createOffer().then((o) => pc.setLocalDescription(o)).catch(() => {});
+    setTimeout(finish, 2500);
+  });
   return r;
 }`;
 
@@ -178,6 +197,7 @@ const VECTORS = [
   { key: 'webglExtCount', label: 'WebGL ext count', kind: 'mask' },
   { key: 'fontsDetected', label: 'non-base fonts', kind: 'fixed', expect: '0/14' },
   { key: 'plugins', label: 'plugins', kind: 'mask', cohort: (a) => a === 0 },
+  { key: 'webrtcLeak', label: 'WebRTC IP leak', kind: 'fixed', expect: 'clean' },
 ];
 
 function classify(v, control, h1, h2) {
