@@ -54,6 +54,14 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-stagehand").write wrapper_for("bearbrowser-stagehand.sh")
     (bin/"bearbrowser-terminal").write wrapper_for("bearbrowser-terminal.sh")
     (bin/"bearbrowser-history").write wrapper_for("bearbrowser-history.py")
+    (bin/"bearbrowser-policy-engine").write wrapper_for("bearbrowser-policy-engine.py")
+    (bin/"bearbrowser-verify-policy-engine").write wrapper_for("bearbrowser-verify-policy-engine.py")
+    (bin/"bearbrowser-create-receipt").write wrapper_for("bearbrowser-create-receipt.py")
+    (bin/"bearbrowser-update-receipt").write wrapper_for("bearbrowser-update-receipt.py")
+    (bin/"bearbrowser-verify-automation-receipt").write wrapper_for("bearbrowser-verify-automation-receipt.py")
+    (bin/"bearbrowser-fetch-librewolf-base").write wrapper_for("bearbrowser-fetch-librewolf-base.sh")
+    (bin/"bearbrowser-overlay-binary").write wrapper_for("bearbrowser-overlay-binary.sh")
+    (bin/"bearbrowser-verify-macos-app").write wrapper_for("verify-macos-app.sh")
   end
 
   def wrapper_for(script)
@@ -143,5 +151,8 @@ class Bearbrowser < Formula
     assert_match "http://127.0.0.1:", shell_output("#{bin}/bearbrowser-sidecar-server --print-url")
     assert_match "bearhistory-policy-explain", shell_output("#{bin}/bearbrowser-history policy explain --profile agent-runtime --dry-run")
     assert_match "bearhistory-export-explain", shell_output("#{bin}/bearbrowser-history export explain --session demo --profile agent-runtime --dry-run")
+    assert_match "bearbrowser.policy_decision.v1", shell_output("#{bin}/bearbrowser-policy-engine --action navigate --profile human-secure --dry-run")
+    assert_match "\"decision\"", shell_output("#{bin}/bearbrowser-policy-engine --action request_credential --profile agent-runtime --dry-run", 3)
+    assert_match "21/21 passed", shell_output("#{bin}/bearbrowser-verify-policy-engine")
   end
 end
