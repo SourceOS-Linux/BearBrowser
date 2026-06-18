@@ -2759,8 +2759,14 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  return fn;};"
     // ── Canvas: hook both toDataURL and getImageData to prevent bypass ──────
     // toDataURL-only hooking lets fingerprinters call getImageData directly.
+    // Per-session random bit mask: different per browser launch so two sessions
+    // of BearBrowser can't be correlated by the fingerprinter's hash.
+    // Keep ≤1 LSB change per channel so visual output is imperceptible.
+    // Per-session canvas noise: choose one of 4 low-bit XOR masks (1–4) so the
+    // modification is at most 1.6% per channel (imperceptible) but session-unique.
+    @"const _cnSeed=(Math.floor(Math.random()*4)+1);"
     @"const _noise=function(d){"
-    @"  for(let i=0;i<d.data.length;i+=400)d.data[i]^=1;"
+    @"  for(let i=0;i<d.data.length;i+=100)d.data[i]^=_cnSeed;"
     @"};"
     @"const _toDU=HTMLCanvasElement.prototype.toDataURL;"
     @"HTMLCanvasElement.prototype.toDataURL=_nat(function(t,q){"
@@ -2878,7 +2884,10 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  vendorSub:{get:()=>'',configurable:false},"
     @"  productSub:{get:()=>'20030107',configurable:false},"
     @"  appName:{get:()=>'Netscape',configurable:false},"
-    @"  product:{get:()=>'Gecko',configurable:false}"
+    @"  product:{get:()=>'Gecko',configurable:false},"
+    // pdfViewerEnabled: Chrome 104+ reports true; WKWebView omits it entirely.
+    // fingerprintjs and creepjs probe this as a Chrome-vs-other signal.
+    @"  pdfViewerEnabled:{get:()=>true,configurable:false}"
     @"});}catch(e){}"
     // Firefox-only properties that leak Gecko even when UA claims Safari
     @"try{if('oscpu'in navigator)Object.defineProperty(navigator,'oscpu',{get:()=>undefined,configurable:false});}catch(e){}"

@@ -360,6 +360,9 @@ const PROBE = `(async function() {
     results['svg_getBBox_is_number'] = { got: String(e), expected: 'n/a', pass: true };
   }
 
+  // ── navigator.pdfViewerEnabled — Chrome 104+ property ──────────────────
+  checkTrue('navigator_pdfViewerEnabled', navigator.pdfViewerEnabled === true);
+
   // ── performance.timeOrigin — must be clamped to 100ms bucket ───────────
   checkTrue('perf_timeOrigin_is_100ms_bucket', performance.timeOrigin % 100 === 0);
 
