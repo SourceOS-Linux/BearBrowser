@@ -252,8 +252,17 @@ function auditProfile(profile) {
     const stripper = path.join(repoRoot, 'scripts', 'strip-json-comments.py');
     if (existsSync(stripper)) {
       try {
-        execSync(`python3 "${stripper}" --check "${polFile}"`, { stdio: 'pipe' });
+        const stripped = execSync(`python3 "${stripper}" "${polFile}"`, { stdio: ['ignore', 'pipe', 'pipe'] }).toString();
         add(true, 'policies.json strips to valid JSON', 'ok');
+        // Anti-MITM invariant: never import OS/enterprise root CAs (that is what
+        // enables a corporate proxy to decrypt HTTPS). Absent key = Firefox
+        // default false = also fine; only an explicit `true` is a failure.
+        try {
+          const pol = JSON.parse(stripped).policies || {};
+          const importRoots = pol.Certificates && pol.Certificates.ImportEnterpriseRoots;
+          add(importRoots !== true, 'policies no enterprise-root import',
+            importRoots === true ? 'Certificates.ImportEnterpriseRoots=true enables MITM' : 'ok');
+        } catch { /* validity already reported above */ }
       } catch (e) {
         const msg = (e.stderr || e.stdout || e.message || '').toString().trim().split('\n').pop();
         add(false, 'policies.json strips to valid JSON', `strip-json-comments --check failed: ${msg}`);

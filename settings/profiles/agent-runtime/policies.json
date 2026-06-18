@@ -1,102 +1,102 @@
 {
-  // ===========================================================================
-  // BearBrowser — Agent Browser Runtime Profile: Enterprise Policies
-  // ===========================================================================
-  // This file is loaded by the Firefox/LibreWolf Enterprise Policy engine and
-  // applies to the agent-runtime profile directory only.
-  //
-  // Authority model:
-  //   PolicyFabric (this file) > user.js prefs > LibreWolf defaults.
-  //
-  // All settings that control security-relevant surfaces carry "Locked": true
-  // so that neither user interaction nor agent-injected script can override
-  // them at runtime. The orchestration layer is the only entity permitted to
-  // modify these policies — by replacing this file between tasks.
-  //
-  // Relationship to user.js:
-  //   user.js sets the same values as belt-and-suspenders so they apply even
-  //   when the Policy engine is bypassed (e.g. dev/test mode without policies).
-  //   Where a value is set in both files, this file takes precedence.
-  // ===========================================================================
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
   "policies": {
 
-    // -------------------------------------------------------------------------
-    // Telemetry, studies, and data collection
-    // -------------------------------------------------------------------------
+    
+    
+    
     "DisableTelemetry": true,
     "DisableFirefoxStudies": true,
 
-    // -------------------------------------------------------------------------
-    // Firefox services the agent profile does not use
-    // -------------------------------------------------------------------------
+    
+    
+    
     "DisablePocket": true,
     "DisableFirefoxAccounts": true,
     "DisableSyncedTabsButton": true,
     "DisableAccounts": true,
 
-    // -------------------------------------------------------------------------
-    // Default browser / onboarding noise
-    // -------------------------------------------------------------------------
+    
+    
+    
     "DontCheckDefaultBrowser": true,
     "OverrideFirstRunPage": "",
     "OverridePostUpdatePage": "",
     "NoDefaultBookmarks": true,
 
-    // -------------------------------------------------------------------------
-    // Credentials and autofill — none of these should operate in agent sessions
-    // -------------------------------------------------------------------------
+    
+    
+    
     "OfferToSaveLogins": false,
     "PasswordManagerEnabled": false,
     "AutofillCreditCardEnabled": false,
     "AutofillAddressEnabled": false,
-    // Prevent the password manager UI from appearing at all.
+    
     "DisableMasterPasswordCreation": true,
 
-    // -------------------------------------------------------------------------
-    // Update policy — agent runtime must be versioned and stable.
-    // Updates are applied by the platform build pipeline, not at browser launch.
-    // Auto-updating an agent browser mid-session could change behaviour or
-    // restart the process, aborting an in-flight task.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
+    
     "DisableAppUpdate": true,
     "ExtensionUpdate": false,
     "DisableSystemAddonUpdate": true,
 
-    // -------------------------------------------------------------------------
-    // Developer tools — agents use remote debugging via CDP/WebDriver,
-    // not the interactive DevTools UI. Keep false so automation still works.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
     "DisableDeveloperTools": false,
 
-    // -------------------------------------------------------------------------
-    // about: page lockdown
-    // Blocking these pages prevents an agent from being redirected to
-    // privileged UI surfaces via malicious page content.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
     "BlockAboutAddons": true,
     "BlockAboutConfig": true,
     "BlockAboutProfiles": true,
     "BlockAboutSupport": true,
 
-    // -------------------------------------------------------------------------
-    // Extension installation lockdown
-    // Agents must not install extensions interactively. Approved extensions are
-    // pre-installed by the platform build and listed in the allowlist below.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
     "InstallAddonsPermission": {
       "Default": false
     },
     "ExtensionSettings": {
-      // Block all extensions by default; platform build installs approved ones.
+      
       "*": {
         "installation_mode": "blocked"
       }
     },
 
-    // -------------------------------------------------------------------------
-    // Hardware / sensor permissions
-    // Locked: true prevents sites from prompting; the agent cannot grant these.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
     "Permissions": {
       "Camera": {
         "BlockNewRequests": true,
@@ -120,11 +120,11 @@
       }
     },
 
-    // -------------------------------------------------------------------------
-    // Sanitize on shutdown (policy layer)
-    // belt-and-suspenders with user.js privacy.clearOnShutdown.* prefs.
-    // Locked prevents the agent or any site from turning this off.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
     "SanitizeOnShutdown": {
       "Cache": true,
       "Cookies": true,
@@ -137,11 +137,11 @@
       "Locked": true
     },
 
-    // -------------------------------------------------------------------------
-    // DNS over HTTPS — strict mode, no system-resolver fallback.
-    // Fallback: false means if DoH fails, the request fails (not silently
-    // retried over plain DNS). This prevents DNS exfiltration via fallback.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
     "DNSOverHTTPS": {
       "Enabled": true,
       "ProviderURL": "https://9.9.9.9/dns-query",
@@ -149,15 +149,15 @@
       "Locked": true
     },
 
-    // -------------------------------------------------------------------------
-    // HTTPS-only mode — locked so agent cannot navigate to plain HTTP.
-    // "force_enabled" applies in both normal and private browsing windows.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
     "HttpsOnlyMode": "force_enabled",
 
-    // -------------------------------------------------------------------------
-    // Enhanced Tracking Protection — strict tier, all categories enabled.
-    // -------------------------------------------------------------------------
+    
+    
+    
     "EnableTrackingProtection": {
       "Value": true,
       "Cryptomining": true,
@@ -166,32 +166,51 @@
       "Locked": true
     },
 
-    // -------------------------------------------------------------------------
-    // Cookies — reject all third-party; first-party partitioned via dFPI prefs.
-    // "reject-foreign" maps to cookieBehavior=1; combined with dFPI user.js
-    // prefs this provides Total Cookie Protection semantics via policy.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
+    "Certificates": {
+      "ImportEnterpriseRoots": false
+    },
+
+    
+    
+    
+    
+    
+    "EncryptedMediaExtensions": {
+      "Enabled": false,
+      "Locked": true
+    },
+
+    
+    
+    
+    
+    
     "Cookies": {
       "Behavior": "reject-foreign",
       "BehaviorPrivateBrowsing": "reject-foreign",
       "Locked": true
     },
 
-    // -------------------------------------------------------------------------
-    // Search engines — remove data-broker engines that are pre-installed.
-    // Agents should use the orchestration layer's search abstraction, not the
-    // browser's built-in search bar sending queries to commercial providers.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
     "SearchEngines": {
       "Remove": ["Google", "Bing", "Amazon.com", "eBay", "Twitter", "Wikipedia"]
     },
     "SearchSuggestEnabled": false,
 
-    // -------------------------------------------------------------------------
-    // Firefox Home (new tab page) — all content tiles off.
-    // New tab should be a blank page; any live content could trigger network
-    // requests outside the agent's explicit navigation intent.
-    // -------------------------------------------------------------------------
+    
+    
+    
+    
+    
     "FirefoxHome": {
       "Search": false,
       "TopSites": false,
@@ -203,9 +222,9 @@
       "Locked": true
     },
 
-    // -------------------------------------------------------------------------
-    // User messaging / onboarding suppression
-    // -------------------------------------------------------------------------
+    
+    
+    
     "UserMessaging": {
       "WhatsNew": false,
       "ExtensionRecommendations": false,
@@ -217,27 +236,27 @@
       "Locked": true
     },
 
-    // -------------------------------------------------------------------------
-    // Miscellaneous UI lockdown
-    // -------------------------------------------------------------------------
+    
+    
+    
     "DisableSetDesktopBackground": true,
-    "DisablePrivateBrowsing": false, // private browsing must remain available
-                                     // (autostart is set in user.js)
+    "DisablePrivateBrowsing": false, 
+                                     
     "DisableProfileImport": true,
     "DisableProfileRefresh": true,
     "DisableThirdPartyModuleBlocking": false,
 
-    // -------------------------------------------------------------------------
-    // Pop-up windows — agents should not have UI pop-ups steal focus.
-    // -------------------------------------------------------------------------
+    
+    
+    
     "PopupBlocking": {
       "Default": true,
       "Locked": true
     },
 
-    // -------------------------------------------------------------------------
-    // Flash / NPAPI plugins — should never be present but ensure off.
-    // -------------------------------------------------------------------------
+    
+    
+    
     "FlashPlugin": {
       "Default": "block",
       "Locked": true
