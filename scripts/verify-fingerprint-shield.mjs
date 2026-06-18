@@ -61,7 +61,7 @@ const PROBE = `(async function() {
   check('navigator.platform', navigator.platform, 'MacIntel');
   check('navigator.maxTouchPoints', navigator.maxTouchPoints, 0);
   check('navigator.hardwareConcurrency', navigator.hardwareConcurrency, 4);
-  check('navigator.vendor', navigator.vendor, 'Apple Computer, Inc.');
+  check('navigator.vendor', navigator.vendor, 'Google Inc.');
   check('navigator.productSub', navigator.productSub, '20030107');
   check('navigator.languages[0]', (navigator.languages||[])[0], 'en-US');
   check('navigator.doNotTrack', navigator.doNotTrack, '1');

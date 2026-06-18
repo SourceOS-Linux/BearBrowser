@@ -2880,7 +2880,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // WebKit already sets vendor and productSub correctly, but explicitly
     // asserting them makes the values immune to override by site scripts.
     @"try{Object.defineProperties(navigator,{"
-    @"  vendor:{get:()=>'Apple Computer, Inc.',configurable:false},"
+    // Chrome returns 'Google Inc.' — fingerprintjs uses vendor.indexOf('Google')===0
+    // as one of its 7 isChromium() signals. 'Apple Computer, Inc.' fails this check.
+    @"  vendor:{get:()=>'Google Inc.',configurable:false},"
     @"  vendorSub:{get:()=>'',configurable:false},"
     @"  productSub:{get:()=>'20030107',configurable:false},"
     @"  appName:{get:()=>'Netscape',configurable:false},"
