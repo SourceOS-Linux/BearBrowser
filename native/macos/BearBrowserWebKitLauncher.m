@@ -2783,12 +2783,37 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // ── WebGL: VENDOR/RENDERER + freeze extensions list ────────────────────
     @"const _glGP=function(orig){"
     @"  return function(p){"
-    @"    if(p===37445)return 'Google Inc. (Apple)';"  // matches Safari on Metal
-    @"    if(p===37446)return 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)';"
+    @"    if(p===37445)return 'Google Inc. (Apple)';"  // UNMASKED_VENDOR_WEBGL
+    @"    if(p===37446)return 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)';"  // UNMASKED_RENDERER_WEBGL
+    @"    if(p===35724)return 'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)';"  // SHADING_LANGUAGE_VERSION
+    @"    if(p===7936)return 'WebKit';"    // VENDOR
+    @"    if(p===7937)return 'WebKit WebGL';"   // RENDERER
+    @"    if(p===7938)return 'WebGL 1.0 (OpenGL ES 2.0 Chromium)';"  // VERSION
+    @"    if(p===3379)return 16384;"    // MAX_TEXTURE_SIZE
+    @"    if(p===34024)return 16384;"   // MAX_RENDERBUFFER_SIZE
+    @"    if(p===34921)return 16;"      // MAX_VERTEX_ATTRIBS
+    @"    if(p===36347)return 4096;"    // MAX_VERTEX_UNIFORM_VECTORS
+    @"    if(p===36348)return 1024;"    // MAX_FRAGMENT_UNIFORM_VECTORS
+    @"    if(p===34930)return 16;"      // MAX_TEXTURE_IMAGE_UNITS
+    @"    if(p===35661)return 80;"      // MAX_COMBINED_TEXTURE_IMAGE_UNITS
+    @"    if(p===3410||p===3411||p===3412||p===3413)return 8;"  // R/G/B/A_BITS
+    @"    if(p===3414)return 24;"       // DEPTH_BITS
+    @"    if(p===3415)return 8;"        // STENCIL_BITS
+    @"    if(p===3386)try{return new Int32Array([16384,16384]);}catch(e){}"   // MAX_VIEWPORT_DIMS
+    @"    if(p===33902)try{return new Float32Array([1,1]);}catch(e){}"        // ALIASED_LINE_WIDTH_RANGE
+    @"    if(p===33901)try{return new Float32Array([1,511]);}catch(e){}"      // ALIASED_POINT_SIZE_RANGE
     @"    return orig.call(this,p);};};"
     @"WebGLRenderingContext.prototype.getParameter=_glGP(WebGLRenderingContext.prototype.getParameter);"
     @"if(window.WebGL2RenderingContext)"
     @"  WebGL2RenderingContext.prototype.getParameter=_glGP(WebGL2RenderingContext.prototype.getParameter);"
+    // Normalize shader precision — GPU floating-point precision varies by hardware and
+    // is used by BrowserLeaks and others to fingerprint GPU vendor. Return standard
+    // desktop GPU precision (highp mediump lowp all identical = generic Metal device).
+    @"WebGLRenderingContext.prototype.getShaderPrecisionFormat=function(){"
+    @"  return{precision:23,rangeMin:127,rangeMax:127};};"
+    @"if(window.WebGL2RenderingContext)"
+    @"  WebGL2RenderingContext.prototype.getShaderPrecisionFormat="
+    @"    WebGLRenderingContext.prototype.getShaderPrecisionFormat;"
     // Freeze extensions list to a fixed Safari-on-M1 subset (removes GPU-specific entries)
     @"const _glExt=['ANGLE_instanced_arrays','EXT_blend_minmax','EXT_color_buffer_half_float',"
     @"  'EXT_float_blend','EXT_frag_depth','EXT_shader_texture_lod','EXT_texture_compression_bptc',"
@@ -3034,6 +3059,28 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    const _IP=Intl.PluralRules.prototype.resolvedOptions;"
     @"    Intl.PluralRules.prototype.resolvedOptions=_nat(function(){"
     @"      const r=_IP.call(this);return{...r,locale:'en-US'};},'resolvedOptions');}"
+    // Segmenter, DisplayNames, RelativeTimeFormat — newer Intl APIs that also
+    // expose the OS locale. Normalize each resolvedOptions() return to en-US.
+    @"  if(Intl.Segmenter){"
+    @"    const _ISg=Intl.Segmenter.prototype.resolvedOptions;"
+    @"    Intl.Segmenter.prototype.resolvedOptions=_nat(function(){"
+    @"      const r=_ISg.call(this);return{...r,locale:'en-US'};},'resolvedOptions');}"
+    @"  if(Intl.DisplayNames){"
+    @"    const _IDN=Intl.DisplayNames.prototype.resolvedOptions;"
+    @"    Intl.DisplayNames.prototype.resolvedOptions=_nat(function(){"
+    @"      const r=_IDN.call(this);return{...r,locale:'en-US'};},'resolvedOptions');}"
+    @"  if(Intl.RelativeTimeFormat){"
+    @"    const _IRF=Intl.RelativeTimeFormat.prototype.resolvedOptions;"
+    @"    Intl.RelativeTimeFormat.prototype.resolvedOptions=_nat(function(){"
+    @"      const r=_IRF.call(this);return{...r,locale:'en-US'};},'resolvedOptions');}"
+    // Intl.Locale constructor — passing any tag always returns an en-US Locale so
+    // navigator.language probing via new Intl.Locale(navigator.language).language
+    // is neutralised.
+    @"  if(Intl.Locale){"
+    @"    const _ILo=Intl.Locale;"
+    @"    const _ILoW=function(tag,opts){return new _ILo('en-US',opts);};"
+    @"    _ILoW.prototype=_ILo.prototype;"
+    @"    try{window.Intl=Object.assign(Object.create(Intl),{Locale:_ILoW});}catch(e){}}"
     @"}catch(e){}"
     // ── Resource timing — clamp to prevent network topology fingerprinting ─
     // Resource timing entries expose precise transfer durations (sub-ms) that
@@ -3047,8 +3094,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    const _PObs=window.PerformanceObserver;"
     @"    window.PerformanceObserver=_nat(function(cb){"
     @"      return new _PObs(function(list,obs){"
+    @"        const _bl=new Set(['resource','navigation','paint']);"
     @"        const entries=list.getEntries().filter(function(e){"
-    @"          return e.entryType!=='resource';});" // strip resource entries; allow paint/longtask
+    @"          return !_bl.has(e.entryType);});" // strip timing entries that fingerprint load path
     @"        if(entries.length)cb({getEntries:function(){return entries;},getEntriesByType:function(t){return entries.filter(function(e){return e.entryType===t;});},getEntriesByName:function(n){return entries.filter(function(e){return e.name===n;});}},obs);"
     @"      });},'PerformanceObserver');"
     @"    window.PerformanceObserver.prototype=_PObs.prototype;"
@@ -3205,8 +3253,90 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"      if(!r.width&&!r.height)return r;" // don't noise empty rects
     @"      try{return new DOMRect(r.x+_bbOff,r.y+_bbOff,r.width,r.height);}catch(e){return r;}"
     @"    },'getBoundingClientRect');"
+    // Range text measurements are used for sub-pixel font fingerprinting. Apply
+    // the same session-stable offset so fingerprinters read consistent but
+    // non-identifying values regardless of whether they measure via Element or Range.
+    @"    if(window.Range){"
+    @"      const _rBCR=Range.prototype.getBoundingClientRect;"
+    @"      Range.prototype.getBoundingClientRect=_nat(function(){"
+    @"        const r=_rBCR.call(this);"
+    @"        if(!r.width&&!r.height)return r;"
+    @"        try{return new DOMRect(r.x+_bbOff,r.y+_bbOff,r.width,r.height);}catch(e){return r;}"
+    @"      },'getBoundingClientRect');"
+    @"      const _rGCR=Range.prototype.getClientRects;"
+    @"      Range.prototype.getClientRects=_nat(function(){"
+    @"        return Array.from(_rGCR.call(this)).map(function(r){"
+    @"          try{return new DOMRect(r.x+_bbOff,r.y+_bbOff,r.width,r.height);}catch(e){return r;}"
+    @"        });"
+    @"      },'getClientRects');"
+    @"    }"
     @"  }catch(e){}"
     @"})();"
+    // ── performance direct-API filtering ─────────────────────────────────
+    // PerformanceObserver is already patched above. The direct performance.*
+    // methods bypass it and would still return navigation/paint/resource entries
+    // that uniquely identify load timing per-user.
+    @"try{"
+    @"  const _gE=performance.getEntries.bind(performance);"
+    @"  performance.getEntries=_nat(function(){"
+    @"    const _bl=new Set(['resource','navigation','paint']);"
+    @"    return _gE().filter(function(e){return !_bl.has(e.entryType);});"
+    @"  },'getEntries');"
+    @"  const _gEBT=performance.getEntriesByType.bind(performance);"
+    @"  performance.getEntriesByType=_nat(function(type){"
+    @"    if(type==='resource'||type==='navigation'||type==='paint')return [];"
+    @"    return _gEBT(type);"
+    @"  },'getEntriesByType');"
+    @"  const _gEBN=performance.getEntriesByName.bind(performance);"
+    @"  performance.getEntriesByName=_nat(function(name,type){"
+    @"    const _bl=new Set(['resource','navigation','paint']);"
+    @"    if(type&&_bl.has(type))return [];"
+    @"    return _gEBN(name,type).filter(function(e){return !_bl.has(e.entryType);});"
+    @"  },'getEntriesByName');"
+    @"}catch(e){}"
+    // ── navigator.mediaCapabilities — codec support fingerprinting ────────
+    // decodingInfo/encodingInfo map to hardware GPU/codec ASICs and vary
+    // significantly across device models. Return a stable generic response.
+    @"try{if(navigator.mediaCapabilities&&window.MediaCapabilities){"
+    @"  MediaCapabilities.prototype.decodingInfo=_nat(function(){"
+    @"    return Promise.resolve({supported:true,smooth:true,powerEfficient:true});"
+    @"  },'decodingInfo');"
+    @"  MediaCapabilities.prototype.encodingInfo=_nat(function(){"
+    @"    return Promise.resolve({supported:true,smooth:true,powerEfficient:true});"
+    @"  },'encodingInfo');"
+    @"}}catch(e){}"
+    // ── RTCRtpSender/Receiver.getCapabilities — codec list fingerprinting ─
+    // Static methods that return browser codec lists without needing a
+    // peer connection — a common alternative to the SDP-parsing approach.
+    // Filter to a stable, cross-platform baseline (VP8/VP9/H264 + Opus).
+    @"try{if(window.RTCRtpSender&&RTCRtpSender.getCapabilities){"
+    @"  const _rSC=RTCRtpSender.getCapabilities;"
+    @"  const _rFilter=function(kind,caps){"
+    @"    if(!caps)return null;"
+    @"    const ok=kind==='video'?['vp8','vp9','h264']:['opus'];"
+    @"    caps.codecs=caps.codecs.filter(function(x){"
+    @"      return ok.some(function(a){return x.mimeType.toLowerCase().includes(a);});});"
+    @"    return caps;};"
+    @"  RTCRtpSender.getCapabilities=_nat(function(kind){"
+    @"    return _rFilter(kind,_rSC.call(RTCRtpSender,kind));},'getCapabilities');"
+    @"  if(window.RTCRtpReceiver&&RTCRtpReceiver.getCapabilities){"
+    @"    const _rRC=RTCRtpReceiver.getCapabilities;"
+    @"    RTCRtpReceiver.getCapabilities=_nat(function(kind){"
+    @"      return _rFilter(kind,_rRC.call(RTCRtpReceiver,kind));},'getCapabilities');}}"
+    @"}catch(e){}"
+    // ── document.fonts enumeration — font presence oracle ────────────────
+    // Iterating FontFaceSet reveals which system fonts were matched by CSS.
+    // We already return false from check(); also block iteration so list-based
+    // probing (forEach, for..of, entries, size) gets an empty view.
+    @"try{if(window.FontFaceSet){"
+    @"  FontFaceSet.prototype.forEach=function(){};"
+    @"  FontFaceSet.prototype[Symbol.iterator]=function*(){};"
+    @"  FontFaceSet.prototype.values=function*(){};"
+    @"  FontFaceSet.prototype.entries=function*(){};"
+    @"  FontFaceSet.prototype.keys=function*(){};"
+    @"  try{Object.defineProperty(FontFaceSet.prototype,'size',{"
+    @"    get:function(){return 0;},configurable:true});}catch(e){}"
+    @"}}catch(e){}"
     // ── Retroactive native registration ───────────────────────────────────
     // Prototype methods assigned above are on the real prototype objects now;
     // register each with _nat so fn.toString() returns "[native code]".
@@ -3239,6 +3369,17 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  try{if(window.Worker)_nat(window.Worker,'Worker');}catch(e){}"
     @"  try{if(window.PerformanceObserver)_nat(window.PerformanceObserver,'PerformanceObserver');}catch(e){}"
     @"  try{if(window.RTCPeerConnection)_nat(window.RTCPeerConnection,'RTCPeerConnection');}catch(e){}"
+    @"  try{_nat(performance.getEntries,'getEntries');}catch(e){}"
+    @"  try{_nat(performance.getEntriesByType,'getEntriesByType');}catch(e){}"
+    @"  try{_nat(performance.getEntriesByName,'getEntriesByName');}catch(e){}"
+    @"  try{if(navigator.mediaCapabilities&&window.MediaCapabilities){"
+    @"    _nat(MediaCapabilities.prototype.decodingInfo,'decodingInfo');"
+    @"    _nat(MediaCapabilities.prototype.encodingInfo,'encodingInfo');}}catch(e){}"
+    @"  try{if(window.RTCRtpSender&&RTCRtpSender.getCapabilities)_nat(RTCRtpSender.getCapabilities,'getCapabilities');}catch(e){}"
+    @"  try{if(window.RTCRtpReceiver&&RTCRtpReceiver.getCapabilities)_nat(RTCRtpReceiver.getCapabilities,'getCapabilities');}catch(e){}"
+    @"  try{if(window.Range){"
+    @"    _nat(Range.prototype.getBoundingClientRect,'getBoundingClientRect');"
+    @"    _nat(Range.prototype.getClientRects,'getClientRects');}}catch(e){}"
     @"  if(window.WebGL2RenderingContext){"
     @"    try{_nat(WebGL2RenderingContext.prototype.getParameter,'getParameter');}catch(e){}"
     @"    try{_nat(WebGL2RenderingContext.prototype.getSupportedExtensions,'getSupportedExtensions');}catch(e){}}"

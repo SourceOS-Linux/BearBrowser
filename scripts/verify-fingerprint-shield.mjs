@@ -198,6 +198,91 @@ const PROBE = `(async function() {
     results['getBCR_returns_domrect'] = { got: String(e), expected: 'true', pass: false };
   }
 
+  // ── Extended WebGL parameter normalization ────────────────────────────────
+  try {
+    const _cv = document.createElement('canvas');
+    const _gl = _cv.getContext('webgl') || _cv.getContext('experimental-webgl');
+    if (_gl) {
+      check('webgl_vendor',      _gl.getParameter(7936),  'WebKit');
+      check('webgl_renderer',    _gl.getParameter(7937),  'WebKit WebGL');
+      check('webgl_shading_lang', _gl.getParameter(35724),
+            'WebGL GLSL ES 1.0 (OpenGL ES GLSL ES 1.0 Chromium)');
+      checkTrue('webgl_max_texture_size', _gl.getParameter(3379) === 16384);
+      const _spf = _gl.getShaderPrecisionFormat(_gl.FRAGMENT_SHADER, _gl.HIGH_FLOAT);
+      checkTrue('webgl_shader_precision_23', _spf && _spf.precision === 23);
+    } else {
+      ['webgl_vendor','webgl_renderer','webgl_shading_lang',
+       'webgl_max_texture_size','webgl_shader_precision_23'].forEach(k =>
+        results[k] = { got: 'WebGL absent', expected: 'n/a', pass: true });
+    }
+  } catch(e) {
+    ['webgl_vendor','webgl_renderer','webgl_shading_lang',
+     'webgl_max_texture_size','webgl_shader_precision_23'].forEach(k =>
+      results[k] = { got: String(e), expected: 'true', pass: false });
+  }
+
+  // ── Range.getBoundingClientRect works (shield applied) ───────────────────
+  try {
+    const _range = document.createRange();
+    const _tn = document.createTextNode('fp');
+    document.body.appendChild(_tn);
+    _range.selectNode(_tn);
+    const _rr = _range.getBoundingClientRect();
+    checkTrue('range_BCR_is_number', typeof _rr.width === 'number');
+    document.body.removeChild(_tn);
+  } catch(e) {
+    results['range_BCR_is_number'] = { got: String(e), expected: 'true', pass: false };
+  }
+
+  // ── performance.getEntriesByType('navigation'/'paint') suppressed ─────────
+  checkTrue('perf_navigation_empty', performance.getEntriesByType('navigation').length === 0);
+  checkTrue('perf_paint_empty',      performance.getEntriesByType('paint').length === 0);
+
+  // ── navigator.mediaCapabilities always reports supported ──────────────────
+  if (navigator.mediaCapabilities) {
+    try {
+      const _mci = await navigator.mediaCapabilities.decodingInfo({
+        type: 'file',
+        video: { contentType: 'video/mp4; codecs="avc1.42E01E"',
+                 width: 1920, height: 1080, bitrate: 2000000, framerate: 30 }
+      });
+      checkTrue('mediaCapabilities_supported', _mci.supported === true);
+    } catch(e) {
+      results['mediaCapabilities_supported'] = { got: String(e), expected: 'true', pass: false };
+    }
+  } else {
+    results['mediaCapabilities_supported'] = { got: 'API absent', expected: 'n/a', pass: true };
+  }
+
+  // ── RTCRtp codec list filtered to non-identifying baseline ───────────────
+  if (window.RTCRtpSender && RTCRtpSender.getCapabilities) {
+    try {
+      const _caps = RTCRtpSender.getCapabilities('video');
+      if (_caps) {
+        const _names = _caps.codecs.map(c => c.mimeType.toLowerCase());
+        const _noFP  = !_names.some(n => n.includes('hevc') || n.includes('h265') || n.includes('av1'));
+        checkTrue('rtcRtp_codecs_filtered', _noFP);
+      } else {
+        results['rtcRtp_codecs_filtered'] = { got: 'null caps', expected: 'n/a', pass: true };
+      }
+    } catch(e) {
+      results['rtcRtp_codecs_filtered'] = { got: String(e), expected: 'true', pass: false };
+    }
+  } else {
+    results['rtcRtp_codecs_filtered'] = { got: 'API absent', expected: 'n/a', pass: true };
+  }
+
+  // ── document.fonts enumeration blocked ───────────────────────────────────
+  if (document.fonts) {
+    let _fCount = 0;
+    try { document.fonts.forEach(() => _fCount++); } catch(e) {}
+    checkTrue('fonts_enum_blocked', _fCount === 0);
+    checkTrue('fonts_size_zero',    document.fonts.size === 0);
+  } else {
+    results['fonts_enum_blocked'] = { got: 'API absent', expected: 'n/a', pass: true };
+    results['fonts_size_zero']    = { got: 'API absent', expected: 'n/a', pass: true };
+  }
+
   return results;
 })()`;
 
