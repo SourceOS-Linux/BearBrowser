@@ -92,6 +92,22 @@ user_pref("privacy.resistFingerprinting.letterboxing", true);
 // privacy.resistFingerprinting.randomDataOnCanvasExtract pref was removed in bug
 // 1670447 and is a no-op — do not re-add it.
 
+// RFP backbone — set explicitly so the agent profile blends into the SAME RFP
+// cohort as human-secure (see profile intent above) and is immune to upstream
+// default drift. These mirror human-secure/user.js exactly.
+// Timer precision: 1ms granularity via nsRFPService (main thread, workers, rAF).
+user_pref("privacy.resistFingerprinting.reduceTimerPrecision", true);
+user_pref("privacy.resistFingerprinting.reduceTimerPrecision.microseconds", 1000);
+// Font visibility: base system fonts only — blocks installed-font enumeration in
+// the C++ layout path that JS-level overrides miss.
+user_pref("layout.css.font-visibility.standard", 2);
+user_pref("layout.css.font-visibility.private", 1);
+user_pref("layout.css.font-visibility.trackingprotection", 2);
+// Locale normalization: Accept-Language header + JS Intl locale fixed to en-US.
+user_pref("intl.accept_languages", "en-US, en");
+user_pref("javascript.use_us_english_locale", true);
+user_pref("network.http.accept-language", "en-US,en;q=0.5");
+
 // Strict Enhanced Tracking Protection.
 user_pref("browser.contentblocking.category", "strict");
 user_pref("privacy.trackingprotection.enabled", true);
