@@ -9,6 +9,79 @@ API.** Every text-metric API is a *consumer* of one thing — the per-glyph adva
 the shaper produces. Patch that, and canvas / layout / SVG / Range all inherit the
 uniform value. Patching each API is whack-a-mole and *will* leave holes.
 
+## 0. Build-environment on-ramp (turnkey)
+
+You don't need to invent anything here — the project **already ships RFP/FPP
+patches through this exact mechanism**: see `patches/fpp-canvas-fix.patch` and
+`patches/ui-patches/website-appearance-ui-rfp.patch`, both registered in
+`assets/patches.txt`. Our three T3 patches follow that precedent.
+
+### 0.1 The build repo
+The LibreWolf-style BearBrowser build repo (the one containing `Makefile`,
+`scripts/bearbrowser-patches.py`, `patches/`, `assets/patches.txt`,
+`firefox-<version>.source.tar.xz`) is checked out per build under
+`build/workspaces/<profile>-<version>/source/`. That `source/` **is** the repo to
+work in for Gecko patches. (The product overlay — settings/policy/packaging —
+stays in this repo and is layered by `apply-sourceos-overlays.sh`.)
+
+### 0.2 One-time toolchain setup
+```
+cd <build-repo>
+make bootstrap        # extracts source + ./mach bootstrap --application-choice=browser
+                      # (installs rust/clang/etc; uses assets/mozconfig.new)
+```
+
+### 0.3 Get a stable source tree to edit
+```
+make patches          # tar xf firefox-<version>.source.tar.xz  -> firefox-<version>/
+                      # python3 scripts/bearbrowser-patches.py   -> bearbrowser-<version>-<release>/
+```
+Edit the **extracted, patched** tree `bearbrowser-<version>-<release>/` (this is
+the tree that vanished mid-session — it only exists after `make patches`).
+
+### 0.4 Where each T3 artifact lands
+| Artifact | Location | Registration |
+|----------|----------|--------------|
+| W2 `gfxPlatformFontList` allowlist patch | `patches/anti-fp-font-allowlist.patch` | add to `assets/patches.txt` |
+| W4/W5 `gfxShapedText` advance quantizer patch | `patches/anti-fp-text-metrics.patch` | add to `assets/patches.txt` |
+| W6 `nsRFPService` audio-noise patch | `patches/anti-fp-audio.patch` | add to `assets/patches.txt` |
+| W1 font files (Arimo/Tinos/Cousine/Noto/emoji) | `assets/fonts/` + packaging copy step | packaging script |
+| W3 generic-remap prefs | this overlay `settings/profiles/*/user.js` | ships **atomically** with W1 |
+
+### 0.5 Inner dev loop for a patch (fast → full)
+```
+# 1. edit files under bearbrowser-<version>-<release>/<path>
+# 2. produce the diff (the tree is a git checkout, or use diff -u vs pristine):
+git -C bearbrowser-<version>-<release> diff -- gfx/thebes/gfxFont.cpp \
+    > ../patches/anti-fp-text-metrics.patch        # paths must be -p1 (a/ b/)
+# 3. register it
+echo "patches/anti-fp-text-metrics.patch" >> assets/patches.txt
+# 4. FAST verify it applies cleanly (no compile):
+make check-patchfail        # scripts/check-patchfail.sh — catches apply/fuzz errors
+# 5. FULL build + run when the patch applies:
+make build                  # ./mach build  (the slow step; needs 0.2)
+make run                    # ./mach run    (or `make package`)
+```
+`make check-patchfail` is the tight loop — it tells you the diff applies before
+paying for a compile. Gate every patch through it.
+
+### 0.6 Measure the *real* binary (not Playwright)
+`measure-fingerprint.mjs` drives Playwright's Firefox, which only works on
+Playwright's Juggler-patched build — it **cannot** drive a stock LibreWolf binary.
+For the real build use Firefox's own remote protocol:
+- `geckodriver` (WebDriver) pointed at the built binary, or Marionette (port 2828).
+- Add a geckodriver adapter to the harness (or a thin Marionette probe runner) and
+  pass the binary via `BEARBROWSER_BIN`. The same `PROBE` payload is reused.
+This is what clears the `screen WxH` (letterboxing) residual that headless
+Playwright can't show, and confirms the 75% baseline holds on the real build.
+
+### 0.7 Definition of done (per work item)
+Each work item is done when its harness vector flips and stays green:
+W1/W2 → `non-base fonts = 0/14`; W4/W5 → `canvas text metric` & `layout text
+metric = int` **and** identical across a Mac and a Linux runner (the cross-OS
+proof); W6 → `audio (oac)` RANDOMIZED across sessions; W7 → `screen WxH`
+normalized on the real binary. Then lock each target into `verify-gecko-rfp.mjs`.
+
 ## 1. Complete readback surface (the holes register)
 
 Measured (Gecko 141, our RFP profile). Every row must end up uniform/quantized or
