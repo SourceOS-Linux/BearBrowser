@@ -397,6 +397,11 @@ const PROBE = `(async function() {
     results['notification_permission_denied'] = { got: 'n/a', expected: 'n/a', pass: true };
   }
 
+  // ── Math patching concealment — patched fns must look native ───────────
+  check('math_acos_looks_native', Math.acos.toString(), 'NATIVE');
+  check('math_sinh_looks_native', Math.sinh.toString(), 'NATIVE');
+  check('math_pow_looks_native',  Math.pow.toString(),  'NATIVE');
+
   // ── Math precision — JSC vs V8 ULP divergences (creepjs probe) ─────────
   // Each check verifies we return V8's float64 value, not JSC's.
   check('math_acos_0123',   Math.acos(0.123),                1.4474840516030247);
