@@ -201,8 +201,9 @@ fi
 echo "[6/9] Injecting profile settings (profile=$profile)..."
 profile_dir="$repo_root/settings/profiles/$profile"
 if [ -d "$profile_dir" ]; then
-  # Firefox reads user.js from the profile directory at first run.
-  # For a packaged app the canonical location is browser/app/profile.
+  # The packaged app applies shipped prefs from a default-pref file
+  # (browser/defaults/preferences or browser/app/profile), NOT a user.js — only
+  # a profile's own prefs.js uses user_pref(). Pick the default-pref location.
   profile_dest=""
   for candidate in \
       "$out_app/Contents/Resources/browser/defaults/preferences" \
@@ -221,8 +222,10 @@ if [ -d "$profile_dir" ]; then
   fi
 
   if [ -f "$profile_dir/user.js" ]; then
-    cp "$profile_dir/user.js" "$profile_dest/bearbrowser-user.js"
-    echo "      user.js → $profile_dest/bearbrowser-user.js"
+    # Convert user_pref() -> pref() so the prefs apply in a default-pref file.
+    python3 "$script_dir/userjs-to-autoconfig.py" \
+      "$profile_dir/user.js" "$profile_dest/bearbrowser-user.js" --profile "$profile"
+    echo "      user.js → $profile_dest/bearbrowser-user.js (user_pref→pref)"
   fi
 
   # Firefox enterprise policies are read from the distribution/ directory
@@ -242,11 +245,29 @@ if [ -d "$profile_dir" ]; then
   fi
 
   if [ -f "$profile_dir/policies.json" ]; then
-    cp "$profile_dir/policies.json" "$policy_dest/policies.json"
-    echo "      policies.json → $policy_dest/policies.json"
+    # Strip inline // comments — Firefox rejects a commented policies.json.
+    python3 "$script_dir/strip-json-comments.py" "$profile_dir/policies.json" "$policy_dest/policies.json"
+    echo "      policies.json → $policy_dest/policies.json (comments stripped)"
   fi
 else
   echo "      WARNING: profile directory not found: $profile_dir — skipping settings injection"
+fi
+
+# ── Step 6b: Bundle anti-fingerprint fonts ──────────────────────────────────
+# Gecko's ActivateBundledFonts() (gated by gfx.bundled-fonts.activate=1, set in
+# the profile prefs) loads fonts from NS_GRE_DIR/fonts — on macOS that is
+# Contents/Resources/fonts. Combined with font.system.whitelist="Arimo, Tinos,
+# Cousine", web content sees ONLY these metric-compatible families on every OS,
+# closing the font-enumeration fingerprint (measured 13/14 -> 0/14). If the copy
+# is missing, ApplyWhitelist safely ignores the whitelist (no zero-font browser).
+fonts_src="$repo_root/packaging/bundled-fonts"
+if ls "$fonts_src"/*.ttf >/dev/null 2>&1; then
+  fonts_dest="$out_app/Contents/Resources/fonts"
+  mkdir -p "$fonts_dest"
+  cp "$fonts_src"/*.ttf "$fonts_dest/"
+  echo "      bundled fonts → $fonts_dest ($(ls "$fonts_dest"/*.ttf | wc -l | tr -d ' ') families)"
+else
+  echo "      WARNING: no bundled fonts in $fonts_src — font allowlist will be a safe no-op"
 fi
 
 # ── Step 7: Strip quarantine extended attributes ─────────────────────────────

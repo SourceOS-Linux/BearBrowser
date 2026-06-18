@@ -103,6 +103,16 @@ user_pref("privacy.resistFingerprinting.reduceTimerPrecision.microseconds", 1000
 user_pref("layout.css.font-visibility.standard", 2);
 user_pref("layout.css.font-visibility.private", 1);
 user_pref("layout.css.font-visibility.trackingprotection", 2);
+// Bundled-font allowlist (parity with human-secure): Gecko's font.system.whitelist
+// filters the installed font list to only the bundled metric-compatible families,
+// so web content can't enumerate other fonts (measured 13/14 -> 0/14). Safe: if
+// the bundled fonts aren't present, ApplyWhitelist ignores the list.
+user_pref("gfx.bundled-fonts.activate", 1);
+user_pref("font.system.whitelist", "Arimo, Tinos, Cousine");
+user_pref("font.name.serif.x-western", "Tinos");
+user_pref("font.name.sans-serif.x-western", "Arimo");
+user_pref("font.name.monospace.x-western", "Cousine");
+user_pref("font.default.x-western", "sans-serif");
 // Locale normalization: Accept-Language header + JS Intl locale fixed to en-US.
 user_pref("intl.accept_languages", "en-US, en");
 user_pref("javascript.use_us_english_locale", true);

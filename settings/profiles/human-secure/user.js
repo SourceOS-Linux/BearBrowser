@@ -74,6 +74,25 @@ user_pref("javascript.use_us_english_locale", true);
 user_pref("layout.css.font-visibility.standard", 2);
 user_pref("layout.css.font-visibility.private", 1);
 user_pref("layout.css.font-visibility.trackingprotection", 2);
+// ── Bundled-font allowlist (the real font-fingerprint fix) ───────────────────
+// font-visibility alone is insufficient — measured: 13/14 macOS system fonts
+// stay detectable at every level. The strong lever is font.system.whitelist,
+// Gecko's built-in anti-fingerprint allowlist: gfxPlatformFontList::ApplyWhitelist
+// filters the installed family list to ONLY these names, so web content can't
+// enumerate any other font. Empirically verified to drop detection 13/14 -> 0/14.
+// We ship metric-compatible bundled fonts (Arimo=Arial, Tinos=Times, Cousine=
+// Courier) and whitelist exactly those, so every OS exposes the SAME font set —
+// cross-platform uniformity, the Tor/Mullvad approach.
+// SAFETY: if none of the whitelisted families are present (e.g. bundling not yet
+// active in a dev build), ApplyWhitelist ignores the list (no zero-font browser).
+user_pref("gfx.bundled-fonts.activate", 1);
+user_pref("font.system.whitelist", "Arimo, Tinos, Cousine");
+// Map the CSS generics onto the bundled families so serif/sans-serif/monospace
+// resolve identically everywhere (and don't fall back oddly under the whitelist).
+user_pref("font.name.serif.x-western", "Tinos");
+user_pref("font.name.sans-serif.x-western", "Arimo");
+user_pref("font.name.monospace.x-western", "Cousine");
+user_pref("font.default.x-western", "sans-serif");
 // Timer precision: 1000µs (1ms) granularity via nsRFPService — covers main
 // thread, Web Workers, and compositor rAF callbacks from a single C++ call site.
 user_pref("privacy.resistFingerprinting.reduceTimerPrecision", true);

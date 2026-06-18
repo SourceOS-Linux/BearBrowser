@@ -91,6 +91,9 @@ const REQUIRED = {
   'network.trr.disable-ECS': true,          // suppress EDNS Client Subnet (RFC 7871)
   'network.trr.allow-rfc1918': false,       // reject private-IP answers (DNS rebinding)
   'network.trr.send_user-agent-headers': false, // no UA leak to the resolver
+  // Bundled-font allowlist — the strong font-fingerprint fix (13/14 -> 0/14).
+  'gfx.bundled-fonts.activate': 1,
+  'font.system.whitelist': 'Arimo, Tinos, Cousine',
   // Shared network/TLS cohort — both profiles must match (agents "blend into the
   // same cohort"). Drift here is the recurring bug class this harness exists to catch.
   'security.tls.version.min': 3,            // TLS 1.2 floor
