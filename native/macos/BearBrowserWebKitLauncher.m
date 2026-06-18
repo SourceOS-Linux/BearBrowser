@@ -3625,13 +3625,16 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  try{if(window.SVGTextContentElement){"
     @"    _nat(SVGTextContentElement.prototype.getComputedTextLength,'getComputedTextLength');"
     @"    _nat(SVGTextContentElement.prototype.getSubStringLength,'getSubStringLength');}}catch(e){}"
-    @"  try{if(window.FontFaceSet)"
-    @"    _nat(FontFaceSet.prototype.load,'load');}catch(e){}"
+    @"  try{if(window.FontFaceSet){"
+    @"    _nat(FontFaceSet.prototype.load,'load');"
+    @"    _nat(FontFaceSet.prototype.check,'check');"
+    @"    _nat(FontFaceSet.prototype.forEach,'forEach');}}catch(e){}"
     @"  try{if(window.Intl&&typeof Intl.supportedValuesOf==='function')"
     @"    _nat(Intl.supportedValuesOf,'supportedValuesOf');}catch(e){}"
     @"  if(window.WebGL2RenderingContext){"
     @"    try{_nat(WebGL2RenderingContext.prototype.getParameter,'getParameter');}catch(e){}"
     @"    try{_nat(WebGL2RenderingContext.prototype.getSupportedExtensions,'getSupportedExtensions');}catch(e){}}"
+    @"  try{_nat(WebGLRenderingContext.prototype.getShaderPrecisionFormat,'getShaderPrecisionFormat');}catch(e){}"
     @"})();"
     @"})();";
   WKUserScript *shieldScript=[[WKUserScript alloc]
