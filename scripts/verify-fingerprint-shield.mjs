@@ -73,7 +73,10 @@ const PROBE = `(async function() {
   results['navigator.webdriver'] = { got: String(navigator.webdriver), expected: '!true', pass: navigator.webdriver !== true };
   checkUndef('navigator.oscpu', navigator.oscpu);
   checkUndef('navigator.buildID', navigator.buildID);
-  checkUndef('window.chrome', window.chrome);
+  checkTrue('window.chrome_is_object', typeof window.chrome === 'object' && window.chrome !== null);
+  checkTrue('window.chrome_has_csi', typeof window.chrome.csi === 'function');
+  checkTrue('window.chrome_has_runtime', typeof window.chrome.runtime === 'object');
+  checkTrue('window.chrome_app_not_installed', window.chrome.app && window.chrome.app.isInstalled === false);
 
   // Timing precision
   const t0 = performance.now();

@@ -3205,8 +3205,25 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // missing or undefined instance property.
     @"try{Object.defineProperty(Navigator.prototype,'doNotTrack',{get:()=>'1',configurable:true});}catch(e){}"
     @"try{Object.defineProperty(Navigator.prototype,'webdriver',{get:()=>undefined,configurable:true});}catch(e){}"
-    // window.chrome: Safari doesn't expose this; its presence alone signals non-Safari
-    @"try{if('chrome'in window)Object.defineProperty(window,'chrome',{get:()=>undefined,configurable:false});}catch(e){}"
+    // window.chrome: Chrome exposes this as an object; its absence signals non-Chrome.
+    // creepjs and fingerprintjs both probe window.chrome.app, .csi, .loadTimes, .runtime.
+    // Always install a Chrome-matching stub, overwriting any WebKit chrome object.
+    @"try{const _chromeStub={"
+    @"  app:{isInstalled:false,InstallState:Object.freeze({DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'}),"
+    @"    RunningState:Object.freeze({CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'}),"
+    @"    getDetails:function(){return null;},getIsInstalled:function(){return false;},runningState:function(){return 'cannot_run';}},"
+    @"  csi:_nat(function(){return{onloadT:Date.now(),pageT:Date.now(),startE:0,tran:15};},'csi'),"
+    @"  loadTimes:_nat(function(){return{commitLoadTime:Date.now()/1000,connectionInfo:'h2',finishDocumentLoadTime:0,"
+    @"    finishLoadTime:0,firstPaintAfterLoadTime:0,firstPaintTime:0,navigationType:'Other',npnNegotiatedProtocol:'h2',"
+    @"    requestTime:Date.now()/1000,startLoadTime:Date.now()/1000,wasAlternateProtocolAvailable:false,"
+    @"    wasFetchedViaSpdy:false,wasNpnNegotiated:true};},'loadTimes'),"
+    @"  runtime:{connect:function(){},sendMessage:function(){},id:undefined,"
+    @"    onConnect:{addListener:function(){},removeListener:function(){},"
+    @"      hasListener:function(){return false;}},"
+    @"    onMessage:{addListener:function(){},removeListener:function(){},"
+    @"      hasListener:function(){return false;}}}"
+    @"};"
+    @"Object.defineProperty(window,'chrome',{get:()=>_chromeStub,configurable:false});}catch(e){}"
     // ── Intl locale normalization ─────────────────────────────────────────
     // Intl APIs can expose OS locale even when navigator.languages is spoofed.
     // Collator, NumberFormat, ListFormat all expose locale via resolvedOptions().
