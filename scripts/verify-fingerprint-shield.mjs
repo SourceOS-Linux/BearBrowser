@@ -363,6 +363,12 @@ const PROBE = `(async function() {
   // ── navigator.pdfViewerEnabled — Chrome 104+ property ──────────────────
   checkTrue('navigator_pdfViewerEnabled', navigator.pdfViewerEnabled === true);
 
+  // ── WebKit-only API removal (absent in Chrome) ───────────────────────────
+  checkTrue('no_caretRangeFromPoint',   typeof document.caretRangeFromPoint === 'undefined');
+  checkTrue('no_WebKitCSSMatrix',       typeof window.WebKitCSSMatrix === 'undefined');
+  checkTrue('no_webkitStorageInfo',     typeof window.webkitStorageInfo === 'undefined');
+  checkTrue('perf_memory_exists',       typeof performance.memory === 'object');
+
   // ── performance.timeOrigin — must be clamped to 100ms bucket ───────────
   checkTrue('perf_timeOrigin_is_100ms_bucket', performance.timeOrigin % 100 === 0);
 

@@ -3053,6 +3053,26 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  _obs.observe(document,{childList:true,subtree:false});"
     @"  window.addEventListener('beforeunload',function(){window.name='';},true);"
     @"}catch(e){}"
+    // ── WebKit-only APIs — absent in Chrome, probed by creepjs/fingerprintjs ─
+    // These APIs exist in WebKit/WKWebView but not in modern Chrome. Their
+    // presence alone fingerprints the JS engine. Remove them so the profile
+    // matches a real Chrome browser.
+    // caretRangeFromPoint: WebKit-only; Chrome uses caretPositionFromPoint.
+    @"try{if(typeof document.caretRangeFromPoint!=='undefined')"
+    @"  document.caretRangeFromPoint=undefined;}catch(e){}"
+    // WebKitCSSMatrix: removed from Chrome in 2014; still in WebKit.
+    @"try{if(window.WebKitCSSMatrix)window.WebKitCSSMatrix=undefined;}catch(e){}"
+    // webkitStorageInfo: deprecated, removed from Chrome; present in WebKit.
+    @"try{if(window.webkitStorageInfo)window.webkitStorageInfo=undefined;}catch(e){}"
+    // webkitRequestFileSystem: same — Chrome removed, WebKit retained.
+    @"try{if(window.webkitRequestFileSystem)window.webkitRequestFileSystem=undefined;}catch(e){}"
+    // performance.memory: Chrome-only API (non-standard). WKWebView lacks it;
+    // its absence reveals non-Chrome. Return a stub with fixed 0 values.
+    @"try{if(!performance.memory){"
+    @"  Object.defineProperty(performance,'memory',{"
+    @"    get:function(){return{usedJSHeapSize:0,totalJSHeapSize:0,jsHeapSizeLimit:2172649472};},"
+    @"    configurable:false});"
+    @"}}catch(e){}"
     // ── WebGPU — delete navigator.gpu entirely (Bug 2043403) ─────────────
     // GPU adapter.requestAdapterInfo() exposes vendor, architecture, device, description
     // at hardware-serial granularity. No partial fix is adequate; remove the API.
