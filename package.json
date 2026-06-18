@@ -10,7 +10,8 @@
     "bearbrowser:stagehand:check": "node runtime/stagehand-check.mjs",
     "bearbrowser:deps:verify": "node runtime/verify-runtime-deps.mjs",
     "bearbrowser:rfp:verify": "node scripts/verify-gecko-rfp.mjs",
-    "bearbrowser:rfp:verify:static": "node scripts/verify-gecko-rfp.mjs --static-only"
+    "bearbrowser:rfp:verify:static": "node scripts/verify-gecko-rfp.mjs --static-only",
+    "bearbrowser:fp:measure": "node scripts/measure-fingerprint.mjs"
   },
   "dependencies": {
     "playwright": "1.55.1"
