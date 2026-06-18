@@ -2312,8 +2312,6 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) NSView            *bookmarksBar;
 @property(assign) BOOL               bookmarksBarVisible;
 @property(strong) NSCache           *dnsBlockCache;   // Quad9 NXDOMAIN results
-@property(strong) NSMutableSet      *decoyViews;      // script-popup honeypots — kept alive briefly
-@property(assign) NSTimeInterval    lastUserGestureTime; // tracks real input events for popup gating
 @property(assign) SecTrustRef      currentTrust;        // TLS trust for current page cert inspector
 @end
 
@@ -2565,7 +2563,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   self.addressDropdown.delegate=self;
 
   self.dnsBlockCache=[[NSCache alloc]init];
-  self.decoyViews=[NSMutableSet set];
+  // (decoyViews removed — popup timing gate was a per-browser fingerprint vector)
   self.dnsBlockCache.countLimit=2000;
 
   self.tabs=[NSMutableArray array]; self.activeTabIndex=0;
@@ -2593,7 +2591,6 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [NSEvent addLocalMonitorForEventsMatchingMask:
     NSEventMaskLeftMouseDown|NSEventMaskRightMouseDown|NSEventMaskKeyDown
     handler:^NSEvent*(NSEvent *e){
-    self.lastUserGestureTime=[NSDate timeIntervalSinceReferenceDate];
     if (e.type==NSEventTypeLeftMouseDown && e.window==self.window) {
       NSView *overlay=self.addressDropdown.overlay;
       NSPoint pt=[self.root convertPoint:e.locationInWindow fromView:nil];
@@ -3612,33 +3609,11 @@ static NSString *kFaviconJS=@"(function(){"
 - (void)webViewDidClose:(WKWebView*)wv { /* no action — suppresses beforeunload UI */ }
 
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)features {
-  // macOS 26+ (WebKit 21620+): the returned WKWebView MUST be created with cfg's processPool
-  // (and for SSO/OAuth flows, cfg's websiteDataStore), or WebKit throws NSException in createNewPage.
-  NSString *popupURL=action.request.URL.absoluteString?:@"";
-  NSString *initiator=wv.URL.host?:@"unknown";
-
-  NSTimeInterval sinceGesture=[NSDate timeIntervalSinceReferenceDate]-self.lastUserGestureTime;
-  BOOL likelyUserInitiated=(action.navigationType==WKNavigationTypeLinkActivated)||(sinceGesture<1.0);
-
-  if (!likelyUserInitiated) {
-    // Script-initiated popup — absorb it with an invisible WKWebView so WebKit is satisfied.
-    // Use cfg directly (macOS 26 processPool requirement). We cancel all navigations via the delegate.
-    BBEmitEvent(@"security.popup_blocked", @"block",
-      [NSString stringWithFormat:@"Script popup blocked from %@: %@", initiator, popupURL],
-      @{@"initiator":initiator, @"url":popupURL, @"userInitiated":@NO});
-    WKWebView *decoy=[[WKWebView alloc]initWithFrame:NSZeroRect configuration:cfg];
-    decoy.navigationDelegate=self;
-    [self.decoyViews addObject:decoy];
-    __weak BBDelegate *weakSelf=self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(15*NSEC_PER_SEC)),
-      dispatch_get_main_queue(),^{ [weakSelf.decoyViews removeObject:decoy]; });
-    return decoy;
-  }
-
-  // User-initiated (OAuth/SSO popup, target=_blank, etc.) — open as a real tab.
-  // Use cfg as-is: macOS 26's SOAuthorizationCoordinator requires the new view to share
-  // cfg's websiteDataStore so the SSO session cookies are accessible. Adding our own
-  // baseConfig would give it a different data store and break Google/Apple SSO.
+  // Always open as a real tab — matching Safari's behavior.
+  // WebKit's own popup blocker gates window.open() by gesture before calling this delegate,
+  // so we don't re-gate on timing (which would expose a unique per-browser fingerprint via
+  // entropy matching). Use cfg as-is: macOS 26 SOAuthorizationCoordinator requires the new
+  // view to share cfg's websiteDataStore for SSO session cookies.
   CGFloat W=self.root.bounds.size.width;
   CGFloat chromH=kToolbarH+kTabBarH+2;
   CGFloat findOff=self.findBarVisible?kFindBarH:0;
@@ -3668,15 +3643,6 @@ static NSString *kFaviconJS=@"(function(){"
 // ── HTTPS upgrade + mixed-content guard ───────────────────────────────────────
 - (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)action
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
-  // Decoy (honeypot) webviews: log what the script popup tried to reach, then cancel.
-  if ([self.decoyViews containsObject:wv]) {
-    NSString *dest=action.request.URL.absoluteString?:@"";
-    BBEmitEvent(@"security.popup_honeypot_nav",@"alert",
-      [NSString stringWithFormat:@"Honeypot popup navigated to: %@",dest],
-      @{@"url":dest});
-    decisionHandler(WKNavigationActionPolicyCancel);
-    return;
-  }
   NSURL *url=action.request.URL;
 
   // Hard-block any scheme that could expose the WebKit inspector, source viewer,
