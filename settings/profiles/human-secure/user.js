@@ -30,8 +30,10 @@ user_pref("privacy.resistFingerprinting", true);
 user_pref("privacy.resistFingerprinting.letterboxing", true);
 user_pref("webgl.disabled", false);
 user_pref("webgl.enable-webgl2", true);
-// Randomize canvas — site-specific exceptions are still possible via permissions.
-user_pref("privacy.resistFingerprinting.randomDataOnCanvasExtract", true);
+// Canvas randomization is always-on under RFP since Firefox bug 1816189
+// (the former privacy.resistFingerprinting.randomDataOnCanvasExtract pref was
+// removed in bug 1670447). No explicit pref needed — RFP injects per-session
+// canvas noise automatically. Do not re-add a manual canvas pref; it is a no-op.
 
 // ── Accept-Language / locale normalization ────────────────────────────────────
 // The HTTP Accept-Language header is sent on every request before JS runs and
@@ -227,6 +229,10 @@ user_pref("dom.push.connection.enabled", false);
 user_pref("network.http.sendRefererHeader", 2);
 user_pref("network.http.referer.defaultPolicy", 2);
 user_pref("network.http.referer.defaultPolicy.pbmode", 2);
+// Trim cross-origin referers to scheme+host+port (drop path/query). This is a
+// genuinely additive hardening NOT covered by RFP — matches the arkenfox
+// baseline and removes per-page referer granularity on cross-origin requests.
+user_pref("network.http.referer.XOriginTrimmingPolicy", 2);
 // Show raw punycode for IDN domains in the address bar. Prevents IDN homograph
 // attacks where visually identical Unicode characters substitute for ASCII
 // (e.g. аpple.com with Cyrillic а).
@@ -273,11 +279,6 @@ user_pref("browser.xfocontent", true);
 // Improves usability without any privacy regression.
 user_pref("browser.link.open_newwindow.restriction", 0);
 
-// ── BearBlocker — native adblock-rust content classifier ─────────────────────
-user_pref("privacy.trackingprotection.content.protection.enabled", true);
-user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource:///bearblocker/bearblocker-ads.txt|resource:///bearblocker/bearblocker-privacy.txt");
-user_pref("bearbrowser.bearblocker.cosmetic.enabled", true);
-
 // ── BearNav — native keyboard navigation ─────────────────────────────────────
 // f=link hints, j/k=scroll, d/u=half page, gg=top, G=bottom, H/L=back/forward
 user_pref("bearbrowser.nav.keyboard.enabled", true);
@@ -318,15 +319,19 @@ user_pref("layout.css.prefers-color-scheme.content-override", 1);
 user_pref("ui.prefersReducedMotion", 0);
 user_pref("ui.useAccessibilityTheme", 0);
 
-// High-DPI media query normalization: make devicePixelRatio in CSS match our
-// spoofed JS value of 2. privacy.resistFingerprinting handles this in full RFP
-// mode; we set it explicitly so it applies without enabling full RFP.
-user_pref("layout.css.devPixelsPerPx", "2.0");
+// NOTE: devicePixelRatio normalization is owned by RFP. We deliberately do NOT
+// set layout.css.devPixelsPerPx — hardcoding it (e.g. to "2.0", a value that
+// leaked over from the WKWebView JS shield) forces a 2x render scale on
+// non-Retina/external displays and desyncs from RFP's own DPR rounding, making
+// the browser MORE fingerprintable, not less. Let RFP handle it.
 
 // TLS ceiling: offer only TLS 1.2/1.3 so our ClientHello cipher suite list
 // matches the narrow modern-browser set, minimizing JA3 distinctiveness.
 user_pref("security.tls.version.max", 4);
 
-// Disable HTTP/3 QUIC advertisement via Alt-Svc to reduce QUIC-specific
-// fingerprinting surface (QUIC packet sizes and transport parameters).
-user_pref("network.http.http3.enabled", false);
+// HTTP/3/QUIC: left ENABLED (see network.http.http3.enable above). Disabling it
+// would make this browser rarer than the QUIC-speaking majority — the opposite
+// of blending in — and costs performance, while RFP does not require it. Tor
+// Browser likewise does not disable HTTP/3. A prior line here set the misspelled
+// pref `network.http.http3.enabled` (trailing 'd'), which is non-existent and was
+// a silent no-op; removed to eliminate the contradiction.

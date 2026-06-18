@@ -88,8 +88,9 @@ user_pref("privacy.resistFingerprinting.block_mozAddonManager", true);
 // cannot be used as a fingerprint component.
 user_pref("privacy.resistFingerprinting.letterboxing", true);
 
-// Randomise canvas output (RFP covers this, but be explicit).
-user_pref("privacy.resistFingerprinting.randomDataOnCanvasExtract", true);
+// Canvas randomization is always-on under RFP (Firefox bug 1816189). The former
+// privacy.resistFingerprinting.randomDataOnCanvasExtract pref was removed in bug
+// 1670447 and is a no-op — do not re-add it.
 
 // Strict Enhanced Tracking Protection.
 user_pref("browser.contentblocking.category", "strict");
