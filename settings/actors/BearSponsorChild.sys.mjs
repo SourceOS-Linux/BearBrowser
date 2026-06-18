@@ -48,6 +48,30 @@ export class BearSponsorChild extends JSWindowActorChild {
     });
     this.#titleObserver.observe(titleEl, { childList: true, characterData: true });
     this.#checkVideoId();
+    this.#forceHighQuality();
+  }
+
+  #forceHighQuality() {
+    // Set YouTube quality preference via localStorage (survives SPA navigation)
+    const win = this.document?.defaultView;
+    if (!win) return;
+    try {
+      win.localStorage?.setItem(
+        "yt-player-quality",
+        JSON.stringify({ data: "hd2160", expiration: Date.now() + 86400000 * 7 })
+      );
+    } catch { /* storage may be blocked */ }
+    // Also apply via player API when the player element is ready
+    const tryPlayer = () => {
+      const player = this.document?.querySelector("#movie_player");
+      if (player?.setPlaybackQualityRange) {
+        player.setPlaybackQualityRange("hd2160", "hd2160");
+        player.setPlaybackQuality?.("hd2160");
+      } else {
+        this.document?.defaultView?.setTimeout(tryPlayer, 800);
+      }
+    };
+    this.document?.defaultView?.setTimeout(tryPlayer, 1000);
   }
 
   #checkVideoId() {

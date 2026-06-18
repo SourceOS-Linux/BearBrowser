@@ -38,17 +38,17 @@
     {
       "id": "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
       "name": "Video DownloadHelper",
-      "disposition": "allowlist",
-      "allowlist_tier": "manual-unseal",
-      "rationale": "Legitimate use case, no telemetry. Requires explicit unseal per-session."
+      "disposition": "native",
+      "native_replacement": "BearCapture (BearCaptureChild/BearCaptureParent) — scans DOM for video/audio/media links, floating ▼N badge, Cmd+Shift+D panel, queues to Firefox Downloads",
+      "rationale": "Extension used webRequest API (intercepts ALL network traffic) for what is actually a DOM scan + download manager call. BearCapture does the same with zero extension privilege surface."
     },
 
     {
       "id": "{446900e4-71c2-419f-a6a7-df9c091e268b}",
       "name": "Bitwarden",
-      "disposition": "allowlist",
-      "allowlist_tier": "manual-unseal",
-      "rationale": "Open-source, self-hostable. No external telemetry if self-hosted. Acceptable for human-secure with explicit unseal. Never for agent-runtime."
+      "disposition": "native",
+      "native_replacement": "BearVault (BearVaultChild/BearVaultParent) — ⚿ badge on password fields, Cmd+Shift+L fill from OS Keychain (macOS) or libsecret (Linux)",
+      "rationale": "Any extension scanning every page for password fields is a maximal-privilege credential surface. BearVault delegates to the OS keychain directly — no extension runtime, no AMO supply chain, no vault sync. Credentials never touch an extension sandbox."
     },
 
     {
