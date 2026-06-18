@@ -2734,6 +2734,21 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   //     browser_device_sensor_event.js, browser_timezone.js
   NSString *shield=
     @"(function(){'use strict';"
+    // ── Native function spoofing — set up FIRST before any overrides ─────────
+    // Fingerprinters call fn.toString() or Function.prototype.toString.call(fn)
+    // to detect overrides. We intercept toString() and return "[native code]"
+    // strings for any function we register. The override itself is named via
+    // object method shorthand to give .name === 'toString' and .length === 0,
+    // matching the real native exactly.
+    @"const _nativeMap=new WeakMap();"
+    @"const _fpts=Function.prototype.toString;"
+    @"const _toStr={toString(){return _nativeMap.has(this)?_nativeMap.get(this):_fpts.call(this);}}['toString'];"
+    @"Function.prototype.toString=_toStr;"
+    @"_nativeMap.set(Function.prototype.toString,'function toString() { [native code] }');"
+    // _nat(fn, name) — mark fn as native-looking and return it
+    @"const _nat=function(fn,name){"
+    @"  _nativeMap.set(fn,'function '+(name||fn.name||'')+'() { [native code] }');"
+    @"  return fn;};"
     // ── Canvas: hook both toDataURL and getImageData to prevent bypass ──────
     // toDataURL-only hooking lets fingerprinters call getImageData directly.
     @"const _noise=function(d){"
@@ -2815,12 +2830,16 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // plugins / mimeTypes — freeze empty (WKWebView already returns empty, make it non-enumerable)
     @"try{Object.defineProperty(navigator,'plugins',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"
     @"try{Object.defineProperty(navigator,'mimeTypes',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"
-    // ── performance.now() jitter ±1ms (Firefox RFP: browser_reduceTimePrecision) ─
+    // ── performance.now() — 1ms integer floor, no sub-ms jitter ─────────────
+    // Pure floor to integer ms. Adding random jitter within the bucket is
+    // counterproductive: it leaks the bucket boundary via averaging attacks.
+    // Fixed-bucket rounding is what Firefox RFP and Tor Browser actually do.
     @"const _pNow=performance.now.bind(performance);"
-    @"performance.now=function(){return Math.floor(_pNow()/1)*1+Math.random()*0.1;};"
-    // Also clamp Date.now to 100ms buckets to prevent timer reconstruction via Date
+    @"performance.now=_nat(function(){return Math.floor(_pNow());},'now');"
+    // Date.now: 100ms buckets — coarser than performance.now to prevent
+    // timer reconstruction by subtracting a Date.now baseline.
     @"const _dNow=Date.now;"
-    @"Date.now=function(){return Math.floor(_dNow()/100)*100;};"
+    @"Date.now=_nat(function(){return Math.floor(_dNow()/100)*100;},'now');"
     // ── Timezone: normalize to UTC (Firefox RFP: browser_timezone.js) ─────
     @"try{"
     @"  const _rO=Intl.DateTimeFormat.prototype.resolvedOptions;"
@@ -2941,6 +2960,52 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    addEventListener:function(){},removeEventListener:function(){}"
     @"  }),configurable:false});}catch(e){}"
     @"})();"
+    // ── Navigator / window identity normalization ────────────────────────
+    // doNotTrack: '1' is the W3C value for "please don't track"
+    @"try{Object.defineProperty(navigator,'doNotTrack',{get:()=>'1',configurable:false});}catch(e){}"
+    // webdriver: undefined means "not automated"; false is the default that reveals the property exists
+    @"try{Object.defineProperty(navigator,'webdriver',{get:()=>undefined,configurable:false});}catch(e){}"
+    // window.chrome: Safari doesn't expose this; its presence alone signals non-Safari
+    @"try{if('chrome'in window)Object.defineProperty(window,'chrome',{get:()=>undefined,configurable:false});}catch(e){}"
+    // ── Intl locale normalization ─────────────────────────────────────────
+    // Intl APIs can expose OS locale even when navigator.languages is spoofed.
+    // Collator, NumberFormat, ListFormat all expose locale via resolvedOptions().
+    @"try{"
+    @"  const _IC=Intl.Collator.prototype.resolvedOptions;"
+    @"  Intl.Collator.prototype.resolvedOptions=_nat(function(){"
+    @"    const r=_IC.call(this);return{...r,locale:'en-US'};},'resolvedOptions');"
+    @"  if(Intl.NumberFormat){"
+    @"    const _IN=Intl.NumberFormat.prototype.resolvedOptions;"
+    @"    Intl.NumberFormat.prototype.resolvedOptions=_nat(function(){"
+    @"      const r=_IN.call(this);return{...r,locale:'en-US'};},'resolvedOptions');}"
+    @"  if(Intl.ListFormat){"
+    @"    const _IL=Intl.ListFormat.prototype.resolvedOptions;"
+    @"    Intl.ListFormat.prototype.resolvedOptions=_nat(function(){"
+    @"      const r=_IL.call(this);return{...r,locale:'en-US'};},'resolvedOptions');}"
+    @"  if(Intl.PluralRules){"
+    @"    const _IP=Intl.PluralRules.prototype.resolvedOptions;"
+    @"    Intl.PluralRules.prototype.resolvedOptions=_nat(function(){"
+    @"      const r=_IP.call(this);return{...r,locale:'en-US'};},'resolvedOptions');}"
+    @"}catch(e){}"
+    // ── Resource timing — clamp to prevent network topology fingerprinting ─
+    // Resource timing entries expose precise transfer durations (sub-ms) that
+    // reveal network path characteristics unique to the user's connection.
+    // setResourceTimingBufferSize(0) prevents new entries from accumulating;
+    // clear existing ones that loaded before this script ran.
+    @"try{"
+    @"  if(performance.setResourceTimingBufferSize)performance.setResourceTimingBufferSize(0);"
+    @"  if(performance.clearResourceTimings)performance.clearResourceTimings();"
+    @"  if(window.PerformanceObserver){"
+    @"    const _PObs=window.PerformanceObserver;"
+    @"    window.PerformanceObserver=_nat(function(cb){"
+    @"      return new _PObs(function(list,obs){"
+    @"        const entries=list.getEntries().filter(function(e){"
+    @"          return e.entryType!=='resource';});" // strip resource entries; allow paint/longtask
+    @"        if(entries.length)cb({getEntries:function(){return entries;},getEntriesByType:function(t){return entries.filter(function(e){return e.entryType===t;});},getEntriesByName:function(n){return entries.filter(function(e){return e.name===n;});}},obs);"
+    @"      });},'PerformanceObserver');"
+    @"    window.PerformanceObserver.prototype=_PObs.prototype;"
+    @"    window.PerformanceObserver.supportedEntryTypes=_PObs.supportedEntryTypes;}"
+    @"}catch(e){}"
     // ── Web Worker timing precision ───────────────────────────────────────
     // WKUserScript injects only into document (main-thread) JS contexts.
     // Workers have a separate global scope that our shield cannot reach.
@@ -3000,6 +3065,35 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    }catch(e){}"
     @"  });"
     @"},false);"
+    // ── Retroactive native registration ───────────────────────────────────
+    // Prototype methods assigned above are on the real prototype objects now;
+    // register each with _nat so fn.toString() returns "[native code]".
+    @"(function(){"
+    @"  var _reg=["
+    @"    [HTMLCanvasElement.prototype,'toDataURL'],"
+    @"    [HTMLCanvasElement.prototype,'toBlob'],"
+    @"    [CanvasRenderingContext2D.prototype,'getImageData'],"
+    @"    [CanvasRenderingContext2D.prototype,'measureText'],"
+    @"    [WebGLRenderingContext.prototype,'getParameter'],"
+    @"    [WebGLRenderingContext.prototype,'getSupportedExtensions'],"
+    @"    [Intl.DateTimeFormat.prototype,'resolvedOptions'],"
+    @"    [Intl.Collator.prototype,'resolvedOptions'],"
+    @"    [Date.prototype,'getTimezoneOffset'],"
+    @"    [EventTarget.prototype,'addEventListener'],"
+    @"    [RTCPeerConnection.prototype,'constructor'],"
+    @"  ];"
+    @"  _reg.forEach(function(pair){"
+    @"    try{var fn=pair[0][pair[1]];if(fn&&typeof fn==='function')_nat(fn,pair[1]);}catch(e){}});"
+    @"  try{_nat(window.requestAnimationFrame,'requestAnimationFrame');}catch(e){}"
+    @"  try{_nat(window.eval,'eval');}catch(e){}"
+    @"  try{_nat(window.postMessage,'postMessage');}catch(e){}"
+    @"  try{if(window.Worker)_nat(window.Worker,'Worker');}catch(e){}"
+    @"  try{if(window.PerformanceObserver)_nat(window.PerformanceObserver,'PerformanceObserver');}catch(e){}"
+    @"  try{if(window.RTCPeerConnection)_nat(window.RTCPeerConnection,'RTCPeerConnection');}catch(e){}"
+    @"  if(window.WebGL2RenderingContext){"
+    @"    try{_nat(WebGL2RenderingContext.prototype.getParameter,'getParameter');}catch(e){}"
+    @"    try{_nat(WebGL2RenderingContext.prototype.getSupportedExtensions,'getSupportedExtensions');}catch(e){}}"
+    @"})();"
     @"})();";
   WKUserScript *shieldScript=[[WKUserScript alloc]
     initWithSource:shield

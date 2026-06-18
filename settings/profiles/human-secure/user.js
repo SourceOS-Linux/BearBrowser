@@ -33,6 +33,14 @@ user_pref("webgl.enable-webgl2", true);
 // Randomize canvas — site-specific exceptions are still possible via permissions.
 user_pref("privacy.resistFingerprinting.randomDataOnCanvasExtract", true);
 
+// ── Accept-Language / locale normalization ────────────────────────────────────
+// The HTTP Accept-Language header is sent on every request before JS runs and
+// exposes the OS locale at the network level. RFP normalizes it to en-US; these
+// prefs make that explicit and immune to reset. intl.accept_languages also
+// controls Intl API resolvedOptions() locale output in JS.
+user_pref("intl.accept_languages", "en-US, en");
+user_pref("javascript.use_us_english_locale", true);
+
 // ── Engine-level font and timer fingerprinting protection ─────────────────────
 // layout.css.font-visibility controls which fonts are visible to CSS local()
 // resolution in gfxPlatformFontList. 2=base system fonts only (blocks installed

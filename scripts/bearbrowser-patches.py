@@ -240,6 +240,26 @@ def bearbrowser_patches():
             pref_yaml.write_text(_yaml)
             print(f"Fixed StaticPrefList.yaml: canonical bearbrowser.* block placed before bidi.*")
 
+    # ── Accept-Language / Intl locale normalization ───────────────────────────
+    # Patch StaticPrefList.yaml: set en-US defaults for intl prefs that control
+    # both the HTTP Accept-Language header (sent before JS runs) and Intl API
+    # locale output. When privacy.resistFingerprinting=true Firefox normalizes
+    # these, but setting the pref defaults makes it explicit and auditable.
+    _intl_yaml = Path("modules/libpref/init/StaticPrefList.yaml")
+    if _intl_yaml.exists():
+        import re as _ire
+        _iy = _intl_yaml.read_text()
+        # intl.accept_languages default → en-US, en
+        _iy_new, _n = _ire.subn(
+            r'(- name: intl\.accept_languages\n(?:  [^\n]+\n)*?  value: )\"[^\"]+\"',
+            r'\g<1>"en-US, en"',
+            _iy,
+        )
+        if _n:
+            _iy = _iy_new
+            print("-> BearBrowser locale: set intl.accept_languages default to en-US, en")
+        _intl_yaml.write_text(_iy)
+
     # l10n locale patching skipped for dev build (--with-l10n-base removed from mozconfig)
     print("-> Skipping l10n download (dev build — en-US only)")
 
