@@ -283,3 +283,31 @@ user_pref("extensions.pocket.enabled", false);
 
 // No Firefox Accounts / Sync.
 user_pref("identity.fxaccounts.enabled", false);
+
+// -----------------------------------------------------------------------------
+// 5. BEARBLOCKER — native adblock-rust content classifier
+// Same lists as human-secure; agent traffic must not reach ad/tracker networks
+// regardless of what the orchestrating agent requests.
+// Receipt generation is enabled via bearbrowser.runtime.agent below so every
+// block event is logged to bearblocker-receipts.jsonl for audit.
+// -----------------------------------------------------------------------------
+user_pref("privacy.trackingprotection.content.protection.enabled", true);
+user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource:///bearblocker/bearblocker-ads.txt|resource:///bearblocker/bearblocker-privacy.txt");
+// Cosmetic filtering runs in content process — useful even for headless sessions
+// because it prevents ad layout from consuming CPU or triggering layout reflows
+// that would otherwise affect timing-based automation.
+user_pref("bearbrowser.bearblocker.cosmetic.enabled", true);
+
+// -----------------------------------------------------------------------------
+// 6. RUNTIME IDENTITY — declares this session as agent-runtime to in-browser
+// code (BearBlockerPolicy, hold-queue bridge, future governance integrations).
+// -----------------------------------------------------------------------------
+// Tells BearBlockerPolicy to generate receipts for every block event.
+user_pref("bearbrowser.runtime.agent", true);
+// Disables interactive DevTools attach via ThreadActor (CDP remote debugging
+// used by Playwright/WebDriver is unaffected — it bypasses ThreadActor).
+// Prevents a malicious page script from attaching a JS debugger to the agent session.
+user_pref("bearbrowser.debugger.force_detach", true);
+// Silence console API events to the interactive console; CDP log listeners are
+// separate and remain functional.
+user_pref("bearbrowser.console.logging_disabled", true);
