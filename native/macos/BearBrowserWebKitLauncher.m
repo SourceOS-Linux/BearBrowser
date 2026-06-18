@@ -2711,6 +2711,14 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   // Third-party cookie isolation — block cross-site cookies via private KVC key
   @try { [config.websiteDataStore.httpCookieStore
     performSelector:NSSelectorFromString(@"_setStorageBlockingPolicy:") withObject:@1]; } @catch(...) {}
+  // Normalize HTTP Accept-Language header at the network layer before any JS runs.
+  // WKWebView inherits system locale for this header; override to en-US to prevent
+  // locale fingerprinting via request headers (JS-layer Intl spoofing only covers
+  // the JS context, not the actual HTTP header sent on every request).
+  @try {
+    [config setValue:@{@"Accept-Language": @"en-US,en;q=0.9"}
+              forKey:@"_HTTPAdditionalHeaders"];
+  } @catch(...) {}
   // PiP on macOS WKWebView is automatic via native video controls — no config flag needed
   // Font scheme handler — serves bbfont:// requests from bundled woff2 files
   [config setURLSchemeHandler:[[BBFontSchemeHandler alloc]init] forURLScheme:@"bbfont"];
@@ -2827,6 +2835,19 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"try{Object.defineProperty(navigator,'connection',{get:()=>undefined,configurable:false});}catch(e){}"
     // Battery API removed
     @"if(navigator.getBattery)try{delete navigator.__proto__.getBattery;}catch(e){navigator.getBattery=undefined;}"
+    // ── Full navigator identity — must match claimed UA (Safari 17.6 / macOS) ─
+    // WebKit already sets vendor and productSub correctly, but explicitly
+    // asserting them makes the values immune to override by site scripts.
+    @"try{Object.defineProperties(navigator,{"
+    @"  vendor:{get:()=>'Apple Computer, Inc.',configurable:false},"
+    @"  vendorSub:{get:()=>'',configurable:false},"
+    @"  productSub:{get:()=>'20030107',configurable:false},"
+    @"  appName:{get:()=>'Netscape',configurable:false},"
+    @"  product:{get:()=>'Gecko',configurable:false}"
+    @"});}catch(e){}"
+    // Firefox-only properties that leak Gecko even when UA claims Safari
+    @"try{if('oscpu'in navigator)Object.defineProperty(navigator,'oscpu',{get:()=>undefined,configurable:false});}catch(e){}"
+    @"try{if('buildID'in navigator)Object.defineProperty(navigator,'buildID',{get:()=>undefined,configurable:false});}catch(e){}"
     // plugins / mimeTypes — freeze empty (WKWebView already returns empty, make it non-enumerable)
     @"try{Object.defineProperty(navigator,'plugins',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"
     @"try{Object.defineProperty(navigator,'mimeTypes',{get:()=>Object.freeze([]),configurable:false});}catch(e){}"

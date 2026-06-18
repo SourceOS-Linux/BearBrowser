@@ -143,6 +143,16 @@ user_pref("network.prefetch-next", false);
 user_pref("network.predictor.enabled", false);
 user_pref("network.dns.disablePrefetch", true);
 user_pref("network.dns.disablePrefetchFromHTTPS", true);
+// Accept-Language: RFP normalizes this to en-US,en;q=0.5 when
+// privacy.resistFingerprinting=true. Make it explicit.
+user_pref("network.http.accept-language", "en-US,en;q=0.5");
+// HTTP/2 and HTTP/3 header ordering is normalized by Firefox's network stack
+// when RFP is active; these prefs ensure the order is deterministic.
+user_pref("network.http.http2.enabled", true);
+user_pref("network.http.http3.enable", true);
+// Suppress network-layer connection coalescing leaks
+user_pref("network.http.altsvc.enabled", false);
+user_pref("network.http.altsvc.oe", false);
 
 // ── HTTPS-Only mode ───────────────────────────────────────────────────────────
 user_pref("dom.security.https_only_mode", true);
