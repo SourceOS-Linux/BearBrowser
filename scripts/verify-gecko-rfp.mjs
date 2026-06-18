@@ -348,7 +348,12 @@ async function runtimeProbe(profile) {
     const r = await page.evaluate(RUNTIME_PROBE);
     const results = [];
     const add = (pass, label, detail) => results.push({ pass, label, detail });
-    add(r.timezone === 'UTC', 'rfp_timezone_utc', `timezone=${r.timezone}`);
+    // RFP spoofs the timezone to a fixed UTC+0, no-DST cohort value. Firefox
+    // reports the IANA string as "Atlantic/Reykjavik" (not literally "UTC") —
+    // both are privacy-equivalent (offset 0, no location leak, checked below).
+    // Accept either so the cohort string isn't a false negative.
+    add(r.timezone === 'UTC' || r.timezone === 'Atlantic/Reykjavik',
+      'rfp_timezone_neutral', `timezone=${r.timezone}`);
     add(r.tzOffset === 0, 'rfp_tz_offset_zero', `getTimezoneOffset=${r.tzOffset}`);
     add(r.hwConcurrency === 2, 'rfp_hardwareConcurrency_2', `hardwareConcurrency=${r.hwConcurrency}`);
     add(r.languages === '["en-US","en"]' || r.languages === '["en-US"]',

@@ -63,15 +63,16 @@ jobs:
           tar xf firefox-src.tar.xz
       - name: Dry-run apply every anti-fp patch (fail on reject)
         run: |
+          patches="$(pwd)/gecko-patches"
           cd "firefox-${FIREFOX_VERSION}"
           fail=0
           while IFS= read -r p; do
             echo "==> $p"
-            if ! patch -p1 --dry-run -i "../$p"; then
+            if ! patch -p1 --dry-run -i "$p"; then
               echo "::error file=$p::patch does not apply to firefox-${FIREFOX_VERSION}"
               fail=1
             fi
-          done < <(find ../gecko-patches -name '*.patch' | sort)
+          done < <(find "$patches" -name '*.patch' | sort)
           exit $fail
 
   # ── Tier 3: real build + measure the actual binary (manual, large runner) ──
