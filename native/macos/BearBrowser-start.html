@@ -5,25 +5,230 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BearBrowser</title>
 <style>
-:root{color-scheme:dark;--bg:#1f1b16;--panel:#2a241d;--line:#6d4b31;--text:#f4efe7;--muted:#d8cabc;--gold:#f6d28b}
-*{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at 30% 15%,#3a2a1d 0,#1f1b16 45%,#15120f 100%);color:var(--text);display:grid;place-items:center;min-height:100vh}
-.shell{max-width:900px;margin:48px;padding:48px;border:1px solid var(--line);border-radius:30px;background:rgba(42,36,29,.94);box-shadow:0 30px 90px rgba(0,0,0,.35)}
-.bear{font-size:64px}h1{font-size:52px;line-height:1.05;margin:12px 0 14px}p{font-size:18px;line-height:1.55;color:var(--muted)}.status{margin-top:28px;padding:16px 18px;border-radius:18px;background:#3a3027;color:var(--gold);font-weight:700}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}.card{border:1px solid #4d3929;border-radius:18px;padding:18px;background:#241f19}.card strong{display:block;color:var(--text);margin-bottom:8px}code{color:var(--gold)}
-@media(max-width:720px){.grid{grid-template-columns:1fr}.shell{padding:32px;margin:24px}}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #f0f2f4;
+  --surface:   #ffffff;
+  --border:    rgba(0,0,0,.08);
+  --text:      #1d1d1f;
+  --muted:     #6e6e73;
+  --accent:    #1b6b45;
+  --chip-bg:   rgba(27,107,69,.10);
+  --chip-text: #1b6b45;
+  --shadow:    0 1px 3px rgba(0,0,0,.08), 0 4px 16px rgba(0,0,0,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #1c1c1e;
+    --surface:   #2c2c2e;
+    --border:    rgba(255,255,255,.08);
+    --text:      #f5f5f7;
+    --muted:     #98989d;
+    --accent:    #45c87a;
+    --chip-bg:   rgba(69,200,122,.12);
+    --chip-text: #45c87a;
+    --shadow:    0 1px 3px rgba(0,0,0,.3), 0 4px 20px rgba(0,0,0,.2);
+  }
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 32px 24px 48px;
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 44px;
+}
+.wordmark-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+.wordmark-text {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+
+.pills {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 36px;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px;
+  border-radius: 20px;
+  background: var(--chip-bg);
+  color: var(--chip-text);
+  font-size: 12px;
+  font-weight: 500;
+}
+.pill-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 80px);
+  gap: 20px;
+  margin-bottom: 44px;
+}
+.shortcut {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.shortcut-icon {
+  width: 56px; height: 56px;
+  border-radius: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  transition: transform .12s ease, box-shadow .12s ease;
+}
+.shortcut:hover .shortcut-icon {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0,0,0,.10), 0 10px 32px rgba(0,0,0,.08);
+}
+.shortcut-label {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.search-form {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 520px;
+  padding: 10px 16px;
+  margin-bottom: 36px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  transition: box-shadow .15s ease, border-color .15s ease;
+}
+.search-form:focus-within {
+  box-shadow: 0 0 0 3px rgba(69,200,122,.25), 0 2px 8px rgba(0,0,0,.12);
+  border-color: var(--accent);
+}
+.search-form-icon { font-size: 15px; opacity: .45; flex-shrink: 0; }
+.search-form input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  font-size: 15px;
+  font-family: inherit;
+  color: var(--text);
+  padding: 0;
+}
+.search-form input::placeholder { color: var(--muted); }
+.search-form-hint { font-size: 11px; color: var(--muted); opacity: .5; flex-shrink: 0; }
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 </style>
 </head>
 <body>
-<main class="shell">
-<div class="bear">🐻</div>
-<h1>BearBrowser</h1>
-<p>Native BearBrowser bootstrap shell is running. The Dock process and application identity are BearBrowser.</p>
-<p>The governed feature plane is now active: local provenance events, policy-visible action records, and a sidecar status surface.</p>
-<div class="grid">
-  <div class="card"><strong>Provenance</strong><span>Launch and navigation events are recorded locally with redaction.</span></div>
-  <div class="card"><strong>Policy</strong><span>Agentic actions are proposed before authority is granted.</span></div>
+
+<div class="wordmark">
+  <div class="wordmark-icon">🐻</div>
+  <span class="wordmark-text">BearBrowser</span>
 </div>
-<div class="status">Use the Sidecar Status button to inspect local governance state.</div>
-</main>
+
+<div class="pills">
+  <span class="pill"><span class="pill-dot"></span>Provenance active</span>
+  <span class="pill"><span class="pill-dot"></span>Policy governed</span>
+  <span class="pill"><span class="pill-dot"></span>No Google telemetry</span>
+  <span class="pill"><span class="pill-dot"></span>Fingerprint shield</span>
+</div>
+
+<form class="search-form" onsubmit="
+  event.preventDefault();
+  var q=this.querySelector('input').value.trim();
+  if(!q)return;
+  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.navigate)
+    window.webkit.messageHandlers.navigate.postMessage(q);
+  else location.href='https://duckduckgo.com/?q='+encodeURIComponent(q); // fallback only
+">
+  <span class="search-form-icon">🔍</span>
+  <input type="text" placeholder="Search or enter address" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+  <span class="search-form-hint">⌘L</span>
+</form>
+
+<div class="grid">
+  <a class="shortcut" href="https://duckduckgo.com">
+    <div class="shortcut-icon">🦆</div>
+    <span class="shortcut-label">DuckDuckGo</span>
+  </a>
+  <a class="shortcut" href="https://kagi.com">
+    <div class="shortcut-icon">🔍</div>
+    <span class="shortcut-label">Kagi</span>
+  </a>
+  <a class="shortcut" href="https://github.com/SourceOS-Linux/BearBrowser">
+    <div class="shortcut-icon">🐙</div>
+    <span class="shortcut-label">BearBrowser</span>
+  </a>
+  <a class="shortcut" href="https://news.ycombinator.com">
+    <div class="shortcut-icon">🟠</div>
+    <span class="shortcut-label">Hacker News</span>
+  </a>
+</div>
+
+<div class="footer">
+  <span class="status-dot"></span>
+  BearBrowser bootstrap shell · Gecko runtime building
+</div>
+
 </body>
 </html>
