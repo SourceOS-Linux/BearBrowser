@@ -89,7 +89,7 @@ it is a hole.
 
 | Surface | Path | Measured now | Covered by |
 |---------|------|--------------|------------|
-| `CanvasRenderingContext2D.measureText` (+ all `TextMetrics` fields) | canvas → gfxTextRun | 453.549987… subpixel, RFP-noop | W4 chokepoint |
+| `CanvasRenderingContext2D.measureText` (+ all `TextMetrics` fields) | canvas → gfxTextRun | 453.549987… subpixel, RFP-noop | W4 helper |
 | `Element.getBoundingClientRect` / `getClientRects` | layout → gfxTextRun | 453.549987… subpixel, RFP-noop | W4 |
 | `Range.getBoundingClientRect` / `getClientRects` | layout → gfxTextRun | 453.549987… subpixel, RFP-noop | W4 |
 | `Element.offsetWidth/Height`, `scrollWidth/Height`, `clientWidth/Height` | layout | 454 integer, but carries metric | W4 (uniform advances → uniform box) |
@@ -101,26 +101,47 @@ it is a hole.
 | Audio `OfflineAudioContext` (related residual) | WebAudio | stable, RFP-noop | W6 |
 
 Note the two metric paths produce *different* numbers (canvas 453.55 vs SVG
-439.60) — proof a single-API fix is insufficient and the chokepoint must sit below
-both, at the glyph advance.
+439.60) — proof a single-API fix is insufficient; the quantizer must be a shared
+helper called from each path (§2).
 
-## 2. Architecture — the single chokepoint
+## 2. Architecture — `nsRFPService` helper + DOM call sites
 
-Gecko text flow (verify exact symbols against the build source):
+**Correction (grounded in the existing `patches/fpp-canvas-fix.patch`).** The first
+draft proposed quantizing in `gfxShapedText` (gfx layer) as a single chokepoint.
+Reading how this tree actually plumbs RFP shows why that's wrong: RFP gating needs
+the **principal + cookie-jar settings** to call `ShouldResistFingerprinting`, and
+those are only available at the **DOM layer**, not deep in `gfx/thebes`. The canvas
+randomization proves the real pattern — it lives in `dom/canvas/*` and calls
+`nsRFPService::RandomizePixels(GetCookieJarSettings(), PrincipalOrNull(), …)`:
 
 ```
-HarfBuzz shape  →  gfxFont::ShapeText fills gfxShapedWord/gfxShapedText
-                   with per-glyph advances (incl. GPOS kerning)
-                        │
-        ┌───────────────┼────────────────┬───────────────┐
-   canvas measureText   nsTextFrame    SVGTextFrame    Range/BCR
-   (gfxTextRun)        (layout)        (SVG)           (layout)
+patches/fpp-canvas-fix.patch:
+  dom/canvas/CanvasRenderingContext2D.cpp  → nsRFPService::RandomizePixels(...)
+  dom/canvas/ClientWebGLContext.cpp        → gfxUtils::GetImageBufferWithRandomNoise(...)
+  (gated by ImageExtraction::Randomize / EfficientRandomize, principal in hand)
 ```
 
-`gfxShapedText` per-glyph advance is the shared source. **W4 quantizes the advance
-at the point shaping stores it** (`SetGlyphs`/`SetSimpleGlyph`/detailed-glyph
-write), gated on `privacy.resistFingerprinting`. Because every consumer reads from
-gfxShapedText, all of §1's layout/SVG/canvas rows become uniform from one patch.
+So the real architecture mirrors that: **one `nsRFPService` helper, called from each
+DOM entry point that exposes a text metric.** Not a single gfx chokepoint, but a
+single *helper* with a few faithful call sites — exactly how canvas already works.
+
+```
+nsRFPService::SpoofTextMetrics(cookieJarSettings, principal, &metrics)   // new helper
+        ▲              ▲                         ▲                  ▲
+  CanvasRenderingContext2D::MeasureText   Element/Range BCR   SVGTextContentElement::*
+  (dom/canvas)                            (dom/base + layout) (dom/svg)
+```
+
+Trade-off vs the chokepoint dream: a few more call sites, but each one *has* the
+RFP context and matches the established pattern — far more likely to compile and
+be accepted than reaching into `gfxShapedText` without a principal. The quantizer
+math (round to integer CSS px, or derive from font units — §W4) is unchanged; only
+*where* it runs moves up to the DOM, beside the existing canvas RFP code.
+
+Per-glyph note: because all these DOM APIs ultimately read advances that gfx
+already rounds to app-units (gfxFont.h: "each glyph advance is always rounded to
+the nearest appunit"), the helper quantizes the **returned metric** (total advance
++ bounding-box fields) deterministically — uniform, never randomized (§W4).
 
 ## 3. Work items
 
@@ -152,17 +173,22 @@ gfxShapedText, all of §1's layout/SVG/canvas rows become uniform from one patch
   shipping them first makes `sans-serif` resolve to a missing Arimo and fall back
   unpredictably. Ship W1+W2+W3 as one atomic change.
 
-### W4 — Advance quantizer at gfxShapedText — **the chokepoint patch**
-- In the shaped-glyph write path, replace each glyph advance `adv` with a
-  deterministic quantization, gated on RFP:
-  - *T3b (minimum):* round to whole CSS px: `adv = round(adv / appUnitsPerCSSPixel)
-    * appUnitsPerCSSPixel`.
+### W4 — Text-metric quantizer (`nsRFPService` helper + DOM call sites)
+Following the `fpp-canvas-fix.patch` pattern (§2), not a gfx chokepoint.
+- **New helper** in `nsRFPService` (decl in `.h`, body in `.cpp`), styled like
+  `RandomizePixels` — takes cookie-jar settings + principal, early-returns unless
+  `ShouldResistFingerprinting(...)`, then quantizes in place:
+  - *T3b (minimum):* round each exposed length to whole CSS px.
   - *T3c (best, "our own kerning"):* derive from font units —
-    `adv = round(hmtxAdvance * size / unitsPerEm) ...` combined with GPOS deltas,
-    so the value is font-intrinsic and identical on every OS, independent of the
-    platform rasterizer.
-- Also quantize the `TextMetrics` bounding-box fields populated for canvas
-  (`actual/font/emHeight*`) at the canvas measure path so they match.
+    `len = round(Σ hmtxAdvance ± GPOS × size / unitsPerEm)` — font-intrinsic,
+    identical on every OS, independent of the platform rasterizer.
+- **Call sites** (each has the principal in hand, like the canvas patch):
+  - `dom/canvas/CanvasRenderingContext2D::MeasureText` — quantize `width` + every
+    `TextMetrics` field (`actual/font/emHeight*`).
+  - `Element::GetBoundingClientRect` / `GetClientRects`, `Range` equivalents
+    (`dom/base`, via `nsLayoutUtils`) — quantize the returned rect for text.
+  - `SVGTextContentElement::{GetComputedTextLength,GetSubStringLength,
+    GetExtentOfChar,…}` (`dom/svg`).
 - **Uniform, not randomized** — every session/user returns the same value.
   (Contrast canvas/audio, which randomize. Getting this backwards adds entropy.)
 - Verify: `canvas text metric` and `layout text metric` vectors → `int`.
