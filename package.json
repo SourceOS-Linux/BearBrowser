@@ -8,7 +8,9 @@
   "scripts": {
     "bearbrowser:playwright:smoke": "node runtime/playwright-smoke.mjs",
     "bearbrowser:stagehand:check": "node runtime/stagehand-check.mjs",
-    "bearbrowser:deps:verify": "node runtime/verify-runtime-deps.mjs"
+    "bearbrowser:deps:verify": "node runtime/verify-runtime-deps.mjs",
+    "bearbrowser:rfp:verify": "node scripts/verify-gecko-rfp.mjs",
+    "bearbrowser:rfp:verify:static": "node scripts/verify-gecko-rfp.mjs --static-only"
   },
   "dependencies": {
     "playwright": "1.55.1"
