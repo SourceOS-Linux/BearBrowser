@@ -2924,6 +2924,15 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // Fixed-bucket rounding is what Firefox RFP and Tor Browser actually do.
     @"const _pNow=performance.now.bind(performance);"
     @"performance.now=_nat(function(){return Math.floor(_pNow());},'now');"
+    // performance.timeOrigin — the epoch-relative page-start timestamp.
+    // Unclamped it is a high-precision float (sub-ms) unique per page load.
+    // Tor Browser clamps to 100ms buckets. Match that here.
+    @"try{"
+    @"  const _origTO=performance.timeOrigin;"
+    @"  Object.defineProperty(performance,'timeOrigin',{"
+    @"    get:_nat(function(){return Math.floor(_origTO/100)*100;},'timeOrigin'),"
+    @"    configurable:false});"
+    @"}catch(e){}"
     // Date.now: 100ms buckets — coarser than performance.now to prevent
     // timer reconstruction by subtracting a Date.now baseline.
     @"const _dNow=Date.now;"
@@ -3005,10 +3014,21 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  try{Object.defineProperty(window,'SpeechSynthesisVoice',{value:undefined,configurable:true});}catch(e){}"
     @"}"
     // ── WebRTC IP leak ────────────────────────────────────────────────────
-    @"const _RPC=window.RTCPeerConnection||window.webkitRTCPeerConnection;"
-    @"if(_RPC){window.RTCPeerConnection=function(cfg,con){"
-    @"  return new _RPC(cfg?{...cfg,iceServers:[]}:null,con);};"
-    @"  window.RTCPeerConnection.prototype=_RPC.prototype;}"
+    // Stripping iceServers alone does NOT prevent local IP exposure:
+    // mDNS candidates (*.local) are generated regardless of iceServers config.
+    // The correct fix is to suppress icecandidate events at the object level
+    // so no candidate (host, srflx, relay, mDNS) ever fires to page JS.
+    @"try{const _RPC=window.RTCPeerConnection||window.webkitRTCPeerConnection;"
+    @"if(_RPC){const _rpcW=_nat(function(cfg,con){"
+    @"  const pc=new _RPC(cfg,con);"
+    @"  const _origAEL=pc.addEventListener.bind(pc);"
+    @"  pc.addEventListener=function(t,fn,opts){"
+    @"    if(t==='icecandidate')return;return _origAEL(t,fn,opts);};"
+    @"  Object.defineProperty(pc,'onicecandidate',{"
+    @"    set:function(){},get:function(){return null;},configurable:true});"
+    @"  return pc;},'RTCPeerConnection');"
+    @"  _rpcW.prototype=_RPC.prototype;window.RTCPeerConnection=_rpcW;"
+    @"}}catch(e){}"
     // ── window.name — cross-origin tracking channel ──────────────────────
     // window.name persists across same-tab navigations to other origins and is a
     // classic tracking vector (site sets name = userId, navigates away, partner
@@ -3153,6 +3173,31 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    const _ILoW=function(tag,opts){return new _ILo('en-US',opts);};"
     @"    _ILoW.prototype=_ILo.prototype;"
     @"    try{window.Intl=Object.assign(Object.create(Intl),{Locale:_ILoW});}catch(e){}}"
+    // Intl.supportedValuesOf — returns the ICU-version-specific list of supported
+    // timezone/calendar/currency names. JSC and V8 may differ by ICU era; return
+    // fixed Chrome-matching lists for the short enumerations (calendar, collation,
+    // numberingSystem, unit) and sort the native list for timeZone/currency so ICU
+    // version reordering cannot be used as a fingerprint.
+    @"  if(typeof Intl.supportedValuesOf==='function'){"
+    @"    const _sVO=Intl.supportedValuesOf.bind(Intl);"
+    @"    const _sVOCal=['buddhist','chinese','coptic','dangi','ethioaa','ethiopic',"
+    @"      'gregory','hebrew','indian','islamic','islamic-civil','islamic-rgsa',"
+    @"      'islamic-tbla','islamic-umalqura','iso8601','japanese','persian','roc'];"
+    @"    const _sVOCol=['compat','dict','emoji','eor','phonebk','phonetic','pinyin',"
+    @"      'reformed','searchjl','stroke','trad','unihan','zhuyin'];"
+    @"    const _sVONS=['adlm','ahom','arab','arabext','bali','beng','bhks','brah',"
+    @"      'cakm','cham','deva','diak','fullwide','gong','gonm','gujr','guru','hanidec',"
+    @"      'hmng','hmnp','java','kali','khmr','knda','kthi','laoo','latn','lepc','limb',"
+    @"      'mathbold','mathdbl','mathmonobold','mathrm','mathsans','mathsansbold','modi',"
+    @"      'mong','mroo','mtei','mymr','mymrshan','mymrtlng','newa','nkoo','olck','orya',"
+    @"      'osma','rohg','saur','segment','shrd','sind','sinh','sora','sund','takr','talu',"
+    @"      'tamldec','telu','thai','tibt','tirh','vaii','wara','wcho'];"
+    @"    Intl.supportedValuesOf=_nat(function(key){"
+    @"      if(key==='calendar')return _sVOCal.slice();"
+    @"      if(key==='collation')return _sVOCol.slice();"
+    @"      if(key==='numberingSystem')return _sVONS.slice();"
+    @"      try{return _sVO(key).slice().sort();}catch(e){return [];}"
+    @"    },'supportedValuesOf');}"
     @"}catch(e){}"
     // ── Resource timing — clamp to prevent network topology fingerprinting ─
     // Resource timing entries expose precise transfer durations (sub-ms) that
@@ -3268,6 +3313,14 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    }"
     @"    return _pQ(desc);"
     @"  },'query');"
+    @"}}catch(e){}"
+    // Notification.permission — static property on the Notification constructor.
+    // WKWebView defaults to 'default'; Brave/Tor return 'denied'. The permission
+    // cluster (camera/mic/geo/notifications) is hashed by creepjs as a unit.
+    @"try{if(window.Notification){"
+    @"  Object.defineProperty(Notification,'permission',{"
+    @"    get:_nat(function(){return 'denied';},'permission'),"
+    @"    configurable:false});"
     @"}}catch(e){}"
     // ── StorageManager.estimate — fixed quota prevents storage fingerprinting ─
     // Real quota and usage vary by device, OS, and profile state.

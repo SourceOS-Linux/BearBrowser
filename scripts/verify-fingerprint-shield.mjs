@@ -360,6 +360,29 @@ const PROBE = `(async function() {
     results['svg_getBBox_is_number'] = { got: String(e), expected: 'n/a', pass: true };
   }
 
+  // ── performance.timeOrigin — must be clamped to 100ms bucket ───────────
+  checkTrue('perf_timeOrigin_is_100ms_bucket', performance.timeOrigin % 100 === 0);
+
+  // ── Intl.supportedValuesOf — must return fixed Chrome-matching lists ─────
+  if (typeof Intl.supportedValuesOf === 'function') {
+    const _cals = Intl.supportedValuesOf('calendar');
+    checkTrue('intl_supportedValues_calendar_has_gregory', _cals.indexOf('gregory') >= 0);
+    checkTrue('intl_supportedValues_calendar_no_extra', _cals.length <= 20);
+    const _cols = Intl.supportedValuesOf('collation');
+    checkTrue('intl_supportedValues_collation_has_pinyin', _cols.indexOf('pinyin') >= 0);
+  } else {
+    results['intl_supportedValues_calendar_has_gregory'] = { got: 'n/a', expected: 'n/a', pass: true };
+    results['intl_supportedValues_calendar_no_extra']     = { got: 'n/a', expected: 'n/a', pass: true };
+    results['intl_supportedValues_collation_has_pinyin']  = { got: 'n/a', expected: 'n/a', pass: true };
+  }
+
+  // ── Notification.permission — must be 'denied' ───────────────────────────
+  if (window.Notification) {
+    check('notification_permission_denied', Notification.permission, 'denied');
+  } else {
+    results['notification_permission_denied'] = { got: 'n/a', expected: 'n/a', pass: true };
+  }
+
   // ── Math precision — JSC vs V8 ULP divergences (creepjs probe) ─────────
   // Each check verifies we return V8's float64 value, not JSC's.
   check('math_acos_0123',   Math.acos(0.123),                1.4474840516030247);
