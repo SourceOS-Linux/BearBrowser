@@ -149,6 +149,18 @@ const PROBE = `async () => {
     r.textWidth = tm.width;
     r.textMetrics = (Math.abs(tm.width - Math.round(tm.width)) < 1e-6) ? 'int' : 'subpixel';
   } catch(e) { r.textMetrics = 'ERR'; }
+  // Layout-path text metric — a DISTINCT computation from canvas measureText
+  // (getBoundingClientRect / SVG getComputedTextLength). A fix that only covers
+  // canvas would leave this leaking, so we track it separately.
+  try {
+    const sp = document.createElement('span');
+    sp.style.font = '32px sans-serif'; sp.style.whiteSpace = 'nowrap';
+    sp.textContent = 'AVA To Wa Yo PAW fjffifl 9.9.9.9';
+    document.body.appendChild(sp);
+    const bw = sp.getBoundingClientRect().width;
+    r.layoutMetrics = (Math.abs(bw - Math.round(bw)) < 1e-6) ? 'int' : 'subpixel';
+    sp.remove();
+  } catch(e) { r.layoutMetrics = 'ERR'; }
   // WebRTC ICE local-IP leak. mDNS (*.local) candidates are obfuscated and not a
   // real IP leak; only a raw private/public IP counts. 'clean' = no raw IP exposed.
   r.webrtcLeak = await new Promise((resolve) => {
@@ -206,7 +218,8 @@ const VECTORS = [
   { key: 'webglUnmaskedRenderer', label: 'WebGL renderer', kind: 'mask' },
   { key: 'webglExtCount', label: 'WebGL ext count', kind: 'mask' },
   { key: 'fontsDetected', label: 'non-base fonts', kind: 'fixed', expect: '0/14' },
-  { key: 'textMetrics', label: 'text-metric readback', kind: 'fixed', expect: 'int' },
+  { key: 'textMetrics', label: 'canvas text metric', kind: 'fixed', expect: 'int' },
+  { key: 'layoutMetrics', label: 'layout text metric', kind: 'fixed', expect: 'int' },
   { key: 'plugins', label: 'plugins', kind: 'mask', cohort: (a) => a === 0 },
   { key: 'webrtcLeak', label: 'WebRTC IP leak', kind: 'fixed', expect: 'clean' },
 ];
