@@ -61,7 +61,7 @@ const PROBE = `(async function() {
   check('navigator.platform', navigator.platform, 'MacIntel');
   check('navigator.maxTouchPoints', navigator.maxTouchPoints, 0);
   check('navigator.hardwareConcurrency', navigator.hardwareConcurrency, 4);
-  check('navigator.vendor', navigator.vendor, 'Google Inc.');
+  check('navigator.vendor', navigator.vendor, 'Apple Computer, Inc.');
   check('navigator.productSub', navigator.productSub, '20030107');
   check('navigator.languages[0]', (navigator.languages||[])[0], 'en-US');
   check('navigator.doNotTrack', navigator.doNotTrack, '1');
@@ -73,10 +73,8 @@ const PROBE = `(async function() {
   results['navigator.webdriver'] = { got: String(navigator.webdriver), expected: '!true', pass: navigator.webdriver !== true };
   checkUndef('navigator.oscpu', navigator.oscpu);
   checkUndef('navigator.buildID', navigator.buildID);
-  checkTrue('window.chrome_is_object', typeof window.chrome === 'object' && window.chrome !== null);
-  checkTrue('window.chrome_has_csi', typeof window.chrome.csi === 'function');
-  checkTrue('window.chrome_has_runtime', typeof window.chrome.runtime === 'object');
-  checkTrue('window.chrome_app_not_installed', window.chrome.app && window.chrome.app.isInstalled === false);
+  // window.chrome: Safari/WKWebView does not expose this — consistent with our Safari UA
+  checkUndef('window.chrome', window.chrome);
 
   // Timing precision
   const t0 = performance.now();
@@ -366,27 +364,15 @@ const PROBE = `(async function() {
   // ── navigator.pdfViewerEnabled — Chrome 104+ property ──────────────────
   checkTrue('navigator_pdfViewerEnabled', navigator.pdfViewerEnabled === true);
 
-  // ── fingerprintjs isChromium() — 6 webkit-prefixed Chromium signals ──────
-  checkTrue('fp_webkitPersistentStorage', 'webkitPersistentStorage' in navigator);
-  checkTrue('fp_webkitTemporaryStorage',  'webkitTemporaryStorage' in navigator);
-  checkTrue('fp_webkitResolveLocalFS',    typeof window.webkitResolveLocalFileSystemURL === 'function');
-  checkTrue('fp_BatteryManager',          typeof window.BatteryManager !== 'undefined');
-  checkTrue('fp_webkitSpeechGrammar',     typeof window.webkitSpeechGrammar === 'function');
+  // ── WebKit-prefixed API presence (Safari-consistent) ────────────────────
+  checkTrue('webkit_webkitPersistentStorage', 'webkitPersistentStorage' in navigator);
+  checkTrue('webkit_webkitTemporaryStorage',  'webkitTemporaryStorage' in navigator);
+  checkTrue('webkit_webkitResolveLocalFS',    typeof window.webkitResolveLocalFileSystemURL === 'function');
+  checkTrue('webkit_webkitSpeechGrammar',     typeof window.webkitSpeechGrammar === 'function');
 
-  // ── Chrome-only API stubs (creepjs window-key hash) ────────────────────
-  checkTrue('chrome_showOpenFilePicker',  typeof window.showOpenFilePicker === 'function');
-  checkTrue('chrome_showSaveFilePicker',  typeof window.showSaveFilePicker === 'function');
-  checkTrue('chrome_showDirPicker',       typeof window.showDirectoryPicker === 'function');
-  checkTrue('chrome_EyeDropper',          typeof window.EyeDropper === 'function');
-  checkTrue('chrome_scheduler',           typeof window.scheduler === 'object');
-  checkTrue('chrome_trustedTypes',        typeof window.trustedTypes === 'object');
-  checkTrue('chrome_navigation',          typeof window.navigation === 'object');
-
-  // ── WebKit-only API removal (absent in Chrome) ───────────────────────────
-  checkTrue('no_caretRangeFromPoint',   typeof document.caretRangeFromPoint === 'undefined');
+  // ── Deprecated WebKit global removal (clean modern Safari 17 profile) ───
   checkTrue('no_WebKitCSSMatrix',       typeof window.WebKitCSSMatrix === 'undefined');
   checkTrue('no_webkitStorageInfo',     typeof window.webkitStorageInfo === 'undefined');
-  checkTrue('perf_memory_exists',       typeof performance.memory === 'object');
 
   // ── performance.timeOrigin — must be clamped to 100ms bucket ───────────
   checkTrue('perf_timeOrigin_is_100ms_bucket', performance.timeOrigin % 100 === 0);

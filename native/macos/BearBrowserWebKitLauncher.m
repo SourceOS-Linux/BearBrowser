@@ -2880,9 +2880,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // WebKit already sets vendor and productSub correctly, but explicitly
     // asserting them makes the values immune to override by site scripts.
     @"try{Object.defineProperties(navigator,{"
-    // Chrome returns 'Google Inc.' — fingerprintjs uses vendor.indexOf('Google')===0
-    // as one of its 7 isChromium() signals. 'Apple Computer, Inc.' fails this check.
-    @"  vendor:{get:()=>'Google Inc.',configurable:false},"
+    @"  vendor:{get:()=>'Apple Computer, Inc.',configurable:false},"
     @"  vendorSub:{get:()=>'',configurable:false},"
     @"  productSub:{get:()=>'20030107',configurable:false},"
     @"  appName:{get:()=>'Netscape',configurable:false},"
@@ -3055,10 +3053,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  _obs.observe(document,{childList:true,subtree:false});"
     @"  window.addEventListener('beforeunload',function(){window.name='';},true);"
     @"}catch(e){}"
-    // ── fingerprintjs isChromium() signals — 6 legacy webkit-prefixed APIs ──
-    // fingerprintjs isChromium() requires ≥5 of 7 legacy Chromium signals.
-    // Chrome retained these old prefixed APIs for compat; WKWebView never had them.
-    // Their absence causes fingerprintjs to report this session as non-Chromium.
+    // ── WebKit-prefixed API consistency ───────────────────────────────────
+    // These webkit-prefixed APIs are legacy but present in WKWebView/Safari.
+    // Ensure they exist so WKWebView presents a complete Safari-compatible profile.
     @"try{if(!navigator.webkitPersistentStorage)"
     @"  Object.defineProperty(navigator,'webkitPersistentStorage',{get:function(){"
     @"    return{requestQuota:function(){},queryUsageAndQuota:function(){}};},"
@@ -3069,58 +3066,16 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  configurable:false});}catch(e){}"
     @"try{if(!window.webkitResolveLocalFileSystemURL)"
     @"  window.webkitResolveLocalFileSystemURL=function(){};}catch(e){}"
-    @"try{if(!window.BatteryManager)window.BatteryManager=function BatteryManager(){};}catch(e){}"
     @"try{if(!window.webkitMediaStream&&window.MediaStream)"
     @"  window.webkitMediaStream=window.MediaStream;}catch(e){}"
     @"try{if(!window.webkitSpeechGrammar)"
     @"  window.webkitSpeechGrammar=function webkitSpeechGrammar(){};}catch(e){}"
-    // ── Chrome-specific API stubs — for creepjs window-key hash ──────────
-    // creepjs hashes Object.getOwnPropertyNames(window) against a Chrome reference
-    // list. Chrome-only keys absent here will shift the hash to non-Chrome.
-    // Add minimal stubs (existence only; all async throw AbortError when called).
-    @"(function(){"
-    @"  const _abort=function(){return Promise.reject(new DOMException('AbortError','AbortError'));};"
-    @"  if(!window.showOpenFilePicker)window.showOpenFilePicker=_abort;"
-    @"  if(!window.showSaveFilePicker)window.showSaveFilePicker=_abort;"
-    @"  if(!window.showDirectoryPicker)window.showDirectoryPicker=_abort;"
-    @"  if(!window.EyeDropper)window.EyeDropper=function EyeDropper(){"
-    @"    this.open=_abort;};"
-    @"  if(!window.scheduler)window.scheduler={"
-    @"    postTask:function(cb,opts){return Promise.resolve().then(cb);},"
-    @"    yield:function(){return Promise.resolve();}};"
-    @"  if(!window.Scheduler)window.Scheduler=function Scheduler(){};"
-    @"  if(!window.trustedTypes)window.trustedTypes={"
-    @"    createPolicy:function(n,r){return r;},"
-    @"    isHTML:function(){return false;},"
-    @"    isScript:function(){return false;},"
-    @"    isScriptURL:function(){return false;}};"
-    @"  if(!window.navigation)window.navigation={"
-    @"    entries:function(){return [];},"
-    @"    navigate:_abort,"
-    @"    reload:_abort,"
-    @"    back:_abort,"
-    @"    forward:_abort};"
-    @"})();"
-    // ── WebKit-only APIs — absent in Chrome, probed by creepjs/fingerprintjs ─
-    // These APIs exist in WebKit/WKWebView but not in modern Chrome. Their
-    // presence alone fingerprints the JS engine. Remove them so the profile
-    // matches a real Chrome browser.
-    // caretRangeFromPoint: WebKit-only; Chrome uses caretPositionFromPoint.
-    @"try{if(typeof document.caretRangeFromPoint!=='undefined')"
-    @"  document.caretRangeFromPoint=undefined;}catch(e){}"
-    // WebKitCSSMatrix: removed from Chrome in 2014; still in WebKit.
+    // ── Deprecated WebKit APIs — consistently absent from modern Safari 17 ──
+    // These old webkit-prefixed globals were removed from Safari 12+ and
+    // serve no legitimate use in modern WKWebView. Removing them gives the
+    // browser a cleaner, modern Safari profile and reduces API surface.
     @"try{if(window.WebKitCSSMatrix)window.WebKitCSSMatrix=undefined;}catch(e){}"
-    // webkitStorageInfo: deprecated, removed from Chrome; present in WebKit.
     @"try{if(window.webkitStorageInfo)window.webkitStorageInfo=undefined;}catch(e){}"
-    // webkitRequestFileSystem: same — Chrome removed, WebKit retained.
-    @"try{if(window.webkitRequestFileSystem)window.webkitRequestFileSystem=undefined;}catch(e){}"
-    // performance.memory: Chrome-only API (non-standard). WKWebView lacks it;
-    // its absence reveals non-Chrome. Return a stub with fixed 0 values.
-    @"try{if(!performance.memory){"
-    @"  Object.defineProperty(performance,'memory',{"
-    @"    get:function(){return{usedJSHeapSize:0,totalJSHeapSize:0,jsHeapSizeLimit:2172649472};},"
-    @"    configurable:false});"
-    @"}}catch(e){}"
     // ── WebGPU — delete navigator.gpu entirely (Bug 2043403) ─────────────
     // GPU adapter.requestAdapterInfo() exposes vendor, architecture, device, description
     // at hardware-serial granularity. No partial fix is adequate; remove the API.
@@ -3207,25 +3162,10 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // missing or undefined instance property.
     @"try{Object.defineProperty(Navigator.prototype,'doNotTrack',{get:()=>'1',configurable:true});}catch(e){}"
     @"try{Object.defineProperty(Navigator.prototype,'webdriver',{get:()=>undefined,configurable:true});}catch(e){}"
-    // window.chrome: Chrome exposes this as an object; its absence signals non-Chrome.
-    // creepjs and fingerprintjs both probe window.chrome.app, .csi, .loadTimes, .runtime.
-    // Always install a Chrome-matching stub, overwriting any WebKit chrome object.
-    @"try{const _chromeStub={"
-    @"  app:{isInstalled:false,InstallState:Object.freeze({DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'}),"
-    @"    RunningState:Object.freeze({CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'}),"
-    @"    getDetails:function(){return null;},getIsInstalled:function(){return false;},runningState:function(){return 'cannot_run';}},"
-    @"  csi:_nat(function(){return{onloadT:Date.now(),pageT:Date.now(),startE:0,tran:15};},'csi'),"
-    @"  loadTimes:_nat(function(){return{commitLoadTime:Date.now()/1000,connectionInfo:'h2',finishDocumentLoadTime:0,"
-    @"    finishLoadTime:0,firstPaintAfterLoadTime:0,firstPaintTime:0,navigationType:'Other',npnNegotiatedProtocol:'h2',"
-    @"    requestTime:Date.now()/1000,startLoadTime:Date.now()/1000,wasAlternateProtocolAvailable:false,"
-    @"    wasFetchedViaSpdy:false,wasNpnNegotiated:true};},'loadTimes'),"
-    @"  runtime:{connect:function(){},sendMessage:function(){},id:undefined,"
-    @"    onConnect:{addListener:function(){},removeListener:function(){},"
-    @"      hasListener:function(){return false;}},"
-    @"    onMessage:{addListener:function(){},removeListener:function(){},"
-    @"      hasListener:function(){return false;}}}"
-    @"};"
-    @"Object.defineProperty(window,'chrome',{get:()=>_chromeStub,configurable:false});}catch(e){}"
+    // window.chrome: Safari/WKWebView does not expose this object. Its absence
+    // is consistent with our Safari UA. If WebKit ever adds a chrome property,
+    // hide it to prevent leaking WebKit internals.
+    @"try{if('chrome'in window)Object.defineProperty(window,'chrome',{get:()=>undefined,configurable:false});}catch(e){}"
     // ── Intl locale normalization ─────────────────────────────────────────
     // Intl APIs can expose OS locale even when navigator.languages is spoofed.
     // Collator, NumberFormat, ListFormat all expose locale via resolvedOptions().
