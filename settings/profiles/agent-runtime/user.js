@@ -127,6 +127,12 @@ user_pref("privacy.partition.network_state.ocsp_cache", true);
 user_pref("privacy.partition.serviceWorkers", true);
 user_pref("privacy.partition.bloburl_per_agent_cluster", true);
 user_pref("privacy.firstparty.isolate", false); // dFPI supersedes legacy FPI; avoid conflict
+// QUIC/TLS cross-connection supercookie defense-in-depth: disable 0-RTT early
+// data. The cross-site linkability of QUIC NEW_TOKEN tokens (RFC 9000 §8.1/§19.7)
+// and TLS/QUIC 0-RTT session tickets (RFC 9001 §4.6, RFC 8446 §C.4) is already
+// closed by network-state partitioning above; disabling early data additionally
+// removes the 0-RTT replay surface. Mirrors human-secure.
+user_pref("security.tls.enable_0rtt_data", false);
 
 // DNS over HTTPS — strict mode, no fallback to OS resolver.
 // Prevents DNS-level eavesdropping and poisoning.

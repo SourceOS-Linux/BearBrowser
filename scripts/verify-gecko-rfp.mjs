@@ -80,6 +80,11 @@ const REQUIRED = {
   'media.peerconnection.ice.no_host': true,
   'media.peerconnection.ice.default_address_only': true,
   'intl.accept_languages': 'en-US, en',
+  // Network-state isolation: the decisive defense against QUIC NEW_TOKEN /
+  // TLS-0-RTT cross-connection supercookies (partitions them by first party).
+  'privacy.partition.network_state': true,
+  // Defense-in-depth: no 0-RTT early data (removes the QUIC/TLS replay surface).
+  'security.tls.enable_0rtt_data': false,
 };
 
 // Removed / deprecated prefs that are silent no-ops in current Firefox. Their

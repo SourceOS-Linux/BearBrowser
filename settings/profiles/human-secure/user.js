@@ -335,3 +335,19 @@ user_pref("security.tls.version.max", 4);
 // Browser likewise does not disable HTTP/3. A prior line here set the misspelled
 // pref `network.http.http3.enabled` (trailing 'd'), which is non-existent and was
 // a silent no-op; removed to eliminate the contradiction.
+
+// ── QUIC / TLS cross-connection supercookie protection ───────────────────────
+// With HTTP/3 + DoH on, the real cross-connection tracking vectors are server-
+// issued, client-replayed opaque blobs that act as supercookies:
+//   - QUIC NEW_TOKEN address-validation tokens (RFC 9000 §8.1/§19.7/§21)
+//   - TLS 1.3 / QUIC 0-RTT session tickets / PSK (RFC 9001 §4.6, RFC 8446 §C.4)
+// The DECISIVE mitigation is privacy.partition.network_state (set true above),
+// which partitions the connection pool, TLS tickets, 0-RTT state AND the QUIC
+// NEW_TOKEN store by first-party site — so a tracker present on two sites gets
+// different token/ticket state and cannot link the visits. (Note: RFP does NOT
+// cover any of this; it is purely the partitioning + security.tls prefs.)
+// Defense-in-depth: disable 0-RTT early data. 0-RTT's added risk over normal
+// resumption is replay (RFC 8446 §8); the linkable identifier is the ticket
+// itself, which partitioning already isolates. Disabling early data is a
+// conservative hardening with near-zero downside (slight resumption latency).
+user_pref("security.tls.enable_0rtt_data", false);
