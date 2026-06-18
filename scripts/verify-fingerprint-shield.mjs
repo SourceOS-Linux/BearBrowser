@@ -363,6 +363,22 @@ const PROBE = `(async function() {
   // ── navigator.pdfViewerEnabled — Chrome 104+ property ──────────────────
   checkTrue('navigator_pdfViewerEnabled', navigator.pdfViewerEnabled === true);
 
+  // ── fingerprintjs isChromium() — 6 webkit-prefixed Chromium signals ──────
+  checkTrue('fp_webkitPersistentStorage', 'webkitPersistentStorage' in navigator);
+  checkTrue('fp_webkitTemporaryStorage',  'webkitTemporaryStorage' in navigator);
+  checkTrue('fp_webkitResolveLocalFS',    typeof window.webkitResolveLocalFileSystemURL === 'function');
+  checkTrue('fp_BatteryManager',          typeof window.BatteryManager !== 'undefined');
+  checkTrue('fp_webkitSpeechGrammar',     typeof window.webkitSpeechGrammar === 'function');
+
+  // ── Chrome-only API stubs (creepjs window-key hash) ────────────────────
+  checkTrue('chrome_showOpenFilePicker',  typeof window.showOpenFilePicker === 'function');
+  checkTrue('chrome_showSaveFilePicker',  typeof window.showSaveFilePicker === 'function');
+  checkTrue('chrome_showDirPicker',       typeof window.showDirectoryPicker === 'function');
+  checkTrue('chrome_EyeDropper',          typeof window.EyeDropper === 'function');
+  checkTrue('chrome_scheduler',           typeof window.scheduler === 'object');
+  checkTrue('chrome_trustedTypes',        typeof window.trustedTypes === 'object');
+  checkTrue('chrome_navigation',          typeof window.navigation === 'object');
+
   // ── WebKit-only API removal (absent in Chrome) ───────────────────────────
   checkTrue('no_caretRangeFromPoint',   typeof document.caretRangeFromPoint === 'undefined');
   checkTrue('no_WebKitCSSMatrix',       typeof window.WebKitCSSMatrix === 'undefined');

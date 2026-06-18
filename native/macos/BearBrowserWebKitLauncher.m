@@ -3053,6 +3053,52 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  _obs.observe(document,{childList:true,subtree:false});"
     @"  window.addEventListener('beforeunload',function(){window.name='';},true);"
     @"}catch(e){}"
+    // ── fingerprintjs isChromium() signals — 6 legacy webkit-prefixed APIs ──
+    // fingerprintjs isChromium() requires ≥5 of 7 legacy Chromium signals.
+    // Chrome retained these old prefixed APIs for compat; WKWebView never had them.
+    // Their absence causes fingerprintjs to report this session as non-Chromium.
+    @"try{if(!navigator.webkitPersistentStorage)"
+    @"  Object.defineProperty(navigator,'webkitPersistentStorage',{get:function(){"
+    @"    return{requestQuota:function(){},queryUsageAndQuota:function(){}};},"
+    @"  configurable:false});}catch(e){}"
+    @"try{if(!navigator.webkitTemporaryStorage)"
+    @"  Object.defineProperty(navigator,'webkitTemporaryStorage',{get:function(){"
+    @"    return{requestQuota:function(){},queryUsageAndQuota:function(){}};},"
+    @"  configurable:false});}catch(e){}"
+    @"try{if(!window.webkitResolveLocalFileSystemURL)"
+    @"  window.webkitResolveLocalFileSystemURL=function(){};}catch(e){}"
+    @"try{if(!window.BatteryManager)window.BatteryManager=function BatteryManager(){};}catch(e){}"
+    @"try{if(!window.webkitMediaStream&&window.MediaStream)"
+    @"  window.webkitMediaStream=window.MediaStream;}catch(e){}"
+    @"try{if(!window.webkitSpeechGrammar)"
+    @"  window.webkitSpeechGrammar=function webkitSpeechGrammar(){};}catch(e){}"
+    // ── Chrome-specific API stubs — for creepjs window-key hash ──────────
+    // creepjs hashes Object.getOwnPropertyNames(window) against a Chrome reference
+    // list. Chrome-only keys absent here will shift the hash to non-Chrome.
+    // Add minimal stubs (existence only; all async throw AbortError when called).
+    @"(function(){"
+    @"  const _abort=function(){return Promise.reject(new DOMException('AbortError','AbortError'));};"
+    @"  if(!window.showOpenFilePicker)window.showOpenFilePicker=_abort;"
+    @"  if(!window.showSaveFilePicker)window.showSaveFilePicker=_abort;"
+    @"  if(!window.showDirectoryPicker)window.showDirectoryPicker=_abort;"
+    @"  if(!window.EyeDropper)window.EyeDropper=function EyeDropper(){"
+    @"    this.open=_abort;};"
+    @"  if(!window.scheduler)window.scheduler={"
+    @"    postTask:function(cb,opts){return Promise.resolve().then(cb);},"
+    @"    yield:function(){return Promise.resolve();}};"
+    @"  if(!window.Scheduler)window.Scheduler=function Scheduler(){};"
+    @"  if(!window.trustedTypes)window.trustedTypes={"
+    @"    createPolicy:function(n,r){return r;},"
+    @"    isHTML:function(){return false;},"
+    @"    isScript:function(){return false;},"
+    @"    isScriptURL:function(){return false;}};"
+    @"  if(!window.navigation)window.navigation={"
+    @"    entries:function(){return [];},"
+    @"    navigate:_abort,"
+    @"    reload:_abort,"
+    @"    back:_abort,"
+    @"    forward:_abort};"
+    @"})();"
     // ── WebKit-only APIs — absent in Chrome, probed by creepjs/fingerprintjs ─
     // These APIs exist in WebKit/WKWebView but not in modern Chrome. Their
     // presence alone fingerprints the JS engine. Remove them so the profile
