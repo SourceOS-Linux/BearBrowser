@@ -41,7 +41,7 @@ if (!noShield) {
 
 // ── Fingerprint probe — runs inside the browser page ────────────────────────
 // Returns a results object: { vectorName: { got, pass } }
-const PROBE = `(function() {
+const PROBE = `(async function() {
   const results = {};
   function check(name, got, expected) {
     const pass = (got === expected) || (expected === 'NATIVE' && typeof got === 'string' && got.includes('[native code]'));
@@ -138,6 +138,65 @@ const PROBE = `(function() {
   // Resource timing suppressed
   const resourceEntries = performance.getEntriesByType('resource');
   checkTrue('resource_timing_empty', resourceEntries.length === 0);
+
+  // ── New vectors ───────────────────────────────────────────────────────────
+
+  // navigator.mediaDevices.enumerateDevices returns empty list
+  if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      checkTrue('mediaDevices_empty', devices.length === 0);
+    } catch(e) {
+      results['mediaDevices_empty'] = { got: String(e), expected: 'true', pass: false };
+    }
+  } else {
+    results['mediaDevices_empty'] = { got: 'API absent', expected: 'true', pass: true };
+  }
+
+  // Hardware APIs deleted
+  checkUndef('navigator.usb', navigator.usb);
+  checkUndef('navigator.bluetooth', navigator.bluetooth);
+  checkUndef('navigator.keyboard', navigator.keyboard);
+  checkUndef('navigator.xr', navigator.xr);
+
+  // getGamepads returns empty
+  if (navigator.getGamepads) {
+    try { checkTrue('getGamepads_empty', Array.from(navigator.getGamepads()).filter(Boolean).length === 0); }
+    catch(e) { results['getGamepads_empty'] = { got: String(e), expected: 'true', pass: false }; }
+  } else {
+    results['getGamepads_empty'] = { got: 'API absent', expected: 'true', pass: true };
+  }
+
+  // matchMedia: prefers-color-scheme dark → false (we say light)
+  if (window.matchMedia) {
+    checkTrue('matchMedia_dark_is_false', window.matchMedia('(prefers-color-scheme: dark)').matches === false);
+    checkTrue('matchMedia_light_is_true', window.matchMedia('(prefers-color-scheme: light)').matches === true);
+    checkTrue('matchMedia_reduced_motion_false', window.matchMedia('(prefers-reduced-motion: reduce)').matches === false);
+  }
+
+  // StorageManager.estimate returns fixed quota
+  if (navigator.storage && navigator.storage.estimate) {
+    try {
+      const est = await navigator.storage.estimate();
+      checkTrue('storage_quota_fixed', est.quota === 120 * 1024 * 1024 * 1024);
+    } catch(e) {
+      results['storage_quota_fixed'] = { got: String(e), expected: 'true', pass: false };
+    }
+  } else {
+    results['storage_quota_fixed'] = { got: 'API absent', expected: 'true', pass: true };
+  }
+
+  // getBoundingClientRect returns a DOMRect (not broken)
+  try {
+    const div = document.createElement('div');
+    div.style.width = '100px'; div.style.height = '50px';
+    document.body.appendChild(div);
+    const r = div.getBoundingClientRect();
+    checkTrue('getBCR_returns_domrect', typeof r.width === 'number' && r.width >= 0);
+    document.body.removeChild(div);
+  } catch(e) {
+    results['getBCR_returns_domrect'] = { got: String(e), expected: 'true', pass: false };
+  }
 
   return results;
 })()`;

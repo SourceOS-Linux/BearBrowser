@@ -286,3 +286,47 @@ user_pref("bearbrowser.nav.keyboard.enabled", true);
 // Skips sponsored segments on YouTube using hash-based SponsorBlock API.
 // Only 4 hex chars of SHA-256(videoId) are sent; full ID stays local.
 user_pref("bearbrowser.sponsorblock.enabled", true);
+
+// ── Additional fingerprinting hardening (Gecko-specific) ─────────────────────
+// These prefs close gaps that the WKWebView JS shield handles for the overlay
+// build but that require Gecko prefs for the nightly CI build.
+
+// Gamepad API: exposes controller hardware identifiers (vendor/product IDs)
+// and the number/type of connected gamepads.
+user_pref("dom.gamepad.enabled", false);
+user_pref("dom.gamepad.extensions.enabled", false);
+user_pref("dom.gamepad.haptic_actuators.enabled", false);
+user_pref("dom.gamepad.non_standard_events.enabled", false);
+
+// WebXR/WebVR: presence of XR hardware is a rare, highly-identifying signal.
+user_pref("dom.vr.enabled", false);
+user_pref("dom.vr.webxr.enabled", false);
+
+// Keyboard Layout API: getLayoutMap() reveals input language and keyboard type.
+user_pref("dom.keyboard.layout_map.enabled", false);
+
+// Extension detection hardening: blocks sites from detecting installed addons
+// via WebExtension API reflection.
+user_pref("privacy.resistFingerprinting.block_mozAddonManager", true);
+
+// CSS media feature normalization: force light color scheme so prefers-color-scheme
+// queries reflect a fixed, non-identifying value.
+user_pref("ui.systemUsesDarkTheme", 0);
+user_pref("layout.css.prefers-color-scheme.content-override", 1);
+
+// Reduce motion / contrast queries: normalize to "no preference" baseline.
+user_pref("ui.prefersReducedMotion", 0);
+user_pref("ui.useAccessibilityTheme", 0);
+
+// High-DPI media query normalization: make devicePixelRatio in CSS match our
+// spoofed JS value of 2. privacy.resistFingerprinting handles this in full RFP
+// mode; we set it explicitly so it applies without enabling full RFP.
+user_pref("layout.css.devPixelsPerPx", "2.0");
+
+// TLS ceiling: offer only TLS 1.2/1.3 so our ClientHello cipher suite list
+// matches the narrow modern-browser set, minimizing JA3 distinctiveness.
+user_pref("security.tls.version.max", 4);
+
+// Disable HTTP/3 QUIC advertisement via Alt-Svc to reduce QUIC-specific
+// fingerprinting surface (QUIC packet sizes and transport parameters).
+user_pref("network.http.http3.enabled", false);

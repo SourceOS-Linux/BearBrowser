@@ -2948,8 +2948,18 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  const _mT=CanvasRenderingContext2D.prototype.measureText;"
     @"  CanvasRenderingContext2D.prototype.measureText=function(text){"
     @"    const r=_mT.call(this,text);"
-    @"    const noise=((_fh((text||'')+(this.font||'')+_s)%5)-2)*0.1;" // ±0.2px, consistent per (font,text,session)
+    @"    const _key=(text||'')+(this.font||'')+_s;"
+    @"    const noise=((_fh(_key)%5)-2)*0.1;" // ±0.2px, consistent per (font,text,session)
     @"    try{Object.defineProperty(r,'width',{value:Math.max(0,r.width+noise)});}catch(e){}"
+    // Also noise TextMetrics bounding box props — these are precise enough to
+    // fingerprint the font renderer independently of .width.
+    @"    const _bbProps=['actualBoundingBoxLeft','actualBoundingBoxRight',"
+    @"      'actualBoundingBoxAscent','actualBoundingBoxDescent',"
+    @"      'fontBoundingBoxAscent','fontBoundingBoxDescent',"
+    @"      'emHeightAscent','emHeightDescent'];"
+    @"    for(const p of _bbProps){try{if(p in r){"
+    @"      const n=((_fh(_key+p)%5)-2)*0.05;" // ±0.1px on box props
+    @"      Object.defineProperty(r,p,{value:Math.max(0,r[p]+n)});}}catch(e){}}"
     @"    return r;};"
     // Also block document.fonts.check() — CSS local() font presence oracle
     // Override on FontFaceSet.prototype: instance-level assignment is blocked
@@ -3103,6 +3113,100 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    }catch(e){}"
     @"  });"
     @"},false);"
+    // ── Hardware / peripheral API deletion ───────────────────────────────────
+    // Each API exposes unique hardware identifiers or device presence bitmaps.
+    @"try{Object.defineProperty(navigator,'usb',{get:()=>undefined,configurable:true});}catch(e){}"
+    @"try{Object.defineProperty(navigator,'bluetooth',{get:()=>undefined,configurable:true});}catch(e){}"
+    @"try{Object.defineProperty(navigator,'hid',{get:()=>undefined,configurable:true});}catch(e){}"
+    @"try{Object.defineProperty(navigator,'serial',{get:()=>undefined,configurable:true});}catch(e){}"
+    @"try{Object.defineProperty(navigator,'xr',{get:()=>undefined,configurable:true});}catch(e){}"
+    @"try{Object.defineProperty(navigator,'keyboard',{get:()=>undefined,configurable:true});}catch(e){}"
+    @"try{Object.defineProperty(navigator,'credentials',{get:()=>undefined,configurable:true});}catch(e){}"
+    // getGamepads: returns empty array (no controller serials exposed)
+    @"try{navigator.getGamepads=_nat(function(){return [];},'getGamepads');}catch(e){}"
+    // ── navigator.mediaDevices — block device enumeration ─────────────────
+    // enumerateDevices() reveals camera/microphone presence + ephemeral device IDs.
+    @"try{if(navigator.mediaDevices){"
+    @"  Object.defineProperty(navigator.mediaDevices,'enumerateDevices',{"
+    @"    value:_nat(function(){return Promise.resolve([]);},'enumerateDevices'),"
+    @"    writable:true,configurable:true"
+    @"  });"
+    @"  if(typeof MediaDevices!=='undefined')"
+    @"    try{MediaDevices.prototype.enumerateDevices=_nat(function(){return Promise.resolve([]);},'enumerateDevices');}catch(e){}"
+    @"}}catch(e){}"
+    // ── navigator.permissions — normalize permission state ────────────────
+    // Per-user permission grants are unique. Force 'prompt' so sites can't
+    // use prior-granted states as a stable identifier.
+    @"try{if(navigator.permissions){"
+    @"  const _pQ=navigator.permissions.query.bind(navigator.permissions);"
+    @"  navigator.permissions.query=_nat(function(desc){"
+    @"    if(desc&&typeof desc.name==='string'&&"
+    @"       ['camera','microphone','geolocation','notifications',"
+    @"        'midi','push','speaker-selection'].indexOf(desc.name)>=0){"
+    @"      return Promise.resolve({state:'prompt',onchange:null,"
+    @"        addEventListener:function(){},removeEventListener:function(){}});"
+    @"    }"
+    @"    return _pQ(desc);"
+    @"  },'query');"
+    @"}}catch(e){}"
+    // ── StorageManager.estimate — fixed quota prevents storage fingerprinting ─
+    // Real quota and usage vary by device, OS, and profile state.
+    @"try{if(navigator.storage&&window.StorageManager){"
+    @"  StorageManager.prototype.estimate=_nat(function(){"
+    @"    return Promise.resolve({quota:120*1024*1024*1024,usage:4096*1024});"
+    @"  },'estimate');"
+    @"}}catch(e){}"
+    // ── window.matchMedia — normalize privacy-sensitive CSS media features ─
+    // Responses to prefers-color-scheme, prefers-reduced-motion, etc. are
+    // system-level settings that create unique fingerprint signals.
+    @"(function(){"
+    @"  try{"
+    @"    const _mM=window.matchMedia.bind(window);"
+    // Map of pattern → forced matches value (our canonical "standard" profile).
+    @"    const _mQNorms=["
+    @"      [/prefers-color-scheme\s*:\s*dark/i,false],"    // we say light
+    @"      [/prefers-color-scheme\s*:\s*light/i,true],"
+    @"      [/prefers-reduced-motion\s*:\s*reduce/i,false],"
+    @"      [/prefers-contrast\s*:\s*(more|less|forced)/i,false],"
+    @"      [/forced-colors\s*:\s*active/i,false],"
+    @"      [/inverted-colors\s*:\s*inverted/i,false],"
+    @"      [/any-hover\s*:\s*none/i,false],"
+    @"      [/any-pointer\s*:\s*coarse/i,false],"
+    @"      [/pointer\s*:\s*coarse/i,false],"
+    @"      [/hover\s*:\s*none/i,false],"
+    @"      [/update\s*:\s*slow/i,false],"
+    @"      [/prefers-reduced-transparency\s*:\s*reduce/i,false],"
+    @"      [/dynamic-range\s*:\s*high/i,false],"     // HDR presence
+    @"      [/video-dynamic-range\s*:\s*high/i,false],"
+    @"      [/color-gamut\s*:\s*(p3|rec2020)/i,false]," // wide gamut reveals display
+    @"    ];"
+    @"    window.matchMedia=_nat(function(query){"
+    @"      const q=String(query);"
+    @"      for(const[re,matches]of _mQNorms){"
+    @"        if(re.test(q)){"
+    @"          const base=_mM(q);"
+    @"          return Object.create(base,{matches:{get:()=>matches,enumerable:true}});"
+    @"        }"
+    @"      }"
+    @"      return _mM(q);"
+    @"    },'matchMedia');"
+    @"  }catch(e){}"
+    @"})();"
+    // ── Element.getBoundingClientRect — sub-pixel layout fingerprinting ────
+    // Fingerprinters measure text element bounds to infer font rendering at
+    // sub-pixel precision. A per-session ±0.1px position offset prevents this
+    // while being imperceptible to layout calculations.
+    @"(function(){"
+    @"  try{"
+    @"    const _bbOff=(Math.random()-0.5)*0.2;" // ±0.1px, stable for session
+    @"    const _gBCR=Element.prototype.getBoundingClientRect;"
+    @"    Element.prototype.getBoundingClientRect=_nat(function(){"
+    @"      const r=_gBCR.call(this);"
+    @"      if(!r.width&&!r.height)return r;" // don't noise empty rects
+    @"      try{return new DOMRect(r.x+_bbOff,r.y+_bbOff,r.width,r.height);}catch(e){return r;}"
+    @"    },'getBoundingClientRect');"
+    @"  }catch(e){}"
+    @"})();"
     // ── Retroactive native registration ───────────────────────────────────
     // Prototype methods assigned above are on the real prototype objects now;
     // register each with _nat so fn.toString() returns "[native code]".
@@ -3121,9 +3225,14 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    [Intl.Collator.prototype,'resolvedOptions'],"
     @"    [Date.prototype,'getTimezoneOffset'],"
     @"    [EventTarget.prototype,'addEventListener'],"
+    @"    [Element.prototype,'getBoundingClientRect'],"
     @"  ];"
     @"  _reg.forEach(function(pair){"
     @"    try{var fn=pair[0][pair[1]];if(fn&&typeof fn==='function')_nat(fn,pair[1]);}catch(e){}});"
+    @"  try{_nat(window.matchMedia,'matchMedia');}catch(e){}"
+    @"  try{if(navigator.mediaDevices&&navigator.mediaDevices.enumerateDevices)_nat(navigator.mediaDevices.enumerateDevices,'enumerateDevices');}catch(e){}"
+    @"  try{if(navigator.permissions&&navigator.permissions.query)_nat(navigator.permissions.query,'query');}catch(e){}"
+    @"  try{if(navigator.storage&&window.StorageManager)_nat(StorageManager.prototype.estimate,'estimate');}catch(e){}"
     @"  try{_nat(window.requestAnimationFrame,'requestAnimationFrame');}catch(e){}"
     @"  try{_nat(window.eval,'eval');}catch(e){}"
     @"  try{_nat(window.postMessage,'postMessage');}catch(e){}"
