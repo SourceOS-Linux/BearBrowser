@@ -5,15 +5,20 @@ Authored against **Firefox 150.0.1** source (`firefox-150.0.1.source.tar.xz`),
 following the existing in-tree pattern (`patches/fpp-canvas-fix.patch`).
 
 ## Wiring into the build
-Each patch is a `patch -p1` unified diff. To activate in the LibreWolf-style
-build repo (the one with `scripts/bearbrowser-patches.py` + `assets/patches.txt`):
+Each patch is a `patch -p1` unified diff. Integration is **automatic and
+mirror-safe**: `scripts/apply-sourceos-overlays.sh` copies these into the
+transient build-workspace clone and appends them to `assets/patches.txt`
+(canvas before audio), so `bearbrowser-patches.py` applies them during the build.
+The patches live canonically HERE in the overlay — never committed to the
+read-only `librewolf-source-mirror`.
 
-1. Copy the `.patch` into that repo's `patches/` dir.
-2. Append its path to `assets/patches.txt` (applied in listed order).
-3. `make check-patchfail` to confirm it applies, then `make build`.
-
-(Or wire `apply-sourceos-overlays.sh` to copy these + append to `patches.txt`
-automatically, so they live canonically here in the overlay.)
+**Verified (2026-06-18):** `check-patchfail.sh` applied the **full upstream patch
+sequence (~40 LibreWolf patches) + both of ours** to a fresh Firefox 150.0.1
+extraction with **zero rejects** — "All patches were applied successfully." So
+these are no longer just "applies to pristine"; they apply in the real build
+order (the `fpp-canvas-fix.patch` co-location on CanvasRenderingContext2D.cpp /
+nsRFPService.cpp is handled by patch offset detection). Remaining gate: `./mach
+build` (compile) on a capable runner / the Forgejo pipeline.
 
 ## Patches
 
