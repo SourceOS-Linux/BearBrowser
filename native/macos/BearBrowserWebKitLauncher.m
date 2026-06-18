@@ -2763,23 +2763,23 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  for(let i=0;i<d.data.length;i+=400)d.data[i]^=1;"
     @"};"
     @"const _toDU=HTMLCanvasElement.prototype.toDataURL;"
-    @"HTMLCanvasElement.prototype.toDataURL=function(t,q){"
+    @"HTMLCanvasElement.prototype.toDataURL=_nat(function(t,q){"
     @"  try{const c=this.getContext('2d');if(c&&this.width&&this.height){"
-    @"    const d=c.getImageData(0,0,this.width,this.height);"
+    @"    const d=_gID.call(c,0,0,this.width,this.height);"
     @"    _noise(d);c.putImageData(d,0,0);"
     @"  }}catch(e){}"
-    @"  return _toDU.call(this,t,q);};"
+    @"  return _toDU.call(this,t,q);},'toDataURL');"
     @"const _toBl=HTMLCanvasElement.prototype.toBlob;"
-    @"if(_toBl)HTMLCanvasElement.prototype.toBlob=function(cb,t,q){"
+    @"if(_toBl)HTMLCanvasElement.prototype.toBlob=_nat(function(cb,t,q){"
     @"  try{const c=this.getContext('2d');if(c&&this.width&&this.height){"
-    @"    const d=c.getImageData(0,0,this.width,this.height);"
+    @"    const d=_gID.call(c,0,0,this.width,this.height);"
     @"    _noise(d);c.putImageData(d,0,0);"
     @"  }}catch(e){}"
-    @"  return _toBl.call(this,cb,t,q);};"
+    @"  return _toBl.call(this,cb,t,q);},'toBlob');"
     @"const _gID=CanvasRenderingContext2D.prototype.getImageData;"
-    @"CanvasRenderingContext2D.prototype.getImageData=function(x,y,w,h){"
+    @"CanvasRenderingContext2D.prototype.getImageData=_nat(function(x,y,w,h){"
     @"  const d=_gID.call(this,x,y,w,h);"
-    @"  _noise(d);return d;};"
+    @"  _noise(d);return d;},'getImageData');"
     // ── WebGL: VENDOR/RENDERER + freeze extensions list ────────────────────
     @"const _glGP=function(orig){"
     @"  return function(p){"
@@ -2892,16 +2892,28 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"        for(let i=0;i<arr.length;i+=10)arr[i]+=Math.random()*0.0001-0.00005;};"
     @"      return an;};"
     @"    return ctx;};"
-    @"  const _ACc=Object.create(_AC);"
-    @"  _ACc.prototype=_ACp;"
-    @"  if(window.AudioContext)window.AudioContext=_ACc;"
-    @"  if(window.webkitAudioContext)window.webkitAudioContext=_ACc;"
+    // _cAC is the wrapper function — set its prototype so instanceof checks pass,
+    // then replace the global constructors. DO NOT use Object.create(AudioContext)
+    // here: that creates a plain object inheriting from a native function, and
+    // assigning its .prototype throws TypeError in strict mode (readonly inherited).
+    @"  _cAC.prototype=_ACp;"
+    @"  if(window.AudioContext)window.AudioContext=_cAC;"
+    @"  if(window.webkitAudioContext)window.webkitAudioContext=_cAC;"
     @"}"
     // ── WebSpeech: freeze getVoices() to empty (bug 2043367 — unfixed upstream too) ─
     @"if(window.speechSynthesis){"
-    @"  try{window.speechSynthesis.getVoices=function(){return [];};}catch(e){}"
-    @"  window.removeEventListener('voiceschanged',function(){},true);"
-    @"  window.SpeechSynthesisVoice=undefined;"
+    // Override via Object.defineProperty on the prototype for maximum coverage:
+    // direct assignment may fail silently if getVoices is an own property of
+    // the speechSynthesis instance in some WebKit builds.
+    @"  try{Object.defineProperty(SpeechSynthesis.prototype,'getVoices',{"
+    @"    value:function(){return [];},writable:true,configurable:true"
+    @"  });}catch(e){}"
+    @"  try{Object.defineProperty(window.speechSynthesis,'getVoices',{"
+    @"    value:function(){return [];},writable:true,configurable:true"
+    @"  });}catch(e){}"
+    @"  try{window.removeEventListener('voiceschanged',function(){},true);}catch(e){}"
+    // window.SpeechSynthesisVoice is non-writable in strict mode — must use defineProperty
+    @"  try{Object.defineProperty(window,'SpeechSynthesisVoice',{value:undefined,configurable:true});}catch(e){}"
     @"}"
     // ── WebRTC IP leak ────────────────────────────────────────────────────
     @"const _RPC=window.RTCPeerConnection||window.webkitRTCPeerConnection;"
@@ -2940,6 +2952,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    try{Object.defineProperty(r,'width',{value:Math.max(0,r.width+noise)});}catch(e){}"
     @"    return r;};"
     // Also block document.fonts.check() — CSS local() font presence oracle
+    // Override on FontFaceSet.prototype: instance-level assignment is blocked
+    // when the descriptor is non-configurable/non-writable on the instance.
+    @"  try{FontFaceSet.prototype.check=function(){return false;};}catch(e){}"
     @"  if(document.fonts&&document.fonts.check)"
     @"    try{document.fonts.check=function(){return false;};}catch(e){}"
     // document.fonts.load() — let it proceed (needed for web fonts), just block check()
@@ -2982,10 +2997,12 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"  }),configurable:false});}catch(e){}"
     @"})();"
     // ── Navigator / window identity normalization ────────────────────────
-    // doNotTrack: '1' is the W3C value for "please don't track"
-    @"try{Object.defineProperty(navigator,'doNotTrack',{get:()=>'1',configurable:false});}catch(e){}"
-    // webdriver: undefined means "not automated"; false is the default that reveals the property exists
-    @"try{Object.defineProperty(navigator,'webdriver',{get:()=>undefined,configurable:false});}catch(e){}"
+    // doNotTrack and webdriver: define on Navigator.prototype so the override
+    // works even when the instance property is non-configurable (Playwright,
+    // some WebKit builds). Prototype-level override takes precedence over a
+    // missing or undefined instance property.
+    @"try{Object.defineProperty(Navigator.prototype,'doNotTrack',{get:()=>'1',configurable:true});}catch(e){}"
+    @"try{Object.defineProperty(Navigator.prototype,'webdriver',{get:()=>undefined,configurable:true});}catch(e){}"
     // window.chrome: Safari doesn't expose this; its presence alone signals non-Safari
     @"try{if('chrome'in window)Object.defineProperty(window,'chrome',{get:()=>undefined,configurable:false});}catch(e){}"
     // ── Intl locale normalization ─────────────────────────────────────────
@@ -3090,6 +3107,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // Prototype methods assigned above are on the real prototype objects now;
     // register each with _nat so fn.toString() returns "[native code]".
     @"(function(){"
+    // RTCPeerConnection is absent in headless/iframe contexts; evaluating
+    // RTCPeerConnection.prototype in the array literal would throw and leave
+    // _reg undefined, aborting the entire forEach. It is already guarded below.
     @"  var _reg=["
     @"    [HTMLCanvasElement.prototype,'toDataURL'],"
     @"    [HTMLCanvasElement.prototype,'toBlob'],"
@@ -3101,7 +3121,6 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    [Intl.Collator.prototype,'resolvedOptions'],"
     @"    [Date.prototype,'getTimezoneOffset'],"
     @"    [EventTarget.prototype,'addEventListener'],"
-    @"    [RTCPeerConnection.prototype,'constructor'],"
     @"  ];"
     @"  _reg.forEach(function(pair){"
     @"    try{var fn=pair[0][pair[1]];if(fn&&typeof fn==='function')_nat(fn,pair[1]);}catch(e){}});"
