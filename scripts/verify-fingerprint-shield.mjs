@@ -360,6 +360,23 @@ const PROBE = `(async function() {
     results['svg_getBBox_is_number'] = { got: String(e), expected: 'n/a', pass: true };
   }
 
+  // ── Math precision — JSC vs V8 ULP divergences (creepjs probe) ─────────
+  // Each check verifies we return V8's float64 value, not JSC's.
+  check('math_acos_0123',   Math.acos(0.123),                1.4474840516030247);
+  check('math_acosh_sqrt2', Math.acosh(Math.SQRT2),          0.881373587019543);
+  check('math_atan_2',      Math.atan(2),                    1.1071487177940904);
+  check('math_atanh_05',    Math.atanh(0.5),                 0.5493061443340548);
+  check('math_cbrt_pi',     Math.cbrt(Math.PI),              1.4645918875615231);
+  check('math_expm1_1',     Math.expm1(1),                   1.718281828459045);
+  check('math_sinh_pi',     Math.sinh(Math.PI),              11.548739357257748);
+  check('math_sinh_sqrt2',  Math.sinh(Math.SQRT2),           1.935066822174357);
+  check('math_tan_1e308',   Math.tan(-1e308),                0.5086861259107568);
+  check('math_tan_6ln2',    Math.tan(6*Math.LN2),            1.6182817135715877);
+  check('math_tan_10log2e', Math.tan(10*Math.LOG2E),        -3.3537128705376014);
+  check('math_tanh_0123',   Math.tanh(0.123),                0.12238344189440875);
+  check('math_pow_pi_n100', Math.pow(Math.PI,-100),          1.9275814160560204e-50);
+  check('math_pow_l10_n100',Math.pow(Math.LOG10E,-100),      1.6655929347585958e+36);
+
   return results;
 })()`;
 

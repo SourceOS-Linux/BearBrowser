@@ -3396,6 +3396,35 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    RTCRtpReceiver.getCapabilities=_nat(function(kind){"
     @"      return _rFilter(kind,_rRC.call(RTCRtpReceiver,kind));},'getCapabilities');}}"
     @"}catch(e){}"
+    // ── Math precision — JSC vs V8 divergence (creepjs ULP fingerprint) ─
+    // JavaScriptCore and V8 produce different float64 results for ~14 Math
+    // calls due to differences in their underlying libm implementations.
+    // creepjs hashes all results to detect "fake Chrome on JSC" (WKWebView).
+    // Override each diverging function with a lookup table that returns V8's
+    // exact float64 bit pattern for the probed inputs.
+    @"(function(){"
+    @"  try{"
+    @"    var _S2=Math.SQRT2,_LN2=Math.LN2,_L2E=Math.LOG2E,_L10=Math.LOG10E,_PI=Math.PI;"
+    @"    function _mPatch(fn,tbl){"
+    @"      var orig=Math[fn];"
+    @"      Math[fn]=function(a,b){"
+    @"        for(var i=0;i<tbl.length;i++){var t=tbl[i];"
+    @"          if(t[0]===a){if(t.length===2)return t[1];"
+    @"            if(t.length===3&&t[1]===b)return t[2];}}"
+    @"        return orig.apply(Math,arguments);};};"
+    @"    _mPatch('acos', [[0.123,1.4474840516030247]]);"
+    @"    _mPatch('acosh',[[_S2,0.881373587019543]]);"
+    @"    _mPatch('atan', [[2,1.1071487177940904]]);"
+    @"    _mPatch('atanh',[[0.5,0.5493061443340548]]);"
+    @"    _mPatch('cbrt', [[_PI,1.4645918875615231]]);"
+    @"    _mPatch('expm1',[[1,1.718281828459045]]);"
+    @"    _mPatch('sinh', [[_PI,11.548739357257748],[_S2,1.935066822174357]]);"
+    @"    _mPatch('tan',  [[-1e308,0.5086861259107568],[6*_LN2,1.6182817135715877],"
+    @"                     [10*_L2E,-3.3537128705376014]]);"
+    @"    _mPatch('tanh', [[0.123,0.12238344189440875]]);"
+    @"    _mPatch('pow',  [[_PI,-100,1.9275814160560204e-50],[_L10,-100,1.6655929347585958e+36]]);"
+    @"  }catch(e){}"
+    @"})();"
     // ── SVG text geometry — platform text rendering fingerprinting ───────
     // getBBox() and getComputedTextLength() on SVG text elements produce
     // platform-specific float values that reveal the OS text stack (CoreText
