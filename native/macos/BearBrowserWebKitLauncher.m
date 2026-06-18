@@ -3612,46 +3612,52 @@ static NSString *kFaviconJS=@"(function(){"
 - (void)webViewDidClose:(WKWebView*)wv { /* no action — suppresses beforeunload UI */ }
 
 - (WKWebView *)webView:(WKWebView *)wv createWebViewWithConfiguration:(WKWebViewConfiguration *)cfg forNavigationAction:(WKNavigationAction *)action windowFeatures:(WKWindowFeatures *)features {
-  // macOS 26+: must NEVER return nil — WebKit throws NSException.
+  // macOS 26+ (WebKit 21620+): the returned WKWebView MUST be created with cfg's processPool
+  // (and for SSO/OAuth flows, cfg's websiteDataStore), or WebKit throws NSException in createNewPage.
   NSString *popupURL=action.request.URL.absoluteString?:@"";
   NSString *initiator=wv.URL.host?:@"unknown";
 
-  // WKNavigationTypeLinkActivated = user clicked target=_blank → always user-initiated.
-  // WKNavigationTypeOther = window.open() — could be script or user gesture.
-  // Use gesture timestamp: if no real input within 1s, treat as script popup.
   NSTimeInterval sinceGesture=[NSDate timeIntervalSinceReferenceDate]-self.lastUserGestureTime;
   BOOL likelyUserInitiated=(action.navigationType==WKNavigationTypeLinkActivated)||(sinceGesture<1.0);
+
   if (!likelyUserInitiated) {
-    // Script-initiated popup — honeypot it.
-    // Return a real but invisible, never-shown WKWebView so WebKit is satisfied.
-    // Its navigation delegate logs everything it tries to load, then we discard it.
+    // Script-initiated popup — absorb it with an invisible WKWebView so WebKit is satisfied.
+    // Use cfg directly (macOS 26 processPool requirement). We cancel all navigations via the delegate.
     BBEmitEvent(@"security.popup_blocked", @"block",
       [NSString stringWithFormat:@"Script popup blocked from %@: %@", initiator, popupURL],
       @{@"initiator":initiator, @"url":popupURL, @"userInitiated":@NO});
-
-    WKWebViewConfiguration *decoyCfg=[[WKWebViewConfiguration alloc]init];
-    // No message handlers, no content rules, fully isolated
-    WKWebView *decoy=[[WKWebView alloc]initWithFrame:NSZeroRect configuration:decoyCfg];
-    decoy.navigationDelegate=self; // we'll see what it tries to navigate to
+    WKWebView *decoy=[[WKWebView alloc]initWithFrame:NSZeroRect configuration:cfg];
+    decoy.navigationDelegate=self;
     [self.decoyViews addObject:decoy];
-    if (action.request.URL) [decoy loadRequest:action.request];
-    // Auto-discard after 15s — enough to capture any redirect chain
     __weak BBDelegate *weakSelf=self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(15*NSEC_PER_SEC)),
-      dispatch_get_main_queue(),^{
-        [weakSelf.decoyViews removeObject:decoy];
-      });
+      dispatch_get_main_queue(),^{ [weakSelf.decoyViews removeObject:decoy]; });
     return decoy;
   }
 
-  // User-initiated (OAuth popup, target=_blank link, etc.) — open as a real tab
+  // User-initiated (OAuth/SSO popup, target=_blank, etc.) — open as a real tab.
+  // Use cfg as-is: macOS 26's SOAuthorizationCoordinator requires the new view to share
+  // cfg's websiteDataStore so the SSO session cookies are accessible. Adding our own
+  // baseConfig would give it a different data store and break Google/Apple SSO.
+  CGFloat W=self.root.bounds.size.width;
+  CGFloat chromH=kToolbarH+kTabBarH+2;
+  CGFloat findOff=self.findBarVisible?kFindBarH:0;
+  WKWebView *newWV=[[WKWebView alloc]initWithFrame:NSMakeRect(0,findOff,W,self.root.bounds.size.height-chromH-findOff)
+                                     configuration:cfg];
+  newWV.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+  newWV.customUserAgent=@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15";
+  newWV.navigationDelegate=self; newWV.UIDelegate=self;
+  newWV.allowsBackForwardNavigationGestures=YES; newWV.allowsLinkPreview=YES;
+  [newWV addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
+  [newWV addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
+
   BBTab *tab=[[BBTab alloc]init];
-  tab.webView=[self makeWebViewPrivate:self.activeTab.isPrivate];
+  tab.webView=newWV;
   [self.tabs addObject:tab];
   if (action.request.URL) [tab.webView loadRequest:action.request];
   NSInteger ni=self.tabs.count-1; [self reloadTabBar];
   dispatch_async(dispatch_get_main_queue(),^{[self activateTab:ni];[self reloadTabBar];});
-  return tab.webView;
+  return newWV;
 }
 - (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)action didBecomeDownload:(WKDownload *)download {
   download.delegate=self;
