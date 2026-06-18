@@ -139,6 +139,16 @@ const PROBE = `async () => {
     let det = 0; for (const f of fonts) if (w("'" + f + "'," + base) !== baseW) det++;
     r.fontsDetected = det + '/' + fonts.length;
   } catch(e) { r.fontsDetected = 'ERR'; }
+  // Text-metric / kerning readback. A page can read the exact advance width and
+  // sub-pixel bounding box, which encodes font + shaper + rasterizer = high entropy.
+  // 'int' = quantized (uniform); 'subpixel' = the raw transform is exposed (leak).
+  try {
+    const tcx = document.createElement('canvas').getContext('2d');
+    tcx.font = '32px sans-serif';
+    const tm = tcx.measureText('AVA To Wa Yo PAW fjffifl 9.9.9.9');
+    r.textWidth = tm.width;
+    r.textMetrics = (Math.abs(tm.width - Math.round(tm.width)) < 1e-6) ? 'int' : 'subpixel';
+  } catch(e) { r.textMetrics = 'ERR'; }
   // WebRTC ICE local-IP leak. mDNS (*.local) candidates are obfuscated and not a
   // real IP leak; only a raw private/public IP counts. 'clean' = no raw IP exposed.
   r.webrtcLeak = await new Promise((resolve) => {
@@ -196,6 +206,7 @@ const VECTORS = [
   { key: 'webglUnmaskedRenderer', label: 'WebGL renderer', kind: 'mask' },
   { key: 'webglExtCount', label: 'WebGL ext count', kind: 'mask' },
   { key: 'fontsDetected', label: 'non-base fonts', kind: 'fixed', expect: '0/14' },
+  { key: 'textMetrics', label: 'text-metric readback', kind: 'fixed', expect: 'int' },
   { key: 'plugins', label: 'plugins', kind: 'mask', cohort: (a) => a === 0 },
   { key: 'webrtcLeak', label: 'WebRTC IP leak', kind: 'fixed', expect: 'clean' },
 ];
