@@ -1,0 +1,53 @@
+--- a/toolkit/components/resistfingerprinting/RFPTargets.inc
++++ b/toolkit/components/resistfingerprinting/RFPTargets.inc
+@@ -113,6 +113,9 @@
+ ITEM_VALUE(WebGLVendorConstant,         78)
+ ITEM_VALUE(WebGLVendorRandomize,        79)
+ ITEM_VALUE(WebGLRendererConstant,       80)
++// BearBrowser: quantize text-metric readback (measureText / layout / SVG) so the
++// per-glyph kerning+rasterizer transform can't be read back as a fingerprint.
++ITEM_VALUE(CanvasTextMetrics,           81)
+ 
+ // !!! Adding a new target? Rename PointerId and repurpose it.
+ 
+--- a/dom/canvas/CanvasRenderingContext2D.cpp
++++ b/dom/canvas/CanvasRenderingContext2D.cpp
+@@ -5283,18 +5283,27 @@
+         -processor.mBoundingBox.Y() - baselineAnchor;
+     double actualBoundingBoxDescent =
+         processor.mBoundingBox.YMost() + baselineAnchor;
++    // BearBrowser anti-fingerprint: the text-metric readback (advance width and
++    // bounding box) encodes font + GPOS kerning + platform rasterizer at sub-pixel
++    // precision — a high-entropy fingerprint. When RFP is active, quantize every
++    // exposed metric to whole CSS pixels so it is uniform across users/platforms.
++    // Uniform, never randomized (randomizing would split the RFP cohort).
++    Document* rfpDoc = mCanvasElement ? mCanvasElement->OwnerDoc() : nullptr;
++    const bool rfpText = nsContentUtils::ShouldResistFingerprinting(
++        rfpDoc, RFPTarget::CanvasTextMetrics);
++    auto q = [rfpText](double aV) { return rfpText ? std::round(aV) : aV; };
+     return MakeUnique<TextMetrics>(
+-        totalWidth, actualBoundingBoxLeft, actualBoundingBoxRight,
+-        fontMetrics.maxAscent - baselineAnchor,   // fontBBAscent
+-        fontMetrics.maxDescent + baselineAnchor,  // fontBBDescent
+-        actualBoundingBoxAscent, actualBoundingBoxDescent,
+-        fontMetrics.emAscent - baselineAnchor,   // emHeightAscent
+-        fontMetrics.emDescent + baselineAnchor,  // emHeightDescent
+-        font->GetBaseline(gfxFont::kHanging, fontOrientation) - baselineAnchor,
+-        font->GetBaseline(gfxFont::kAlphabetic, fontOrientation) -
+-            baselineAnchor,
+-        font->GetBaseline(gfxFont::kIdeographicUnder, fontOrientation) -
+-            baselineAnchor);
++        q(totalWidth), q(actualBoundingBoxLeft), q(actualBoundingBoxRight),
++        q(fontMetrics.maxAscent - baselineAnchor),   // fontBBAscent
++        q(fontMetrics.maxDescent + baselineAnchor),  // fontBBDescent
++        q(actualBoundingBoxAscent), q(actualBoundingBoxDescent),
++        q(fontMetrics.emAscent - baselineAnchor),   // emHeightAscent
++        q(fontMetrics.emDescent + baselineAnchor),  // emHeightDescent
++        q(font->GetBaseline(gfxFont::kHanging, fontOrientation) - baselineAnchor),
++        q(font->GetBaseline(gfxFont::kAlphabetic, fontOrientation) -
++          baselineAnchor),
++        q(font->GetBaseline(gfxFont::kIdeographicUnder, fontOrientation) -
++          baselineAnchor));
+   }
+ 
+   // If we did not actually calculate bounds, set up a simple bounding box
