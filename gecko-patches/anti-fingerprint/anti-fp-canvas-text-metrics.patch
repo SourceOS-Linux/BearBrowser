@@ -12,7 +12,7 @@
  
 --- a/dom/canvas/CanvasRenderingContext2D.cpp
 +++ b/dom/canvas/CanvasRenderingContext2D.cpp
-@@ -5283,18 +5283,27 @@
+@@ -5283,18 +5283,34 @@
          -processor.mBoundingBox.Y() - baselineAnchor;
      double actualBoundingBoxDescent =
          processor.mBoundingBox.YMost() + baselineAnchor;
@@ -21,9 +21,16 @@
 +    // precision — a high-entropy fingerprint. When RFP is active, quantize every
 +    // exposed metric to whole CSS pixels so it is uniform across users/platforms.
 +    // Uniform, never randomized (randomizing would split the RFP cohort).
-+    Document* rfpDoc = mCanvasElement ? mCanvasElement->OwnerDoc() : nullptr;
-+    const bool rfpText = nsContentUtils::ShouldResistFingerprinting(
-+        rfpDoc, RFPTarget::CanvasTextMetrics);
++    // Cover BOTH the document-backed canvas and the OffscreenCanvas (worker /
++    // transferControlToOffscreen) path, which has no mCanvasElement.
++    bool rfpText = false;
++    if (mCanvasElement) {
++      rfpText = nsContentUtils::ShouldResistFingerprinting(
++          mCanvasElement->OwnerDoc(), RFPTarget::CanvasTextMetrics);
++    } else if (mOffscreenCanvas) {
++      rfpText =
++          mOffscreenCanvas->ShouldResistFingerprinting(RFPTarget::CanvasTextMetrics);
++    }
 +    auto q = [rfpText](double aV) { return rfpText ? std::round(aV) : aV; };
      return MakeUnique<TextMetrics>(
 -        totalWidth, actualBoundingBoxLeft, actualBoundingBoxRight,
