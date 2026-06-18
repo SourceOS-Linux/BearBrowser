@@ -66,6 +66,36 @@ user_pref("browser.ping-centre.telemetry", false);
 user_pref("browser.newtabpage.activity-stream.feeds.telemetry", false);
 user_pref("browser.newtabpage.activity-stream.telemetry", false);
 
+// ── New tab: kill all sponsored content, Pocket, and news feed ───────────────
+user_pref("browser.newtabpage.enabled", true);
+user_pref("browser.newtabpage.activity-stream.showSponsored", false);
+user_pref("browser.newtabpage.activity-stream.showSponsoredTopSites", false);
+user_pref("browser.newtabpage.activity-stream.default.sites", "");
+user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
+user_pref("browser.newtabpage.activity-stream.feeds.snippets", false);
+user_pref("browser.newtabpage.activity-stream.feeds.topsites", false);
+user_pref("browser.newtabpage.activity-stream.feeds.highlights", false);
+user_pref("browser.newtabpage.activity-stream.feeds.discoverystreamfeed", false);
+user_pref("browser.newtabpage.activity-stream.discoverystream.enabled", false);
+user_pref("browser.newtabpage.activity-stream.section.highlights.includePocket", false);
+user_pref("browser.newtabpage.activity-stream.section.highlights.includeBookmarks", false);
+user_pref("browser.newtabpage.activity-stream.section.highlights.includeDownloads", false);
+user_pref("browser.newtabpage.activity-stream.section.highlights.includeVisited", false);
+user_pref("browser.newtabpage.activity-stream.weather.query", "");
+user_pref("browser.newtabpage.activity-stream.weatherWidget.enabled", false);
+user_pref("browser.newtabpage.activity-stream.system.showWeather", false);
+user_pref("browser.newtabpage.activity-stream.showWeather", false);
+user_pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", false);
+user_pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", false);
+// Pocket
+user_pref("extensions.pocket.enabled", false);
+user_pref("extensions.pocket.api", "");
+user_pref("extensions.pocket.site", "");
+// Homepage — BearBrowser custom start page
+user_pref("browser.startup.homepage", "file:///Applications/BearBrowser.app/Contents/Resources/BearBrowser-start.html");
+user_pref("browser.startup.page", 1);
+user_pref("browser.newtab.url", "file:///Applications/BearBrowser.app/Contents/Resources/BearBrowser-start.html");
+
 // ── Search engine ─────────────────────────────────────────────────────────────
 // Remove Google as a preset and default to a privacy-respecting engine.
 // The actual engine list is managed via policies.json; these prefs suppress
@@ -170,6 +200,19 @@ user_pref("network.http.referer.defaultPolicy.pbmode", 2);
 // attacks where visually identical Unicode characters substitute for ASCII
 // (e.g. аpple.com with Cyrillic а).
 user_pref("network.IDN_show_punycode", true);
+
+// ── BearBlocker — native adblock-rust content classifier ─────────────────────
+// ContentClassifierService uses the compiled adblock-rust engine (same one Brave
+// uses) to block ad and tracker network requests at the C++ network layer before
+// any JS runs. Filter lists are bundled in the browser at resource:///bearblocker/
+// and loaded at startup. No extension process, no user-visible install.
+//
+// Cosmetic rules (CSS injection to hide ad placeholder elements) are applied by
+// the BearBlockerChild JSWindowActor registered in DesktopActorRegistry.
+user_pref("privacy.trackingprotection.content.protection.enabled", true);
+user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource:///bearblocker/bearblocker-ads.txt|resource:///bearblocker/bearblocker-privacy.txt");
+// Cosmetic filtering (CSS injection for leftover ad placeholders)
+user_pref("bearbrowser.bearblocker.cosmetic.enabled", true);
 
 // ── Crash reporting (belt-and-suspenders) ─────────────────────────────────────
 // LibreWolf disables crash reporting at build time. These prefs ensure any

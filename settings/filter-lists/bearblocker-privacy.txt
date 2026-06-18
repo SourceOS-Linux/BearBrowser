@@ -1,0 +1,254 @@
+[Adblock Plus 2.0]
+! Title: BearBlocker Privacy List
+! Description: Tracker, telemetry, session-recording, and fingerprinting service blocking.
+! Version: 1.0
+! Expires: 7 days
+! Homepage: https://bearbrowser.org
+
+! === Google Analytics / Tag Manager ===
+||google-analytics.com^$third-party
+||analytics.google.com^$third-party
+||ssl.google-analytics.com^
+||www.google-analytics.com^
+||googletagmanager.com^$third-party
+||googletagservices.com^$third-party
+/ga.js$script,third-party
+/analytics.js$script,third-party
+/gtag/js$script,third-party
+
+! === Firebase Analytics ===
+||firebase.google.com/j/collect$image
+||firebaseapp.com^$third-party
+||crashlytics.com^$third-party
+
+! === Facebook Pixel & CAPI ===
+||facebook.com/tr$image,third-party
+||connect.facebook.net/*/fbevents.js$script,third-party
+||graph.facebook.com/*/activities$third-party
+
+! === Hotjar ===
+||hotjar.com^$third-party
+||script.hotjar.com^
+||vars.hotjar.com^
+||insights.hotjar.com^
+||static.hotjar.com^
+
+! === Segment ===
+||segment.com^$third-party
+||segment.io^$third-party
+||cdn.segment.com^
+||api.segment.io^
+||api.segment.com^
+
+! === Mixpanel ===
+||mixpanel.com^$third-party
+||api.mixpanel.com^
+||cdn.mxpnl.com^
+||decide.mixpanel.com^
+
+! === Amplitude ===
+||amplitude.com^$third-party
+||api.amplitude.com^
+||cdn.amplitude.com^
+||api2.amplitude.com^
+
+! === Heap ===
+||heapanalytics.com^$third-party
+||heap.io^$third-party
+||cdn.heapanalytics.com^
+
+! === FullStory ===
+||fullstory.com^$third-party
+||rs.fullstory.com^
+||edge.fullstory.com^
+
+! === LogRocket ===
+||logrocket.com^$third-party
+||r.logr-ingest.com^$third-party
+||cdn.lr-ingest.com^
+
+! === Intercom ===
+||intercomcdn.com^$third-party
+||intercom.io^$third-party
+||api-iam.intercom.io^
+||widget.intercom.io^
+||nexus-websocket-a.intercom.io^
+||nexus-websocket-b.intercom.io^
+
+! === HubSpot ===
+||hubspot.com^$third-party
+||hs-analytics.net^
+||hs-scripts.com^
+||hscollectedforms.net^
+||hsforms.net^
+||hsforms.com^
+||sidekick.hubspot.com^
+||track.hubspot.com^
+||api.hubapi.com^$third-party
+||forms.hsforms.com^$third-party
+
+! === Marketo / Adobe ===
+||marketo.com^$third-party
+||marketo.net^
+||mktoresp.com^
+||munchkin.marketo.net^
+||mktocdn.com^
+
+! === Pardot (Salesforce) ===
+||pardot.com^$third-party
+||pi.pardot.com^
+||go.pardot.com^
+
+! === Salesforce ===
+||salesforce.com^$third-party
+||force.com^$third-party
+||sfdcstatic.com^$script,third-party
+
+! === Optimizely ===
+||optimizely.com^$third-party
+||cdn.optimizely.com^
+||api.optimizely.com^
+
+! === VWO / Wingify ===
+||vwo.com^$third-party
+||visualwebsiteoptimizer.com^
+||d5phz18u4wuww.cloudfront.net^$script
+
+! === Crazy Egg ===
+||crazyegg.com^$third-party
+||script.crazyegg.com^
+||cdn.crazyegg.com^
+
+! === Mouseflow ===
+||mouseflow.com^$third-party
+||a.mouseflow.com^
+
+! === Lucky Orange ===
+||luckyorange.com^$third-party
+||luckyorange.net^
+
+! === Drift ===
+||drift.com^$third-party
+||js.driftt.com^
+||api.drift.com^
+||event.drift.com^
+
+! === Braze ===
+||braze.com^$third-party
+||sdk.iad-01.braze.com^
+||sdk.iad-02.braze.com^
+||sdk.iad-03.braze.com^
+||sdk.fra-01.braze.com^
+
+! === Klaviyo ===
+||klaviyo.com^$third-party
+||static.klaviyo.com^
+||a.klaviyo.com^
+
+! === Datadog Browser SDK ===
+||browser-intake-datadoghq.com^$third-party
+||browser-intake-us3-datadoghq.com^$third-party
+||browser-intake-eu1-datadoghq.com^$third-party
+
+! === Sentry (ingestion only — SDK itself is legitimate) ===
+||ingest.sentry.io^$third-party
+||o*.ingest.sentry.io^$third-party
+
+! === New Relic ===
+||newrelic.com^$third-party
+||nr-data.net^$third-party
+||bam.nr-data.net^
+
+! === Microsoft Clarity ===
+||clarity.ms^$third-party
+||c.clarity.ms^
+
+! === Quantcast ===
+||quantserve.com^$third-party
+||quantcast.com^$third-party
+||pixel.quantserve.com^
+
+! === Comscore ===
+||scorecardresearch.com^$third-party
+||comscore.com^$third-party
+||2o7.net^
+||c7.com^$third-party
+
+! === Nielsen ===
+||exelate.com^$third-party
+||exelator.com^$third-party
+||nielsen.com^$third-party
+
+! === BlueKai / Oracle Data Cloud ===
+||bluekai.com^$third-party
+||bkrtx.com^
+||oracle.com/opm$third-party
+
+! === Neustar ===
+||neustar.biz^$third-party
+
+! === LiveIntent ===
+||liveintent.com^$third-party
+||liveintentmail.com^
+
+! === Demandbase ===
+||demandbase.com^$third-party
+
+! === Yotpo ===
+||yotpo.com^$third-party
+||staticw2.yotpo.com^
+
+! === Bazaarvoice ===
+||bazaarvoice.com^$third-party
+||display.powerreviews.com^$third-party
+
+! === TrustArc / TrustE (cookie banners that phone home) ===
+||trustarc.com^$image,third-party
+||truste.com^$image,third-party
+||consent.trustarc.com^$script,third-party
+
+! === OneTrust (telemetry endpoint, not UI) ===
+||cdn.cookielaw.org^$script,third-party
+||geolocation.onetrust.com^$third-party
+
+! === Shopify analytics ===
+||shopify-analytics.com^$third-party
+||monorail-edge.shopifysvc.com^$third-party
+
+! === Twitter / X analytics ===
+||analytics.twitter.com^$third-party
+||static.ads-twitter.com^$script,third-party
+||t.co/i/adsct$image,third-party
+
+! === LinkedIn Insights ===
+||snap.licdn.com^$script,third-party
+||px.ads.linkedin.com^$image,third-party
+
+! === TikTok pixel ===
+||analytics.tiktok.com^$third-party
+||static.bytedance.com^$script,third-party
+
+! === Snapchat pixel ===
+||tr.snapchat.com^$third-party
+||sc-static.net^$script,third-party
+
+! === Pinterest tag ===
+||ct.pinterest.com^$third-party
+||s.pinimg.com^$script,third-party
+
+! === Reddit pixel ===
+||rp.reddit.com^$third-party
+||events.reddit.com^$third-party
+
+! === Generic telemetry/beacon patterns ===
+/telemetry/$image,third-party
+/beacon/$image,third-party
+/pixel.gif$image,third-party
+/pixel.png$image,third-party
+/pixel.js$script,third-party
+/track/$image,third-party
+/tracker/$image,third-party
+/collect?$image,third-party
+/event?$image,third-party
+||*/collect$image,third-party
+||*/pageview$image,third-party

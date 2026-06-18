@@ -1,0 +1,229 @@
+[Adblock Plus 2.0]
+! Title: BearBlocker Ad Network List
+! Description: Ad network domain and request-pattern blocking. All rules use EasyList/ABP syntax compatible with adblock-rust.
+! Version: 1.0
+! Expires: 7 days
+! Homepage: https://bearbrowser.org
+
+! === Google advertising ===
+||doubleclick.net^
+||googleadservices.com^
+||googlesyndication.com^
+||adservice.google.com^
+||adservice.google.*^
+||googletagservices.com^
+||googletag.com^
+||googleads.g.doubleclick.net^
+||cm.g.doubleclick.net^
+||static.doubleclick.net^
+||pagead2.googlesyndication.com^
+||ad.doubleclick.net^
+||ade.googlesyndication.com^
+||adtrafficquality.google^
+||tpc.googlesyndication.com^
+||fundingchoicesmessages.google.com^
+/pagead/$script,third-party
+/googlesyndication/$script,third-party
+
+! === Meta / Facebook advertising ===
+||an.facebook.com^
+||audiencenetwork.com^
+||connect.facebook.net^$third-party
+||graph.facebook.com/*/activities$third-party
+||staticxx.facebook.com^$script,third-party
+||www.facebook.com/plugins/like.php$third-party
+
+! === Amazon advertising ===
+||s.amazon-adsystem.com^
+||aax-us-east.amazon-adsystem.com^
+||mads.amazon-adsystem.com^
+||amazon-adsystem.com^$third-party
+||fls-na.amazon.com^
+||www.assoc-amazon.com^
+
+! === Microsoft / Bing advertising ===
+||bat.bing.com^
+||ads.microsoft.com^
+||msadsint.com^
+||msecnd.net^$script,third-party
+
+! === The Trade Desk ===
+||adsrvr.org^
+||thetradedesk.com^$third-party
+||insight.adsrvr.org^
+||ksg.com^$third-party
+
+! === AppNexus / Xandr ===
+||adnxs.com^
+||adnxs-simple.com^
+||appnexus.com^$third-party
+||ib.adnxs.com^
+||cdn.adnxs.com^
+
+! === Criteo ===
+||criteo.com^$third-party
+||criteo.net^
+||dis.criteo.com^
+||cas.criteo.com^
+||dnca.criteo.com^
+
+! === OpenX ===
+||openx.net^$third-party
+||openx.com^$third-party
+||delivery.openx.net^
+
+! === Magnite / Rubicon ===
+||rubiconproject.com^$third-party
+||magnite.com^$third-party
+||fastlane.rubiconproject.com^
+||prebid-server.rubiconproject.com^
+
+! === Index Exchange ===
+||indexexchange.com^$third-party
+||casalemedia.com^$third-party
+||ix.com^$third-party
+
+! === Taboola ===
+||taboola.com^$third-party
+||taboolasyndication.com^
+||trc.taboola.com^
+||cdn.taboola.com^
+
+! === Outbrain ===
+||outbrain.com^$third-party
+||outbrainimg.com^$third-party
+||ob-api.com^
+||obImg.com^
+
+! === Verizon / Oath / Yahoo ===
+||advertising.com^$third-party
+||oath.com^$third-party
+||verizonmedia.com^$third-party
+||ads.yahoo.com^
+||yahooapis.com^$script,third-party
+
+! === AdRoll / NextRoll ===
+||adroll.com^$third-party
+||nextroll.com^$third-party
+||d.adroll.com^
+
+! === LiveRamp ===
+||liveramp.com^$third-party
+||liveramp.net^
+||rlcdn.com^
+||pippio.com^
+
+! === PubMatic ===
+||pubmatic.com^$third-party
+||pubmatic.net^
+||ads.pubmatic.com^
+
+! === Sharethrough ===
+||sharethrough.com^$third-party
+||native.sharethrough.com^
+
+! === Sizmek / Amazon DSP ===
+||sizmek.com^$third-party
+||peer39.com^$third-party
+
+! === Sonobi ===
+||sonobi.com^$third-party
+
+! === Yandex advertising ===
+||an.yandex.ru^
+||yabs.yandex.ru^
+||mc.yandex.ru^
+||adfox.yandex.ru^
+
+! === Gravity / Undertone ===
+||undertone.com^$third-party
+
+! === TripleLift ===
+||triplelift.com^$third-party
+
+! === Teads ===
+||teads.tv^$third-party
+
+! === Smart AdServer ===
+||sascdn.com^$third-party
+||smartadserver.com^$third-party
+
+! === Adform ===
+||adform.com^$third-party
+||adform.net^$third-party
+
+! === Bidswitch ===
+||bidswitch.net^$third-party
+||bidswitch.com^$third-party
+
+! === BrightRoll ===
+||brightroll.com^$third-party
+
+! === GumGum ===
+||gumgum.com^$third-party
+
+! === YuMe ===
+||yume.com^$third-party
+
+! === Conversant ===
+||conversantmedia.com^$third-party
+||conversant.com^$third-party
+
+! === Specific Media ===
+||specificmedia.com^$third-party
+
+! === Centro ===
+||centro.net^$third-party
+
+! === Cross-network generic patterns ===
+||ads.*^$script,third-party
+||ad.*^$image,third-party
+/banner-ad/$script,third-party
+/ad-manager/$script,third-party
+/adserver/$script,third-party
+
+! === Cosmetic rules: ad placeholder elements ===
+##.adsbygoogle
+##ins.adsbygoogle
+##[data-ad-client]
+##[data-ad-slot]
+##[data-ad-unit-id]
+##.ad-container
+##.ad-wrapper
+##.ad-banner
+##.ad-slot
+##.ad-unit
+##.ad-placeholder
+##.ad-overlay
+##.ad-leaderboard
+##.ad-rectangle
+##.advertisement
+##.advertisment
+##.widget-advertise
+##[class*="ad-container"]:not([class*="load"])
+##[class*="ad-banner"]:not([class*="upload"])
+##[class*="ad-slot"]
+##[class*="ad-wrapper"]
+##[id*="google-ad"]
+##[id*="ad-container"]
+##[id*="ad-banner"]
+##[id*="ad-slot"]
+##[data-component="ad"]
+##[data-type="ad"]
+##[aria-label="Advertisement"]
+##[aria-label="Sponsored"]
+##.sponsored
+##[class*="sponsored"]:not([class*="sponsor-"])
+##[id*="sponsored"]
+##.trc_rbox
+##[id*="taboola"]
+##[class*="taboola"]
+##[id*="outbrain"]
+##[class*="outbrain"]
+##.OUTBRAIN
+##.ob-widget
+##[class*="interstitial-ad"]
+##[class*="sticky-ad"]
+##.sticky-advertisement
+##.adform-ad
+##.doubleclick-ad
