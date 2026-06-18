@@ -3635,6 +3635,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    try{_nat(WebGL2RenderingContext.prototype.getParameter,'getParameter');}catch(e){}"
     @"    try{_nat(WebGL2RenderingContext.prototype.getSupportedExtensions,'getSupportedExtensions');}catch(e){}}"
     @"  try{_nat(WebGLRenderingContext.prototype.getShaderPrecisionFormat,'getShaderPrecisionFormat');}catch(e){}"
+    @"  try{if(window.WebGL2RenderingContext)"
+    @"    _nat(WebGL2RenderingContext.prototype.getShaderPrecisionFormat,'getShaderPrecisionFormat');}catch(e){}"
+    @"  try{if(window.AudioContext)_nat(window.AudioContext,'AudioContext');}catch(e){}"
     @"})();"
     @"})();";
   WKUserScript *shieldScript=[[WKUserScript alloc]
