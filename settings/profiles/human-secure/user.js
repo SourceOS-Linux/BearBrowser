@@ -90,6 +90,9 @@ user_pref("browser.contentblocking.category", "strict");
 // ── Cookie isolation (dFPI — Dynamic First-Party Isolation) ──────────────────
 // Firefox 86+ dFPI replaces the older firstparty.isolate flag.
 user_pref("privacy.partition.network_state", true);
+// Also partition the OCSP response cache by first party (parity with agent-runtime)
+// so revocation lookups can't be used as a cross-site cache identifier.
+user_pref("privacy.partition.network_state.ocsp_cache", true);
 user_pref("privacy.partition.serviceWorkers", true);
 user_pref("privacy.partition.bloburl_by_registrable_domain", true);
 // Third-party cookies blocked entirely.

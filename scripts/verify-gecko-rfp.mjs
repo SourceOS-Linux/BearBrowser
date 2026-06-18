@@ -91,6 +91,13 @@ const REQUIRED = {
   'network.trr.disable-ECS': true,          // suppress EDNS Client Subnet (RFC 7871)
   'network.trr.allow-rfc1918': false,       // reject private-IP answers (DNS rebinding)
   'network.trr.send_user-agent-headers': false, // no UA leak to the resolver
+  // Shared network/TLS cohort — both profiles must match (agents "blend into the
+  // same cohort"). Drift here is the recurring bug class this harness exists to catch.
+  'security.tls.version.min': 3,            // TLS 1.2 floor
+  'security.tls.version.max': 4,            // TLS 1.3 ceiling
+  'network.dns.echconfig.enabled': true,    // Encrypted ClientHello (encrypts SNI)
+  'network.http.referer.XOriginTrimmingPolicy': 2, // cross-origin referer trim
+  'privacy.partition.network_state.ocsp_cache': true, // partition OCSP cache by first party
 };
 
 // Pref values that must NOT contain certain substrings. Catches selecting a

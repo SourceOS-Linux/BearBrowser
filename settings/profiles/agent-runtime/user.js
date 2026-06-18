@@ -149,6 +149,19 @@ user_pref("network.trr.allow-rfc1918", false);
 user_pref("network.trr.send_user-agent-headers", false);
 user_pref("network.trr.padding", true);
 
+// HTTP/3 + DNS HTTPS-RR posture — mirror human-secure so agents share the same
+// network cohort. HTTP/3 on; Alt-Svc off (H3 discovered only via DNS HTTPS/SVCB
+// records, RFC 9460); ECH encrypts SNI via the same HTTPS RR.
+user_pref("network.http.http3.enable", true);
+user_pref("network.http.altsvc.enabled", false);
+user_pref("network.http.altsvc.oe", false);
+user_pref("network.dns.use_https_rr_as_altsvc", true);
+user_pref("network.dns.upgrade_with_https_rr", true);
+user_pref("network.dns.echconfig.enabled", true);
+user_pref("network.dns.http3_echconfig.enabled", true);
+// Trim cross-origin referers to scheme+host+port — parity with human-secure.
+user_pref("network.http.referer.XOriginTrimmingPolicy", 2);
+
 // No link prefetch, no speculative pre-connections.
 // These make network requests that agents have not explicitly authorised.
 user_pref("network.prefetch-next", false);
@@ -162,6 +175,14 @@ user_pref("network.http.speculative-parallel-limit", 0);
 user_pref("dom.security.https_only_mode", true);
 user_pref("dom.security.https_only_mode_pbm", true);
 user_pref("dom.security.https_only_mode_ever_enabled", true);
+
+// TLS hardening — parity with human-secure: TLS 1.2 floor / 1.3 ceiling, and
+// refuse unsafe (legacy) renegotiation. Narrows the ClientHello to the modern
+// cohort and rejects downgrade-prone handshakes.
+user_pref("security.tls.version.min", 3);
+user_pref("security.tls.version.max", 4);
+user_pref("security.ssl.require_safe_negotiation", true);
+user_pref("security.ssl.treat_unsafe_negotiation_as_broken", true);
 
 // Referrer policy: send only origin on cross-origin requests.
 // Prevents leaking full URL path to third parties.
