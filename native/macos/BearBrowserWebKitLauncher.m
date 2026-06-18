@@ -2941,6 +2941,34 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     @"    addEventListener:function(){},removeEventListener:function(){}"
     @"  }),configurable:false});}catch(e){}"
     @"})();"
+    // ── Web Worker timing precision ───────────────────────────────────────
+    // WKUserScript injects only into document (main-thread) JS contexts.
+    // Workers have a separate global scope that our shield cannot reach.
+    // We wrap Worker() to prepend a timing-precision patch via a blob URL
+    // that importScripts() the original script after our patch runs.
+    // Falls back to the original Worker() if the blob approach fails
+    // (e.g. module workers, data: URLs, or restrictive CSP).
+    @"(function(){"
+    @"  const _W=window.Worker;"
+    @"  if(!_W)return;"
+    @"  const _WP='const _wp=performance.now.bind(performance);'"
+    @"    +'performance.now=function(){return Math.floor(_wp());};'"
+    @"    +'const _wd=Date.now;Date.now=function(){return Math.floor(_wd()/100)*100;};';"
+    @"  window.Worker=function(url,opts){"
+    @"    if(typeof url==='string'&&url.indexOf('blob:')<0){"
+    @"      try{"
+    @"        const blob=new Blob([_WP+'importScripts('+JSON.stringify(url)+');'],"
+    @"          {type:'application/javascript'});"
+    @"        const burl=URL.createObjectURL(blob);"
+    @"        const w=new _W(burl,opts);"
+    @"        setTimeout(function(){URL.revokeObjectURL(burl);},10000);"
+    @"        return w;"
+    @"      }catch(e){}"
+    @"    }"
+    @"    return new _W(url,opts);"
+    @"  };"
+    @"  window.Worker.prototype=_W.prototype;"
+    @"})();"
     // ── eval honeypot ─────────────────────────────────────────────────────
     @"const _eval=window.eval;"
     @"window.eval=function(code){"

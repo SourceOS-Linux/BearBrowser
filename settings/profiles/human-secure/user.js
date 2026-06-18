@@ -33,6 +33,19 @@ user_pref("webgl.enable-webgl2", true);
 // Randomize canvas — site-specific exceptions are still possible via permissions.
 user_pref("privacy.resistFingerprinting.randomDataOnCanvasExtract", true);
 
+// ── Engine-level font and timer fingerprinting protection ─────────────────────
+// layout.css.font-visibility controls which fonts are visible to CSS local()
+// resolution in gfxPlatformFontList. 2=base system fonts only (blocks installed
+// font enumeration via @font-face timing attacks). 1=hidden in private windows.
+// Covers the C++ layout path that JS document.fonts.check() overriding misses.
+user_pref("layout.css.font-visibility.standard", 2);
+user_pref("layout.css.font-visibility.private", 1);
+user_pref("layout.css.font-visibility.trackingprotection", 2);
+// Timer precision: 1000µs (1ms) granularity via nsRFPService — covers main
+// thread, Web Workers, and compositor rAF callbacks from a single C++ call site.
+user_pref("privacy.resistFingerprinting.reduceTimerPrecision", true);
+user_pref("privacy.resistFingerprinting.reduceTimerPrecision.microseconds", 1000);
+
 // ── Tracker and content blocking ─────────────────────────────────────────────
 user_pref("privacy.trackingprotection.enabled", true);
 user_pref("privacy.trackingprotection.socialtracking.enabled", true);

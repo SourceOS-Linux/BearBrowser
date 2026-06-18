@@ -193,11 +193,21 @@ def bearbrowser_patches():
             "#---------------------------------------------------------------------------\n"
             "\n- name: bearbrowser.bearblocker.cosmetic.enabled\n  type: RelaxedAtomicBool\n"
             "  value: true\n  mirror: always\n"
+            "\n- name: bearbrowser.capture.enabled\n  type: RelaxedAtomicBool\n"
+            "  value: true\n  mirror: always\n"
+            "\n- name: bearbrowser.clip.enabled\n  type: RelaxedAtomicBool\n"
+            "  value: true\n  mirror: always\n"
             "\n- name: bearbrowser.nav.keyboard.enabled\n  type: RelaxedAtomicBool\n"
+            "  value: true\n  mirror: always\n"
+            "\n- name: bearbrowser.privacy.block_local_fonts\n  type: RelaxedAtomicBool\n"
+            "  value: true\n  mirror: always\n"
+            "\n- name: bearbrowser.privacy.reduce_time_precision\n  type: RelaxedAtomicBool\n"
             "  value: true\n  mirror: always\n"
             "\n- name: bearbrowser.runtime.agent\n  type: RelaxedAtomicBool\n"
             "  value: false\n  mirror: always\n"
             "\n- name: bearbrowser.sponsorblock.enabled\n  type: RelaxedAtomicBool\n"
+            "  value: true\n  mirror: always\n"
+            "\n- name: bearbrowser.vault.enabled\n  type: RelaxedAtomicBool\n"
             "  value: true\n  mirror: always\n"
             "\n- name: bearbrowser.webgl.prompt\n  type: RelaxedAtomicBool\n"
             "  value: true\n  mirror: always\n"
@@ -266,10 +276,16 @@ def bearbrowser_patches():
         "BearBlockerChild.sys.mjs":  Path("../settings/bearblocker"),
         "BearBlockerParent.sys.mjs": Path("../settings/bearblocker"),
         "BearBlockerPolicy.sys.mjs": Path("../settings/bearblocker"),
-        "BearSponsorChild.sys.mjs":  Path("../settings/actors"),
-        "BearSponsorParent.sys.mjs": Path("../settings/actors"),
+        "BearCaptureChild.sys.mjs":  Path("../settings/actors"),
+        "BearCaptureParent.sys.mjs": Path("../settings/actors"),
+        "BearClipChild.sys.mjs":     Path("../settings/actors"),
+        "BearClipParent.sys.mjs":    Path("../settings/actors"),
         "BearNavChild.sys.mjs":      Path("../settings/actors"),
         "BearNavParent.sys.mjs":     Path("../settings/actors"),
+        "BearSponsorChild.sys.mjs":  Path("../settings/actors"),
+        "BearSponsorParent.sys.mjs": Path("../settings/actors"),
+        "BearVaultChild.sys.mjs":    Path("../settings/actors"),
+        "BearVaultParent.sys.mjs":   Path("../settings/actors"),
     }
     for _actor_file, _actors_src in _actor_sources.items():
         _src = _actors_src / _actor_file
@@ -301,10 +317,16 @@ def bearbrowser_patches():
                 '    "BearBlockerChild.sys.mjs",\n'
                 '    "BearBlockerParent.sys.mjs",\n'
                 '    "BearBlockerPolicy.sys.mjs",\n'
+                '    "BearCaptureChild.sys.mjs",\n'
+                '    "BearCaptureParent.sys.mjs",\n'
+                '    "BearClipChild.sys.mjs",\n'
+                '    "BearClipParent.sys.mjs",\n'
                 '    "BearNavChild.sys.mjs",\n'
                 '    "BearNavParent.sys.mjs",\n'
                 '    "BearSponsorChild.sys.mjs",\n'
                 '    "BearSponsorParent.sys.mjs",\n'
+                '    "BearVaultChild.sys.mjs",\n'
+                '    "BearVaultParent.sys.mjs",\n'
                 ']\n'
             )
             _am = _am.replace(
@@ -364,6 +386,52 @@ def bearbrowser_patches():
                 '    allFrames: false,\n'
                 '    enablePreference: "bearbrowser.sponsorblock.enabled",\n'
                 '  },\n'
+                '\n  BearCapture: {\n'
+                '    parent: {\n'
+                '      esModuleURI: "resource:///actors/BearCaptureParent.sys.mjs",\n'
+                '    },\n'
+                '    child: {\n'
+                '      esModuleURI: "resource:///actors/BearCaptureChild.sys.mjs",\n'
+                '      events: {\n'
+                '        DOMContentLoaded: {},\n'
+                '        pageshow: { mozSystemGroup: true },\n'
+                '        keydown: {},\n'
+                '      },\n'
+                '    },\n'
+                '    matches: ["https://*/*", "http://*/*"],\n'
+                '    allFrames: false,\n'
+                '    enablePreference: "bearbrowser.capture.enabled",\n'
+                '  },\n'
+                '\n  BearClip: {\n'
+                '    parent: {\n'
+                '      esModuleURI: "resource:///actors/BearClipParent.sys.mjs",\n'
+                '    },\n'
+                '    child: {\n'
+                '      esModuleURI: "resource:///actors/BearClipChild.sys.mjs",\n'
+                '      events: {\n'
+                '        keydown: {},\n'
+                '      },\n'
+                '    },\n'
+                '    matches: ["https://*/*", "http://*/*"],\n'
+                '    allFrames: false,\n'
+                '    enablePreference: "bearbrowser.clip.enabled",\n'
+                '  },\n'
+                '\n  BearVault: {\n'
+                '    parent: {\n'
+                '      esModuleURI: "resource:///actors/BearVaultParent.sys.mjs",\n'
+                '    },\n'
+                '    child: {\n'
+                '      esModuleURI: "resource:///actors/BearVaultChild.sys.mjs",\n'
+                '      events: {\n'
+                '        DOMContentLoaded: {},\n'
+                '        pageshow: { mozSystemGroup: true },\n'
+                '        keydown: {},\n'
+                '      },\n'
+                '    },\n'
+                '    matches: ["https://*/*", "http://*/*"],\n'
+                '    allFrames: false,\n'
+                '    enablePreference: "bearbrowser.vault.enabled",\n'
+                '  },\n'
             )
             _reg = _reg.replace(
                 "let JSWINDOWACTORS = {",
@@ -371,6 +439,70 @@ def bearbrowser_patches():
             )
             _registry.write_text(_reg)
             print("-> Registered BearBlocker, BearNav, BearSponsor in DesktopActorRegistry")
+
+    # ── Engine-level fingerprinting hardening ─────────────────────────────────
+    # Close two vectors that JS injection cannot cover: @font-face local() CSS
+    # resolution (happens in the Gecko layout engine before JS can intercept) and
+    # Web Worker performance.now() precision (workers run in a separate JS context
+    # unreachable by WKUserScript / content-process injection).
+    import re as _rfp_re
+
+    # Patch 1: gfxUserFontSet.cpp — block LookupLocalFont when our pref is set.
+    # @font-face { src: local('FontName') } triggers this C++ call to check whether
+    # the named font is installed. Sites time the CSS rendering pipeline to infer
+    # which fonts are installed, building a fingerprint. Returning nullptr forces all
+    # local() entries to fail, routing the browser through the next src: candidate
+    # (usually a web font URL), identical behaviour to a machine without that font.
+    _gfxufs = Path("gfx/src/gfxUserFontSet.cpp")
+    if _gfxufs.exists():
+        _gfx = _gfxufs.read_text()
+        if "BearBrowser_block_local_fonts" not in _gfx:
+            _gfx_new = _rfp_re.sub(
+                r'(gfxPlatformFontList\s*::\s*PlatformFontList\s*\(\s*\)\s*->\s*LookupLocalFont\s*\([^;]+\))',
+                r'(StaticPrefs::bearbrowser_privacy_block_local_fonts()'
+                r' ? nullptr /* BearBrowser_block_local_fonts */'
+                r' : \1)',
+                _gfx,
+            )
+            if _gfx_new != _gfx:
+                _gfxufs.write_text(_gfx_new)
+                print("-> Patched gfxUserFontSet.cpp: @font-face local() blocked by bearbrowser.privacy.block_local_fonts")
+            else:
+                print("note: gfxUserFontSet.cpp: LookupLocalFont call-site not matched — font-visibility pref is the primary guard")
+        else:
+            print("note: gfxUserFontSet.cpp already patched — skipping")
+    else:
+        print("note: gfx/src/gfxUserFontSet.cpp not found — skipping local() patch")
+
+    # Patch 2: Performance.cpp + PerformanceWorker.cpp — clamp Now() to 1ms.
+    # Firefox's RFP already reduces precision when privacy.resistFingerprinting=true,
+    # but the default bucket is 2ms. We wrap ReduceTimePrecisionAsMSecs() in
+    # std::floor() to enforce integer-millisecond granularity. This applies to:
+    #   - Performance::Now() (main thread, rAF callbacks)
+    #   - PerformanceWorker (dedicated/shared/service workers)
+    # The JS shield in BearBrowserWebKitLauncher already covers main-thread
+    # performance.now() in WKWebView; this patch covers the Gecko/nightly build
+    # and the worker path that JS cannot reach in either engine.
+    for _perf_src in ["dom/performance/Performance.cpp",
+                      "dom/performance/PerformanceWorker.cpp"]:
+        _pf = Path(_perf_src)
+        if not _pf.exists():
+            print(f"note: {_perf_src} not found — skipping 1ms clamp patch")
+            continue
+        _pc = _pf.read_text()
+        if "BearBrowser_1ms_clamp" in _pc:
+            print(f"note: {_perf_src} already patched — skipping")
+            continue
+        _pc_new = _rfp_re.sub(
+            r'(nsRFPService::ReduceTimePrecisionAsMSecs\([^;]+\))',
+            r'std::floor(\1) /* BearBrowser_1ms_clamp */',
+            _pc,
+        )
+        if _pc_new != _pc:
+            _pf.write_text(_pc_new)
+            print(f"-> Patched {_perf_src}: performance.now() hard-clamped to 1ms integer granularity")
+        else:
+            print(f"note: {_perf_src}: ReduceTimePrecisionAsMSecs pattern not matched — RFP pref is the fallback")
 
     leave_srcdir()
 
