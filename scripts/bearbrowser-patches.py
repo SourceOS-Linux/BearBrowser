@@ -97,6 +97,23 @@ def bearbrowser_patches():
     # create the right mozconfig file..
     exec('cp -v ../assets/mozconfig.new mozconfig')
 
+    # Strip --with-l10n-base: this is a dev build (en-US only, l10n download is
+    # skipped below), so the l10n base dir (lw/l10n) doesn't exist and configure
+    # hard-fails on it. The mozconfig in the read-only mirror still carries the
+    # option despite a comment claiming it was removed — strip it here.
+    def _strip_l10n_base(_path):
+        if not os.path.exists(_path):
+            return
+        with open(_path) as _f:
+            _lines = _f.readlines()
+        with open(_path, "w") as _f:
+            for _ln in _lines:
+                if "--with-l10n-base" in _ln or "with-l10n-base" in _ln:
+                    print(f"-> stripped l10n-base from {_path}: {_ln.strip()}")
+                    continue
+                _f.write(_ln)
+    _strip_l10n_base("mozconfig")
+
     # copy branding files..
     exec("cp -r ../themes/browser .")
     # Create bearbrowser branding directory from librewolf (which already has BearBrowser identity)
@@ -190,6 +207,7 @@ def bearbrowser_patches():
     # provide a script that fetches and bootstraps Nightly and some mozconfigs
     exec('cp -v ../scripts/mozfetch.sh lw/')
     exec('cp -v ../assets/mozconfig.new lw/')
+    _strip_l10n_base("lw/mozconfig.new")
 
     # override the firefox version
     for file in ["browser/config/version.txt", "browser/config/version_display.txt"]:
