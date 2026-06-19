@@ -14,7 +14,7 @@ name: Anti-fingerprint
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, anti-fingerprint-verify]
   schedule:
     - cron: '23 7 * * 1'
   workflow_dispatch:
@@ -74,6 +74,43 @@ jobs:
             fi
           done < <(find "$patches" -name '*.patch' | sort)
           exit $fail
+
+  # ── Tier 2.5: does the FULL stack apply to current ESR source? (Tor mode) ──
+  # Tor mode rides the Firefox 140 cohort but pulls the current ESR point release
+  # (140.12.0esr) for security — see docs/tor-mode.md §version. The open risk is
+  # that LibreWolf's 140.0.4-era patch stack (32 patches) + our anti-fp patches
+  # may not apply cleanly to the ESR tree (backports shift hunks). This proves it
+  # with GNU patch on Linux — the authoritative answer (local macOS BSD patch is
+  # only indicative). No compile, so it runs on a free runner.
+  tor-esr-patch-apply:
+    runs-on: ubuntu-latest
+    env:
+      TOR_COHORT_TAG: '140.0.4-1'      # LibreWolf build-scripts tag (140 line)
+      TOR_ESR_VERSION: '140.12.0esr'   # current ESR point release to retarget to
+      MIRROR: 'https://github.com/SourceOS-Linux/librewolf-source-mirror.git'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: overlay
+      - name: Clone LibreWolf build scripts at the 140 cohort tag
+        run: git clone --depth 1 --branch "$TOR_COHORT_TAG" "$MIRROR" lw
+      - name: Retarget source to current ESR + register anti-fp patches
+        run: |
+          cd lw
+          echo "$TOR_ESR_VERSION" > version
+          cp ../overlay/gecko-patches/anti-fingerprint/*.patch patches/
+          for p in ../overlay/gecko-patches/anti-fingerprint/*.patch; do
+            echo "patches/$(basename "$p")" >> assets/patches.txt
+          done
+          echo "stack size: $(wc -l < assets/patches.txt) patches against firefox-$(cat version)"
+      - name: Fetch ESR source
+        run: |
+          cd lw
+          url="https://archive.mozilla.org/pub/firefox/releases/${TOR_ESR_VERSION}/source/firefox-${TOR_ESR_VERSION}.source.tar.xz"
+          echo "fetching $url"
+          wget -q "$url" -O "firefox-${TOR_ESR_VERSION}.source.tar.xz"
+      - name: check-patchfail against ESR (GNU patch — authoritative)
+        run: cd lw && bash scripts/check-patchfail.sh --no-backup-if-mismatch
 
   # ── Tier 3: real build + measure the actual binary (manual, large runner) ──
   full-build:
