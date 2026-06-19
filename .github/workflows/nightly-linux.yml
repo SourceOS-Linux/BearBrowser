@@ -5,11 +5,17 @@ on:
     - cron: '0 5 * * *'
   workflow_dispatch:
   push:
-    branches: [main]
+    # anti-fingerprint-verify added so the compile can be triggered on this branch
+    # (workflow_dispatch only works from the default branch, which is behind).
+    # Remove the branch + the extra paths once merged to main.
+    branches: [main, anti-fingerprint-verify]
     paths:
       - 'settings/**'
       - 'scripts/bearbrowser-patches.py'
       - 'branding/**'
+      - 'gecko-patches/**'
+      - 'packaging/bundled-fonts/**'
+      - '.github/workflows/nightly-linux.yml'
 
 jobs:
   nightly-linux:
@@ -56,6 +62,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Free disk space (Firefox build needs ~40GB)
+        if: matrix.container == ''
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          sudo docker image prune --all --force || true
+          df -h /
 
       - name: Install system dependencies
         run: |
@@ -107,6 +121,29 @@ jobs:
       - name: Build BearBrowser
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach build
+
+      - name: Measure fingerprint on the REAL compiled binary (authoritative)
+        if: matrix.distro == 'ubuntu'
+        continue-on-error: true
+        run: |
+          OBJ="build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}/obj-x86_64-pc-linux-gnu"
+          bin="$(find "$OBJ/dist" -type f \( -name bearbrowser -o -name firefox \) 2>/dev/null | grep -vE '\.so|crashreporter|minidump|pingsender|updater' | head -1)"
+          echo "real binary: $bin"
+          npm ci || npm install
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          # The compiled binary has our patches + fonts. This is the authoritative
+          # scorecard: it shows what Playwright masks (timezone, real letterboxing)
+          # and whether canvas-text-metric/audio/fonts flipped green.
+          node scripts/measure-fingerprint.mjs --profile ${{ env.PROFILE }} --bin "$bin" --json > fp-real.json || true
+          node scripts/measure-fingerprint.mjs --profile ${{ env.PROFILE }} --bin "$bin" || true
+
+      - name: Upload real-binary scorecard
+        if: matrix.distro == 'ubuntu'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: fp-real-binary-scorecard
+          path: fp-real.json
 
       - name: Package — tarball
         id: tarball
