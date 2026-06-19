@@ -172,13 +172,20 @@ def bearbrowser_patches():
     # pref-pane patches
     #
 
-    # 1) patch it in
-    patch('../patches/pref-pane/pref-pane-small.patch')
-    # 2) new files
-    exec('cp ../patches/pref-pane/category-bearbrowser.svg browser/themes/shared/preferences/category-bearbrowser.svg')
-    exec('cp ../patches/pref-pane/bearbrowser.css browser/themes/shared/preferences/bearbrowser.css')
-    exec('cp ../patches/pref-pane/bearbrowser.inc.xhtml browser/components/preferences/bearbrowser.inc.xhtml')
-    exec('cp ../patches/pref-pane/bearbrowser.js browser/components/preferences/bearbrowser.js')
+    # The pref-pane is an optional BearBrowser UI feature whose assets
+    # (category-bearbrowser.svg + css/xhtml/js) are not present in the tree. It is
+    # orthogonal to the browser engine and to anti-fingerprinting, so skip the
+    # whole block gracefully when the assets are missing rather than hard-failing
+    # the build (otherwise the patch references files that don't exist).
+    if os.path.exists('../patches/pref-pane/category-bearbrowser.svg'):
+        patch('../patches/pref-pane/pref-pane-small.patch')
+        exec('cp ../patches/pref-pane/category-bearbrowser.svg browser/themes/shared/preferences/category-bearbrowser.svg')
+        exec('cp ../patches/pref-pane/bearbrowser.css browser/themes/shared/preferences/bearbrowser.css')
+        exec('cp ../patches/pref-pane/bearbrowser.inc.xhtml browser/components/preferences/bearbrowser.inc.xhtml')
+        exec('cp ../patches/pref-pane/bearbrowser.js browser/components/preferences/bearbrowser.js')
+    else:
+        print("WARNING: pref-pane assets missing — skipping pref-pane feature "
+              "(build proceeds; orthogonal to the engine + anti-fingerprinting)")
     
     # provide a script that fetches and bootstraps Nightly and some mozconfigs
     exec('cp -v ../scripts/mozfetch.sh lw/')
