@@ -67,22 +67,36 @@ already carries the 140 line (`140.0.4-1`), so `apply-sourceos-overlays.sh
 with `BEARBROWSER_TOR_COHORT_MAJOR` or an explicit `--ref`). No new base, no version
 spoofing (which would invite detectable inconsistencies and is not done).
 
-Two caveats, stated plainly:
-- **Security staleness.** The mirror followed Firefox *release* (140.0.x → 141 → …
-  → 150), not the ESR *branch*, so the newest 140 tag is `140.0.4` (mid-2025
-  release point), NOT the ESR continuation `140.10.x` that Tor actually ships. At
-  the UA layer they're identical (`140.0`), but `140.0.4` misses ~a year of ESR
-  security backports. For a privacy browser that's a real gap — the proper fix is
-  the mirror tracking the **`mozilla-esr140` branch** (140.10.x) so Tor mode rides
-  current-security *and* cohort-matching. Tracked as the next mirror task.
-- **Patch re-verification.** The anti-fp patches and the OS-spoof SPEC line numbers
-  were resolved against the 150 tree; on 140 the `nsRFPService` / `Navigator`
-  offsets differ. `patch` fuzz usually absorbs this, but re-run `check-patchfail.sh`
-  against the 140 tag before trusting a Tor-mode build.
+### Current security, not stale 140.0.4 — without touching the mirror
+The mirror is a *verbatim* `--mirror` of LibreWolf upstream (the sync `--prune`s
+anything not upstream, so we cannot park a custom `esr140` branch there). LibreWolf
+tracks Firefox *release*, so its newest 140 tag is `140.0.4` (mid-2025) — ~a year of
+ESR security backports behind the `140.x` ESR Tor actually ships.
+
+We close that gap **without modifying the mirror**, because LibreWolf's Makefile
+fetches `archive.mozilla.org/.../releases/$(version)/source/firefox-$(version)
+.source.tar.xz` purely by version string, and Mozilla hosts the ESR source at the
+*same* path. So `apply-sourceos-overlays.sh --profile tor-mode` now:
+1. pins the 140-line mirror tag (`140.0.4-1`) for LibreWolf's **build scripts**, then
+2. **overrides the workspace `version` file to the current ESR point**
+   (`140.12.0esr` default; verified present on archive.mozilla.org), so `make fetch`
+   pulls current-security ESR source. RFP still freezes the UA to `140.0`, so the
+   cohort match holds. Override via `BEARBROWSER_TOR_FIREFOX_VERSION` (set empty to
+   fall back to the mirror's `140.0.4` release pin).
+
+The result: **cohort-matching UA *and* current ESR security**, no mirror change.
+
+### Open verification (the remaining risk)
+- **Patch-apply on the ESR tree.** LibreWolf's `140.0.4`-era patch stack and our
+  anti-fp patches were verified against *release* source; ESR backports can shift
+  hunks. Run `check-patchfail.sh` against the ESR source before trusting a Tor-mode
+  build (same major → likely fuzz-absorbable, not guaranteed).
+- **OS-spoof line numbers.** The SPEC offsets were resolved on the 150 tree; re-resolve
+  against `firefox-140.12.0esr` when authoring the patch.
 
 Net: Tor mode gives **full network-layer anonymity** plus a JS identity that is
-version-aligned to the cohort (140.0) once it rides the 140 line — with the OS-spoof
-patch (§OS) closing the last identity gap.
+version-aligned to the cohort (`140.0`) on current-security ESR source — with the
+OS-spoof patch (§OS) closing the last identity gap.
 
 ## Why NOT the others
 - **JonDonym / JAP ("johndo"):** defunct — the mixes shut down ~2021, client

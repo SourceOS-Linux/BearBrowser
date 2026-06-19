@@ -151,6 +151,27 @@ mkdir -p "$(dirname "$workspace")"
 git clone "$mirror" "$workspace/source"
 git -C "$workspace/source" checkout "$resolved_ref"
 
+# Tor mode: retarget the Firefox SOURCE to the current ESR point release.
+# The mirror tag (140.0.4-1) supplies LibreWolf's BUILD SCRIPTS; its `version`
+# file pins the 140.0.4 *release* tarball, which is ~a year of security backports
+# behind the 140.x ESR that Tor Browser actually ships. The LibreWolf Makefile
+# fetches `archive.mozilla.org/.../releases/$(version)/source/firefox-$(version)
+# .source.tar.xz`, which is version-string-driven — Mozilla hosts the ESR source
+# at the SAME path — so overriding the `version` file to an esr string pulls the
+# current-security ESR source with no Makefile change. RFP still freezes the UA
+# to "140.0", so the Tor-cohort match is preserved AND we get current security.
+# NOTE: LibreWolf's 140.0.4-era patch stack must be verified against the ESR tree
+# (run check-patchfail.sh on the ESR source) — same major, but ESR backports can
+# shift hunks. Override the version with BEARBROWSER_TOR_FIREFOX_VERSION, or set
+# it empty to keep the mirror's release pin (140.0.4) as a fallback.
+if [ "$profile" = "tor-mode" ]; then
+  tor_ff_version="${BEARBROWSER_TOR_FIREFOX_VERSION-140.12.0esr}"
+  if [ -n "$tor_ff_version" ]; then
+    echo "tor-mode: retargeting Firefox source -> $tor_ff_version (was $(cat "$workspace/source/version" 2>/dev/null))"
+    printf '%s\n' "$tor_ff_version" > "$workspace/source/version"
+  fi
+fi
+
 patch_count=0
 if compgen -G "$repo_root/patches/*.patch" >/dev/null; then
   for patch in "$repo_root"/patches/*.patch; do
