@@ -283,7 +283,7 @@ static void BBCreateMemoryCandidate(NSString *text,NSString *srcURL,NSString *sr
     @"timestamp":BBTimestamp(),@"product":@"BearBrowser",@"state":@"candidate",
     @"actor":@{@"type":@"human",@"id":NSUserName()?:@"local-user"},@"source":src,
     @"classification":@{@"payloadClass":sensitive?@"secret-blocked":@"metadata",@"secretLikeDetected":@(sensitive),@"persistentWriteRequiresApproval":@YES},
-    @"text":sensitive?@"<REDACTED>":text?:@"",
+    @"text":sensitive?@"<REDACTED-SENSITIVE-MEMORY-CANDIDATE>":text?:@"",
     @"policy":@{@"decision":@"hold",@"decisionId":[@"local-" stringByAppendingString:BBRandomHex(8)],@"mode":@"local-default",@"reason":@"Candidates require explicit commit or reject."}
   }));
   BBEmitEvent(@"memory.candidate_created",@"hold",@"Held memory candidate.",@{@"memoryId":memId,@"url":srcURL?:@""});

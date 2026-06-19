@@ -36,8 +36,8 @@ grep -q 'bearbrowser-resolve-action --latest-held --decision deny' "$source"
 grep -q 'bearbrowser-memory-candidate resolve --latest-candidate --decision commit' "$source"
 grep -q 'bearbrowser-memory-candidate resolve --latest-candidate --decision reject' "$source"
 grep -q 'BBMemoryLooksSensitive' "$source"
-grep -q '<REDACTED>' "$source"
-grep -q 'bootstrap shell' "$landing"
+grep -q '<REDACTED-SENSITIVE-MEMORY-CANDIDATE>' "$source"
+grep -q 'BearBrowser native bootstrap active' "$landing"
 
 if [ "$(uname -s)" = "Darwin" ]; then
   tmp="$(mktemp -d)"
