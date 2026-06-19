@@ -192,15 +192,11 @@ jobs:
           ASSETS=()
           [ -f "${{ steps.tarball.outputs.path }}" ] && ASSETS+=("${{ steps.tarball.outputs.path }}")
           [ -n "${{ steps.appimage.outputs.path }}" ] && [ -f "${{ steps.appimage.outputs.path }}" ] && ASSETS+=("${{ steps.appimage.outputs.path }}")
+          NOTES="$(printf 'Automated nightly build — Linux (%s).\n\nNot signed. Developer use only.\n\nCommit: `%s`\nFirefox base: %s\n' '${{ matrix.distro }}' '${{ github.sha }}' '${{ env.VERSION }}')"
           if [ ${#ASSETS[@]} -gt 0 ]; then
             gh release upload "$TAG" "${ASSETS[@]}" --clobber 2>/dev/null || \
             gh release create "$TAG" "${ASSETS[@]}" \
               --title "BearBrowser Nightly ${DATE}" \
-              --notes "Automated nightly build — Linux (${{ matrix.distro }}).
-
-Not signed. Developer use only.
-
-Commit: \`${{ github.sha }}\`
-Firefox base: ${{ env.VERSION }}" \
+              --notes "$NOTES" \
               --prerelease
           fi
