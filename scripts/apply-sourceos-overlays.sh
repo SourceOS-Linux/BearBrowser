@@ -212,9 +212,18 @@ done
 # patches.py applies them (patch -p1) to the extracted Firefox source during the
 # build. Order matters: canvas before audio (both edit RFPTargets.inc, verified
 # to apply in sequence).
+#
+# Tor mode OMITS them. By the spoof-normality decision (docs/tor-mode.md), Tor
+# mode disables CanvasTextMetrics + WebAudioFarble to match the Tor Browser cohort
+# (which quantizes neither) — so compiling them in only to disable them via the
+# overrides pref is pointless. Omitting is behaviorally identical AND avoids
+# rebasing these 150-authored patches onto the 140 ESR tree (their hunks reject on
+# 140; the LibreWolf stack itself applies cleanly — proven in CI).
 afp_dir="$repo_root/gecko-patches/anti-fingerprint"
 patches_txt="$workspace/source/assets/patches.txt"
-if [ -d "$afp_dir" ] && [ -f "$patches_txt" ]; then
+if [ "$profile" = "tor-mode" ]; then
+  echo "feature-layer: tor-mode omits bearbrowser anti-fp patches (disabled to match cohort; see docs/tor-mode.md)"
+elif [ -d "$afp_dir" ] && [ -f "$patches_txt" ]; then
   mkdir -p "$workspace/source/patches"
   for p in anti-fp-canvas-text-metrics.patch anti-fp-audio.patch; do
     if [ -f "$afp_dir/$p" ]; then

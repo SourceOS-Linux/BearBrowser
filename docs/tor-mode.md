@@ -86,13 +86,28 @@ fetches `archive.mozilla.org/.../releases/$(version)/source/firefox-$(version)
 
 The result: **cohort-matching UA *and* current ESR security**, no mirror change.
 
-### Open verification (the remaining risk)
-- **Patch-apply on the ESR tree.** LibreWolf's `140.0.4`-era patch stack and our
-  anti-fp patches were verified against *release* source; ESR backports can shift
-  hunks. Run `check-patchfail.sh` against the ESR source before trusting a Tor-mode
-  build (same major → likely fuzz-absorbable, not guaranteed).
-- **OS-spoof line numbers.** The SPEC offsets were resolved on the 150 tree; re-resolve
-  against `firefox-140.12.0esr` when authoring the patch.
+### ESR patch-apply — verified in CI
+The `tor-esr-patch-apply` job (anti-fingerprint.yml) fetches `firefox-140.12.0esr`
+and dry-runs the whole stack with GNU patch on Linux (authoritative). Findings:
+- **LibreWolf's stack applies cleanly to ESR** — the only reject is `msix.patch`
+  (Windows Store packaging), irrelevant to a Linux/macOS Tor browser, so it's
+  dropped from the Tor-mode stack. Note the ESR tarball extracts to
+  `firefox-140.12.0` (no `esr` suffix in the dirname).
+- **Our anti-fp patches are OMITTED from the Tor-mode build, by design.** Tor mode
+  disables CanvasTextMetrics + WebAudioFarble to match the cohort (which quantizes
+  neither), so compiling them in only to disable them is pointless — and these
+  150-authored patches reject on the 140 tree anyway. Omitting is behaviorally
+  identical to disabling-via-override. The default 150 build keeps them active.
+
+### Still open
+- **OS-spoof line numbers.** The SPEC offsets were resolved on the 150 tree;
+  re-resolve against `firefox-140.12.0` when authoring the patch.
+- **The 140.0.4-1 mirror tag's `version` override → ESR dirname mismatch.** The
+  LibreWolf Makefile derives the source *dirname* from `$(version)` too, so a
+  `version` of `140.12.0esr` makes it look for `firefox-140.12.0esr` while the
+  tarball extracts to `firefox-140.12.0`. The real build flow needs the dirname
+  decoupled from the esr-suffixed tarball/URL (a small Makefile fixup); the
+  patch-apply gate already handles this by discovering the real dir.
 
 Net: Tor mode gives **full network-layer anonymity** plus a JS identity that is
 version-aligned to the cohort (`140.0`) on current-security ESR source — with the

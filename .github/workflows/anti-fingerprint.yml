@@ -94,15 +94,17 @@ jobs:
           path: overlay
       - name: Clone LibreWolf build scripts at the 140 cohort tag
         run: git clone --depth 1 --branch "$TOR_COHORT_TAG" "$MIRROR" lw
-      - name: Retarget source to current ESR + register anti-fp patches
+      - name: Retarget source to current ESR (Tor-mode stack)
         run: |
           cd lw
           echo "$TOR_ESR_VERSION" > version
-          cp ../overlay/gecko-patches/anti-fingerprint/*.patch patches/
-          for p in ../overlay/gecko-patches/anti-fingerprint/*.patch; do
-            echo "patches/$(basename "$p")" >> assets/patches.txt
-          done
-          echo "stack size: $(wc -l < assets/patches.txt) patches against firefox-$(cat version)"
+          # Tor mode omits the bearbrowser anti-fp patches (CanvasTextMetrics +
+          # WebAudioFarble) — they are DISABLED to match the Tor Browser cohort, so
+          # compiling them in is pointless, and these 150-authored patches reject on
+          # the 140 ESR tree anyway (the default 150 build keeps them). So the
+          # Tor-mode ESR stack is the LibreWolf stack only, matching what
+          # apply-sourceos-overlays.sh --profile tor-mode injects (i.e. nothing).
+          echo "tor-mode stack: $(grep -c . assets/patches.txt) LibreWolf patches against firefox-$(cat version) (anti-fp patches omitted by design)"
       - name: Fetch ESR source
         run: |
           cd lw
