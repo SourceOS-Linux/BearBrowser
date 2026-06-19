@@ -25,12 +25,44 @@ anonymity.** So if "BearBrowser over Tor" carried our *extra* protections
 (text-metric quantizer, audio farble, our exact build), we'd be a *tiny, distinct
 cohort riding Tor* — easier to single out than a default Tor Browser user.
 
-Therefore Tor mode deliberately **disables our unique RFP targets** and aligns to
-Tor Browser's configuration. We keep what already matches (the Croscore fonts —
-Tor ships the same Arimo/Tinos/Cousine) and drop what would make us stand out.
+## Spoof normality — don't just turn our tech off
+The naive fix is "disable our extra protections in Tor mode." That is only correct
+when **off already equals the cohort value.** Turning a protection off can leave us
+in a state that *differs* from the Tor crowd — which is exposure, not blending. So
+the rule is: **spoof the cohort's normal value; only disable when disabling IS that
+value.** Three cases:
+
+| Surface | What we do in Tor mode | Why it's the normal value |
+|---|---|---|
+| Text-metric quantizer, audio farble | **Disable** | Tor Browser does *neither* — its un-touched values ARE the cohort normal. Off = stock RFP = exactly what Tor emits. |
+| Fonts | **Keep** Croscore (Arimo/Tinos/Cousine) | Tor ships the same set — we already match. |
+| OS identity (UA / platform / oscpu) | **Actively spoof → Windows** | Tor forces *every* platform to Windows so Mac/Linux hide in the majority. Off would expose our real OS. Needs a patch (see §OS spoof). |
+| Locale, WebGL renderer | **Force** en-US, mask GPU | Tor spoofs these; stock RFP alone would leak real locale/GPU. |
 
 > You cannot be *uniquely-best-BearBrowser* and *network-anonymous* at the same
 > time. You pick per session. That's the honest physics of it.
+
+## §OS spoof — the biggest lever (needs a patch, not a pref)
+Tor Browser presents `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0)
+Gecko/20100101 Firefox/140.0` for **all** desktop platforms. RFP computes its own
+UA and **ignores** `general.useragent.override`, so this cannot be a pref — it is an
+`nsRFPService` patch across ~8 use-sites (UA, platform, oscpu, appVersion, worker
+equivalents, maxTouchPoints). Fully specified in
+`gecko-patches/anti-fingerprint/anti-fp-tor-os-spoof.SPEC.md`; the `tor-mode`
+profile already sets the trigger pref `bearbrowser.tor-mode.spoof-os=windows`
+(a no-op until the patch lands). It is a *coordinated* change — one missed site =
+an inconsistent identity that is worse than no spoof — so it is authored with a
+compiler in the loop, not blind.
+
+## §version — the residual the OS spoof can't fix
+Our build is **Firefox 150**; the live Tor cohort is **140 ESR**. Even a perfect OS
+spoof leaves `Firefox/150.0` ≠ `Firefox/140.0`, and JS version-probes expose the
+real engine — a 150-over-Tor is a distinct cohort from 140-over-Tor. The clean fix
+is **building Tor mode on Firefox 140 ESR** (the train Tor rides), which lines up
+version + RFP constants + engine quirks for free. Spoofing the version string
+instead invites detectable inconsistencies and is not advised. Until we ride the
+same ESR, Tor mode gives **full network-layer anonymity** with a JS identity that is
+Windows-OS-aligned but **version-distinct** — honest, not oversold.
 
 ## Why NOT the others
 - **JonDonym / JAP ("johndo"):** defunct — the mixes shut down ~2021, client
@@ -50,9 +82,12 @@ Tor ships the same Arimo/Tinos/Cousine) and drop what would make us stand out.
   prefetch/predictor/speculative connects.
 - **Proxy LOCKED via enterprise policy** (`Proxy` + `Locked: true`) so no site or
   script can change it and deanonymize the user.
-- **Cohort alignment:** RFP on; bundled Croscore fonts kept (matches Tor); our
-  unique targets disabled via `privacy.fingerprintingProtection.overrides=
-  -CanvasTextMetrics,-WebAudioFarble`.
+- **Cohort alignment (spoof normality):** RFP on; bundled Croscore fonts kept
+  (matches Tor); our unique targets disabled via
+  `privacy.fingerprintingProtection.overrides=-CanvasTextMetrics,-WebAudioFarble`
+  (off = stock RFP = Tor's value); plus `privacy.spoof_english=2` and
+  `webgl.enable-debug-renderer-info=false` to force the locale/GPU values Tor
+  spoofs but stock RFP would leak. OS-spoof trigger pref set (patch pending, §OS).
 
 ### Running Phase 1 (external tor)
 Phase 1 assumes a standalone Tor daemon is already listening on `127.0.0.1:9050`:
@@ -74,10 +109,12 @@ Verify routing at `https://check.torproject.org`.
   "New Identity" / "New Circuit", first-party stream isolation by SOCKS auth.
 
 ## Honest limitations (don't oversell)
-- **Not byte-identical to Tor Browser.** Different build/version → different frozen
-  UA, build id, and some RFP details. We are *aligned to* the Tor cohort, not
-  indistinguishable from it. The **network-layer anonymity (Tor exit) is full**;
-  the JS-fingerprint blend-in is best-effort and improves as we track Tor's config.
+- **Not byte-identical to Tor Browser.** The two open items are the OS spoof (§OS,
+  patch pending) and the engine version (§version — we are FF150, the cohort is FF140
+  ESR; the real fix is building Tor mode on ESR 140). We are *aligned to* the Tor
+  cohort, not yet indistinguishable. The **network-layer anonymity (Tor exit) is
+  full** regardless; the JS-fingerprint blend-in is best-effort and improves as we
+  ride the same ESR and land the OS-spoof patch.
 - **The `overrides` disable of our custom targets must be verified on the real
   build** — the override-syntax handling of patch-added RFPTargets is unconfirmed.
 - Tor mode is **only as safe as the leak list is complete** — every new web API

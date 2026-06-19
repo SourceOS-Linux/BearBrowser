@@ -71,11 +71,29 @@ user_pref("font.system.whitelist", "Arimo, Tinos, Cousine");
 user_pref("font.name.serif.x-western", "Tinos");
 user_pref("font.name.sans-serif.x-western", "Arimo");
 user_pref("font.name.monospace.x-western", "Cousine");
-// DISABLE BearBrowser's unique RFP targets in Tor mode. Their whole point is to
-// be MORE protective than Tor Browser — but "more protective + different" = a
-// distinct, smaller cohort, which on Tor is worse. Blend in instead. (Override
-// syntax disables our two custom RFPTargets; verify on the real build.)
+// PRINCIPLE: spoof normality, don't expose. Where "off" already EQUALS the Tor
+// cohort value, turning our extra tech off IS the spoof. Where our default DIFFERS
+// from the cohort, we must actively emit the cohort value — never sit exposed.
+//
+// (a) Disable our two custom RFP targets. Tor Browser does NOT quantize text
+// metrics and does NOT farble audio — those un-touched values ARE the cohort
+// normal. So "off" here = stock RFP = exactly what a real Tor Browser emits: this
+// is spoofing normality, not opening a gap. (Verify override syntax on real build.)
 user_pref("privacy.fingerprintingProtection.overrides", "-CanvasTextMetrics,-WebAudioFarble");
+//
+// (b) Actively force the things Tor Browser spoofs that stock RFP does NOT, so we
+// never sit in a distinguishable state:
+user_pref("privacy.spoof_english", 2);                 // force en-US surface (Tor does)
+user_pref("webgl.enable-debug-renderer-info", false);  // mask real GPU vendor/renderer
+//
+// (c) The BIG one: Tor makes EVERY desktop platform report Windows so Mac/Linux
+// users hide in the Windows majority. RFP computes its own UA and IGNORES
+// general.useragent/platform/oscpu.override, so this CANNOT be a pref — it needs
+// the nsRFPService OS-spoof patch. This pref is the trigger that patch reads; it is
+// a NO-OP until the patch lands. See
+// gecko-patches/anti-fingerprint/anti-fp-tor-os-spoof.SPEC.md.
+user_pref("bearbrowser.tor-mode.spoof-os", "windows");
+//
 // Match Tor Browser's first-party isolation posture.
 user_pref("privacy.firstparty.isolate", false);     // dFPI supersedes; keep consistent
 user_pref("privacy.partition.serviceWorkers", true);
