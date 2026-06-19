@@ -81,7 +81,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$profile" in
-  human-secure|agent-runtime) ;;
+  human-secure|agent-runtime|tor-mode) ;;
   *)
     echo "ERROR: invalid profile: $profile" >&2
     exit 1

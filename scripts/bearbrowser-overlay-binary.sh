@@ -81,9 +81,9 @@ if [ ! -d "$input_app" ]; then
 fi
 
 case "$profile" in
-  human-secure|agent-runtime) ;;
+  human-secure|agent-runtime|tor-mode) ;;
   *)
-    echo "ERROR: invalid profile '$profile'. Expected human-secure or agent-runtime." >&2
+    echo "ERROR: invalid profile '$profile'. Expected human-secure, agent-runtime, or tor-mode." >&2
     exit 1
     ;;
 esac
