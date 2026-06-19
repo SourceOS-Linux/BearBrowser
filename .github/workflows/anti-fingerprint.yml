@@ -109,8 +109,24 @@ jobs:
           url="https://archive.mozilla.org/pub/firefox/releases/${TOR_ESR_VERSION}/source/firefox-${TOR_ESR_VERSION}.source.tar.xz"
           echo "fetching $url"
           wget -q "$url" -O "firefox-${TOR_ESR_VERSION}.source.tar.xz"
-      - name: check-patchfail against ESR (GNU patch — authoritative)
-        run: cd lw && bash scripts/check-patchfail.sh --no-backup-if-mismatch
+      - name: check-patchfail against ESR (GNU patch — authoritative, robust dir)
+        run: |
+          cd lw
+          rm -rf t && mkdir t && cd t
+          tar xf ../firefox-${TOR_ESR_VERSION}.source.tar.xz
+          srcdir="$(ls -d firefox-* | head -1)"
+          echo "::notice::ESR tarball extracts to '$srcdir' (version file says $TOR_ESR_VERSION)"
+          cd "$srcdir"
+          fail=0
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            echo "==> $p"
+            if ! patch -p1 --dry-run -i "../../$p" > /tmp/po 2>&1; then
+              echo "::error::REJECT $p"; cat /tmp/po; fail=1
+            fi
+          done < ../../assets/patches.txt
+          [ "$fail" = 0 ] && echo "✓ all $(grep -c . ../../assets/patches.txt) patches apply to $srcdir"
+          exit $fail
 
   # ── Tier 3: real build + measure the actual binary (manual, large runner) ──
   full-build:
