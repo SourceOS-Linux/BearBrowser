@@ -1,0 +1,188 @@
+name: Anti-fingerprint
+
+# Three tiers of verification for the anti-fingerprint track:
+#   1. harness-and-measure  — config harness + empirical fingerprint baseline
+#                             (real Gecko via Playwright). Fast; the regression gate.
+#   2. patch-apply          — proves the gecko-patches/ apply to the pinned Firefox
+#                             source (the `check-patchfail` equivalent). No compile.
+#   3. full-build           — manual: real `make build` + geckodriver measurement of
+#                             the actual binary. Heavy; needs a large/self-hosted
+#                             runner (a full Firefox build OOMs/overflows the stock
+#                             14 GB GitHub runner — the project's Forgejo/Woodpecker
+#                             pipeline is the natural home; this is the GH scaffold).
+
+on:
+  pull_request:
+  push:
+    branches: [main, anti-fingerprint-verify]
+  schedule:
+    - cron: '23 7 * * 1'
+  workflow_dispatch:
+
+env:
+  # Keep in sync with the build repo's `version` file.
+  FIREFOX_VERSION: '150.0.1'
+
+jobs:
+  # ── Tier 1: config posture + measured fingerprint baseline ─────────────────
+  harness-and-measure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps + Gecko engine
+        run: |
+          npm ci || npm install
+          npx playwright install --with-deps firefox
+      - name: Config harness (static + runtime RFP) — HARD GATE
+        run: node scripts/verify-gecko-rfp.mjs
+      - name: Fingerprint measurement (both profiles)
+        run: |
+          node scripts/measure-fingerprint.mjs --profile human-secure  --json > fp-human-secure.json
+          node scripts/measure-fingerprint.mjs --profile agent-runtime --json > fp-agent-runtime.json
+          echo "human-secure:  $(jq -r '.neutralized' fp-human-secure.json)/$(jq -r '.total' fp-human-secure.json) neutralized"
+          echo "agent-runtime: $(jq -r '.neutralized' fp-agent-runtime.json)/$(jq -r '.total' fp-agent-runtime.json) neutralized"
+      - name: Upload fingerprint scorecards
+        uses: actions/upload-artifact@v4
+        with:
+          name: fingerprint-scorecards
+          path: fp-*.json
+
+  # ── Tier 2: do the gecko-patches still apply to pinned Firefox source? ──────
+  patch-apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned Firefox source
+        run: |
+          url="https://archive.mozilla.org/pub/firefox/releases/${FIREFOX_VERSION}/source/firefox-${FIREFOX_VERSION}.source.tar.xz"
+          echo "fetching $url"
+          wget -q "$url" -O firefox-src.tar.xz
+          tar xf firefox-src.tar.xz
+      - name: Dry-run apply every anti-fp patch (fail on reject)
+        run: |
+          patches="$(pwd)/gecko-patches"
+          cd "firefox-${FIREFOX_VERSION}"
+          fail=0
+          while IFS= read -r p; do
+            echo "==> $p"
+            if ! patch -p1 --dry-run -i "$p"; then
+              echo "::error file=$p::patch does not apply to firefox-${FIREFOX_VERSION}"
+              fail=1
+            fi
+          done < <(find "$patches" -name '*.patch' | sort)
+          exit $fail
+
+  # ── Tier 2.5: does the FULL stack apply to current ESR source? (Tor mode) ──
+  # Tor mode rides the Firefox 140 cohort but pulls the current ESR point release
+  # (140.12.0esr) for security — see docs/tor-mode.md §version. The open risk is
+  # that LibreWolf's 140.0.4-era patch stack (32 patches) + our anti-fp patches
+  # may not apply cleanly to the ESR tree (backports shift hunks). This proves it
+  # with GNU patch on Linux — the authoritative answer (local macOS BSD patch is
+  # only indicative). No compile, so it runs on a free runner.
+  tor-esr-patch-apply:
+    runs-on: ubuntu-latest
+    env:
+      TOR_COHORT_TAG: '140.0.4-1'      # LibreWolf build-scripts tag (140 line)
+      TOR_ESR_VERSION: '140.12.0esr'   # current ESR point release to retarget to
+      MIRROR: 'https://github.com/SourceOS-Linux/librewolf-source-mirror.git'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: overlay
+      - name: Clone LibreWolf build scripts at the 140 cohort tag
+        run: git clone --depth 1 --branch "$TOR_COHORT_TAG" "$MIRROR" lw
+      - name: Retarget source to current ESR (Tor-mode stack)
+        run: |
+          cd lw
+          echo "$TOR_ESR_VERSION" > version
+          # Tor mode omits the bearbrowser anti-fp patches (CanvasTextMetrics +
+          # WebAudioFarble) — they are DISABLED to match the Tor Browser cohort, so
+          # compiling them in is pointless, and these 150-authored patches reject on
+          # the 140 ESR tree anyway (the default 150 build keeps them). So the
+          # Tor-mode ESR stack is the LibreWolf stack only, matching what
+          # apply-sourceos-overlays.sh --profile tor-mode injects (i.e. nothing).
+          echo "tor-mode stack: $(grep -c . assets/patches.txt) LibreWolf patches against firefox-$(cat version) (anti-fp patches omitted by design)"
+      - name: Fetch ESR source
+        run: |
+          cd lw
+          url="https://archive.mozilla.org/pub/firefox/releases/${TOR_ESR_VERSION}/source/firefox-${TOR_ESR_VERSION}.source.tar.xz"
+          echo "fetching $url"
+          wget -q "$url" -O "firefox-${TOR_ESR_VERSION}.source.tar.xz"
+      - name: check-patchfail against ESR (GNU patch — authoritative, robust dir)
+        run: |
+          cd lw
+          rm -rf t && mkdir t && cd t
+          tar xf ../firefox-${TOR_ESR_VERSION}.source.tar.xz
+          srcdir="$(ls -d firefox-* | head -1)"
+          echo "::notice::ESR tarball extracts to '$srcdir' (version file says $TOR_ESR_VERSION)"
+          cd "$srcdir"
+          fail=0
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            # msix.patch is Windows Store (MSIX) packaging — irrelevant to a
+            # Linux/macOS Tor browser, and it's the one patch that drifts on ESR.
+            # Excluded from the Tor-mode stack (see apply-sourceos-overlays.sh).
+            case "$p" in *msix*) echo "-- SKIP $p (Windows-only, dropped in tor-mode)"; continue ;; esac
+            echo "==> $p"
+            if ! patch -p1 --dry-run -i "../../$p" > /tmp/po 2>&1; then
+              echo "::error::REJECT $p"; cat /tmp/po; fail=1
+            fi
+          done < ../../assets/patches.txt
+          [ "$fail" = 0 ] && echo "✓ all $(grep -c . ../../assets/patches.txt) patches apply to $srcdir"
+          exit $fail
+
+  # ── Tier 3: real build + measure the actual binary (manual, large runner) ──
+  full-build:
+    if: github.event_name == 'workflow_dispatch'
+    # A full Firefox build needs ~40 GB disk + lots of RAM/time. Override with a
+    # large or self-hosted runner: set repo variable BUILD_RUNNER (e.g. a
+    # self-hosted label) — falls back to ubuntu-latest, which will likely run out
+    # of space (kept here so the wiring is visible; the Forgejo pipeline is the
+    # production path).
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: overlay
+      - name: Checkout build repo
+        uses: actions/checkout@v4
+        with:
+          # Set repo variable BUILD_REPO to the LibreWolf-style build repo
+          # (the one with Makefile + scripts/bearbrowser-patches.py + assets/patches.txt).
+          repository: ${{ vars.BUILD_REPO }}
+          path: build-repo
+      - name: Register anti-fp patches into the build
+        run: |
+          cp overlay/gecko-patches/anti-fingerprint/*.patch build-repo/patches/
+          for p in overlay/gecko-patches/anti-fingerprint/*.patch; do
+            echo "patches/$(basename "$p")" >> build-repo/assets/patches.txt
+          done
+      - name: Validate patches apply (fast gate before the slow build)
+        run: cd build-repo && make check-patchfail
+      - name: Build BearBrowser
+        run: cd build-repo && make bootstrap && make build
+      - name: Set up measurement deps
+        run: cd overlay && npm ci || (cd overlay && npm install)
+      - name: Measure the REAL binary (geckodriver — authoritative)
+        run: |
+          # Locate the built binary (Linux: dist/bin/{firefox,bearbrowser};
+          # macOS: dist/*.app/Contents/MacOS/*). measure-fingerprint.mjs --bin
+          # drives it via geckodriver — Playwright (Juggler) can't drive a stock
+          # build. This is the authoritative measurement: it sees what Playwright
+          # masks (e.g. RFP timezone, real letterboxing).
+          bin="$(find build-repo -type f \( -name firefox -o -name bearbrowser \) -path '*dist*' 2>/dev/null | grep -vE '\.dSYM' | head -1)"
+          if [ -z "$bin" ]; then echo "::error::built binary not found under build-repo dist"; exit 1; fi
+          echo "measuring: $bin"
+          export PATH="$PWD/overlay/node_modules/.bin:$PATH"
+          node overlay/scripts/measure-fingerprint.mjs --profile human-secure  --bin "$bin" --json > fp-real-human-secure.json
+          node overlay/scripts/measure-fingerprint.mjs --profile agent-runtime --bin "$bin" --json > fp-real-agent-runtime.json
+          echo "human-secure (real binary): $(jq -r '.neutralized' fp-real-human-secure.json)/$(jq -r '.total' fp-real-human-secure.json)"
+          jq -r '.rows[] | select(.status=="LEAKING") | "  LEAK: \(.vector)"' fp-real-human-secure.json
+      - name: Upload real-binary scorecards
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-binary-scorecards
+          path: fp-real-*.json

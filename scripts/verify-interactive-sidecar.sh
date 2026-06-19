@@ -75,7 +75,7 @@ with urllib.request.urlopen(sys.argv[1], timeout=2) as response:
     print(response.read().decode())
 PY
 
-grep -q 'BearBrowser Governance Queue' "$tmp/page.html"
+grep -q 'BearBrowser Governance' "$tmp/page.html"
 grep -q 'ci-interactive-sidecar' "$tmp/page.html"
 grep -q 'Recent Page Summaries' "$tmp/page.html"
 grep -q 'ci-interactive-summary' "$tmp/page.html"

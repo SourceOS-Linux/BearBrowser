@@ -26,6 +26,8 @@ on:
       - "scripts/verify-interactive-sidecar.sh"
       - "scripts/verify-comparison-plane.sh"
       - "scripts/verify-agent-sidecar-contract.py"
+      - "scripts/bearbrowser-create-receipt.py"
+      - "scripts/bearbrowser-update-receipt.py"
       - ".github/workflows/feature-plane.yml"
   push:
     branches: [main]
@@ -53,6 +55,8 @@ on:
       - "scripts/verify-interactive-sidecar.sh"
       - "scripts/verify-comparison-plane.sh"
       - "scripts/verify-agent-sidecar-contract.py"
+      - "scripts/bearbrowser-create-receipt.py"
+      - "scripts/bearbrowser-update-receipt.py"
       - ".github/workflows/feature-plane.yml"
   workflow_dispatch:
 
@@ -84,7 +88,9 @@ jobs:
             scripts/bearbrowser-governance-queue.py \
             scripts/bearbrowser-sidecar-server.py \
             scripts/bearbrowser-sidecar-status.py \
-            scripts/verify-agent-sidecar-contract.py
+            scripts/verify-agent-sidecar-contract.py \
+            scripts/bearbrowser-create-receipt.py \
+            scripts/bearbrowser-update-receipt.py
 
       - name: Shell syntax
         run: |

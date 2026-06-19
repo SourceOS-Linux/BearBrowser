@@ -78,6 +78,30 @@ cat > "$plist" <<'PLIST'
   <key>CFBundleVersion</key><string>0.1.0-overlay</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>Web URL</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>http</string>
+        <string>https</string>
+      </array>
+    </dict>
+  </array>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>HTML Document</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.html</string>
+        <string>public.xhtml</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST
@@ -85,7 +109,7 @@ PLIST
 cp "$native_landing" "$resources/BearBrowser-start.html"
 cp "$native_source" "$resources/BearBrowserWebKitLauncher.m"
 
-clang -fobjc-arc -framework Cocoa -framework WebKit "$resources/BearBrowserWebKitLauncher.m" -o "$exe"
+clang -fobjc-arc -framework Cocoa -framework WebKit -framework AVFoundation -framework Security "$resources/BearBrowserWebKitLauncher.m" -o "$exe"
 chmod +x "$exe"
 xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
 
