@@ -139,9 +139,21 @@ def bearbrowser_patches():
     else:
         print(f"warning: {gkrust_file} not found, skipping glean_disable_upload patch")
 
-    # Temporary fix used with patches/rust-build.patch
-    exec("sed -i '' 's/9456ca46168ef86c98399a2536f577ef7be3cdde90c0c51392d8ac48519d3fae/60cd124908737068ab21c7773b3df71d00e186cd605f15bad9977232830aabc0/g' third_party/rust/encoding_rs/.cargo-checksum.json")
-    exec("sed -i '' 's/d7405d2bcf99cf9729075473c45f677630f4c1947c8ba9757db607f2025a7da2/a066ad881d5a74386e666fc844f7fecbbd70021d0330c1b08a2d7a2a67437ccf/g' third_party/rust/encoding_rs/.cargo-checksum.json")
+    # Temporary fix used with patches/rust-build.patch — rust-build.patch edits
+    # encoding_rs, so its recorded cargo checksum must be updated to match.
+    # Done in Python: `sed -i ''` is BSD/macOS syntax and FAILS on GNU sed (Linux
+    # CI), where -i takes no separate '' argument.
+    _checksum = "third_party/rust/encoding_rs/.cargo-checksum.json"
+    with open(_checksum, "r") as _f:
+        _c = _f.read()
+    _c = _c.replace(
+        "9456ca46168ef86c98399a2536f577ef7be3cdde90c0c51392d8ac48519d3fae",
+        "60cd124908737068ab21c7773b3df71d00e186cd605f15bad9977232830aabc0")
+    _c = _c.replace(
+        "d7405d2bcf99cf9729075473c45f677630f4c1947c8ba9757db607f2025a7da2",
+        "a066ad881d5a74386e666fc844f7fecbbd70021d0330c1b08a2d7a2a67437ccf")
+    with open(_checksum, "w") as _f:
+        _f.write(_c)
 
     #
     # Apply most recent `settings` repository files.
@@ -178,7 +190,15 @@ def bearbrowser_patches():
             f.write("{}-{}".format(version,release))
 
     print("-> Patching appstrings.properties")
-    exec("find . -path '*/appstrings.properties' -exec sed -i '' 's/Firefox/BearBrowser/g' {} \\;")
+    # Python instead of `find ... -exec sed -i '' ...` — BSD/macOS sed syntax
+    # fails on GNU sed (Linux CI).
+    for _root, _dirs, _files in os.walk("."):
+        if "appstrings.properties" in _files:
+            _p = os.path.join(_root, "appstrings.properties")
+            with open(_p, "r") as _f:
+                _t = _f.read()
+            with open(_p, "w") as _f:
+                _f.write(_t.replace("Firefox", "BearBrowser"))
 
     # Fix StaticPrefList.yaml: move bearbrowser.* prefs to correct alphabetical position
     # (webgl-permission.patch inserts them after layout.* but they must precede bidi.*).
@@ -473,36 +493,51 @@ def bearbrowser_patches():
     # which fonts are installed, building a fingerprint. Returning nullptr forces all
     # local() entries to fail, routing the browser through the next src: candidate
     # (usually a web font URL), identical behaviour to a machine without that font.
-    _gfxufs = Path("gfx/src/gfxUserFontSet.cpp")
-    if _gfxufs.exists():
+    # The file moved gfx/src -> gfx/thebes (Firefox ~150) and the call site is now
+    # gfxPlatform::GetPlatform()->LookupLocalFont(...). Try both locations so the
+    # patch survives upstream churn instead of silently no-op'ing.
+    _gfxufs = next((Path(p) for p in ("gfx/thebes/gfxUserFontSet.cpp",
+                                      "gfx/src/gfxUserFontSet.cpp")
+                    if Path(p).exists()), None)
+    if _gfxufs is not None:
         _gfx = _gfxufs.read_text()
         if "BearBrowser_block_local_fonts" not in _gfx:
+            # Accept either the legacy gfxPlatformFontList::PlatformFontList() or the
+            # current gfxPlatform::GetPlatform() receiver for LookupLocalFont().
             _gfx_new = _rfp_re.sub(
-                r'(gfxPlatformFontList\s*::\s*PlatformFontList\s*\(\s*\)\s*->\s*LookupLocalFont\s*\([^;]+\))',
+                r'((?:gfxPlatformFontList\s*::\s*PlatformFontList'
+                r'|gfxPlatform\s*::\s*GetPlatform)\s*\(\s*\)\s*->\s*'
+                r'LookupLocalFont\s*\([^;]+\))',
                 r'(StaticPrefs::bearbrowser_privacy_block_local_fonts()'
                 r' ? nullptr /* BearBrowser_block_local_fonts */'
                 r' : \1)',
                 _gfx,
             )
             if _gfx_new != _gfx:
+                # The bearbrowser_* accessor lives in StaticPrefs_bearbrowser.h; the
+                # file only includes StaticPrefs_gfx.h, so add ours next to it.
+                inc = '#include "mozilla/StaticPrefs_gfx.h"'
+                if inc in _gfx_new and "StaticPrefs_bearbrowser.h" not in _gfx_new:
+                    _gfx_new = _gfx_new.replace(
+                        inc, inc + '\n#include "mozilla/StaticPrefs_bearbrowser.h"', 1)
                 _gfxufs.write_text(_gfx_new)
-                print("-> Patched gfxUserFontSet.cpp: @font-face local() blocked by bearbrowser.privacy.block_local_fonts")
+                print(f"-> Patched {_gfxufs}: @font-face local() blocked by bearbrowser.privacy.block_local_fonts")
             else:
-                print("note: gfxUserFontSet.cpp: LookupLocalFont call-site not matched — font-visibility pref is the primary guard")
+                print(f"note: {_gfxufs}: LookupLocalFont call-site not matched — font-visibility pref is the primary guard")
         else:
-            print("note: gfxUserFontSet.cpp already patched — skipping")
+            print(f"note: {_gfxufs} already patched — skipping")
     else:
-        print("note: gfx/src/gfxUserFontSet.cpp not found — skipping local() patch")
+        print("note: gfxUserFontSet.cpp not found (tried gfx/thebes, gfx/src) — skipping local() patch")
 
-    # Patch 2: Performance.cpp + PerformanceWorker.cpp — clamp Now() to 1ms.
-    # Firefox's RFP already reduces precision when privacy.resistFingerprinting=true,
-    # but the default bucket is 2ms. We wrap ReduceTimePrecisionAsMSecs() in
-    # std::floor() to enforce integer-millisecond granularity. This applies to:
-    #   - Performance::Now() (main thread, rAF callbacks)
-    #   - PerformanceWorker (dedicated/shared/service workers)
-    # The JS shield in BearBrowserWebKitLauncher already covers main-thread
-    # performance.now() in WKWebView; this patch covers the Gecko/nightly build
-    # and the worker path that JS cannot reach in either engine.
+    # Patch 2: clamp Now() to 1ms by wrapping ReduceTimePrecisionAsMSecs() in
+    # std::floor(). Firefox's RFP already reduces precision when
+    # privacy.resistFingerprinting=true, but the default bucket is 2ms.
+    # In current Firefox the reduction lives in Performance::Now()/
+    # NowUnclamped() (Performance.cpp); PerformanceWorker does NOT override
+    # Now(), so dedicated/shared/service workers inherit the patched base class
+    # — there is no separate ReduceTimePrecisionAsMSecs call in
+    # PerformanceWorker.cpp to clamp. We still look at the worker file so the
+    # patch self-heals if upstream ever reintroduces a worker-local reduction.
     for _perf_src in ["dom/performance/Performance.cpp",
                       "dom/performance/PerformanceWorker.cpp"]:
         _pf = Path(_perf_src)
@@ -521,6 +556,8 @@ def bearbrowser_patches():
         if _pc_new != _pc:
             _pf.write_text(_pc_new)
             print(f"-> Patched {_perf_src}: performance.now() hard-clamped to 1ms integer granularity")
+        elif _perf_src.endswith("PerformanceWorker.cpp"):
+            print("note: PerformanceWorker.cpp has no own reduction — workers inherit the patched Performance::Now() (expected, not a gap)")
         else:
             print(f"note: {_perf_src}: ReduceTimePrecisionAsMSecs pattern not matched — RFP pref is the fallback")
 
