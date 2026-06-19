@@ -54,15 +54,35 @@ profile already sets the trigger pref `bearbrowser.tor-mode.spoof-os=windows`
 an inconsistent identity that is worse than no spoof — so it is authored with a
 compiler in the loop, not blind.
 
-## §version — the residual the OS spoof can't fix
-Our build is **Firefox 150**; the live Tor cohort is **140 ESR**. Even a perfect OS
-spoof leaves `Firefox/150.0` ≠ `Firefox/140.0`, and JS version-probes expose the
-real engine — a 150-over-Tor is a distinct cohort from 140-over-Tor. The clean fix
-is **building Tor mode on Firefox 140 ESR** (the train Tor rides), which lines up
-version + RFP constants + engine quirks for free. Spoofing the version string
-instead invites detectable inconsistencies and is not advised. Until we ride the
-same ESR, Tor mode gives **full network-layer anonymity** with a JS identity that is
-Windows-OS-aligned but **version-distinct** — honest, not oversold.
+## §version — ride the 140 line, not 150
+Default BearBrowser is **Firefox 150**; the live Tor cohort is **Firefox 140 ESR**.
+Building Tor mode on 150 leaves `Firefox/150.0` ≠ `Firefox/140.0`, and version-probes
+expose the real engine — a 150-over-Tor is a distinct cohort from 140-over-Tor.
+
+**The fix is operational, and now wired in.** RFP freezes the spoofed UA to the
+major only (`140.0`), independent of point release — so *any* 140-line build is
+fingerprint-equivalent to Tor's 140.x ESR at the UA layer. The upstream mirror
+already carries the 140 line (`140.0.4-1`), so `apply-sourceos-overlays.sh
+--profile tor-mode` now **auto-pins `latest` to the newest 140-line tag** (override
+with `BEARBROWSER_TOR_COHORT_MAJOR` or an explicit `--ref`). No new base, no version
+spoofing (which would invite detectable inconsistencies and is not done).
+
+Two caveats, stated plainly:
+- **Security staleness.** The mirror followed Firefox *release* (140.0.x → 141 → …
+  → 150), not the ESR *branch*, so the newest 140 tag is `140.0.4` (mid-2025
+  release point), NOT the ESR continuation `140.10.x` that Tor actually ships. At
+  the UA layer they're identical (`140.0`), but `140.0.4` misses ~a year of ESR
+  security backports. For a privacy browser that's a real gap — the proper fix is
+  the mirror tracking the **`mozilla-esr140` branch** (140.10.x) so Tor mode rides
+  current-security *and* cohort-matching. Tracked as the next mirror task.
+- **Patch re-verification.** The anti-fp patches and the OS-spoof SPEC line numbers
+  were resolved against the 150 tree; on 140 the `nsRFPService` / `Navigator`
+  offsets differ. `patch` fuzz usually absorbs this, but re-run `check-patchfail.sh`
+  against the 140 tag before trusting a Tor-mode build.
+
+Net: Tor mode gives **full network-layer anonymity** plus a JS identity that is
+version-aligned to the cohort (140.0) once it rides the 140 line — with the OS-spoof
+patch (§OS) closing the last identity gap.
 
 ## Why NOT the others
 - **JonDonym / JAP ("johndo"):** defunct — the mixes shut down ~2021, client

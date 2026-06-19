@@ -74,12 +74,20 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$profile" in
-  human-secure|agent-runtime) ;;
+  human-secure|agent-runtime|tor-mode) ;;
   *)
-    echo "ERROR: invalid profile '$profile'. Expected human-secure or agent-runtime." >&2
+    echo "ERROR: invalid profile '$profile'. Expected human-secure, agent-runtime, or tor-mode." >&2
     exit 1
     ;;
 esac
+
+# Tor mode must ride the SAME Firefox major as the Tor Browser cohort, so the
+# RFP-frozen UA reads Firefox/<major>.0 identically. Tor Browser 15.x rides
+# Firefox 140 ESR; RFP freezes the UA to "140.0" regardless of point release, so
+# any 140-line mirror tag (e.g. 140.0.4-1) is fingerprint-equivalent at the UA
+# layer. Building tor-mode on the latest overall tag (150) would emit
+# Firefox/150.0 and split us into a distinct cohort. See docs/tor-mode.md §version.
+tor_cohort_major="${BEARBROWSER_TOR_COHORT_MAJOR:-140}"
 
 profile_dir="$repo_root/settings/profiles/${profile}"
 if [ ! -d "$profile_dir" ]; then
@@ -87,17 +95,31 @@ if [ ! -d "$profile_dir" ]; then
   exit 1
 fi
 
+# latest_tag [major]: newest mirror tag, optionally constrained to a Firefox major
+# (e.g. latest_tag 140 -> latest 140.x.y-N tag, for Tor-cohort alignment).
 latest_tag() {
+  local major="${1:-}"
+  local filter='^[0-9]+(\.[0-9]+)*-[0-9]+$'
+  [ -n "$major" ] && filter="^${major}(\\.[0-9]+)*-[0-9]+$"
   git ls-remote --tags "$mirror" \
     | awk -F/ '{print $NF}' \
-    | grep -E '^[0-9]+(\.[0-9]+)*-[0-9]+$' \
+    | grep -E "$filter" \
     | sort -V \
     | tail -1
 }
 
 resolved_ref="$ref"
 if [ "$ref" = "latest" ]; then
-  resolved_ref="$(latest_tag)"
+  if [ "$profile" = "tor-mode" ]; then
+    resolved_ref="$(latest_tag "$tor_cohort_major")"
+    if [ -z "$resolved_ref" ]; then
+      echo "ERROR: tor-mode requires a Firefox $tor_cohort_major-line tag in the mirror (Tor cohort alignment), but none was found." >&2
+      exit 1
+    fi
+    echo "tor-mode: pinned to Firefox ${tor_cohort_major} cohort -> $resolved_ref"
+  else
+    resolved_ref="$(latest_tag)"
+  fi
 fi
 
 if [ -z "$resolved_ref" ]; then
