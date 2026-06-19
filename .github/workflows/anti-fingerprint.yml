@@ -120,6 +120,10 @@ jobs:
           fail=0
           while IFS= read -r p; do
             [ -z "$p" ] && continue
+            # msix.patch is Windows Store (MSIX) packaging — irrelevant to a
+            # Linux/macOS Tor browser, and it's the one patch that drifts on ESR.
+            # Excluded from the Tor-mode stack (see apply-sourceos-overlays.sh).
+            case "$p" in *msix*) echo "-- SKIP $p (Windows-only, dropped in tor-mode)"; continue ;; esac
             echo "==> $p"
             if ! patch -p1 --dry-run -i "../../$p" > /tmp/po 2>&1; then
               echo "::error::REJECT $p"; cat /tmp/po; fail=1

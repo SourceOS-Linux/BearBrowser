@@ -111,14 +111,16 @@ jobs:
           TAG="nightly-${DATE}"
           # Replace any same-day release rather than fail on duplicate tag
           gh release delete "$TAG" --yes 2>/dev/null || true
+          NOTES="$(printf '%s\n' \
+            'Automated nightly build from `main`.' \
+            '' \
+            '**Not notarized — developer use only.**' \
+            'To open: right-click BearBrowser.app → Open (bypasses Gatekeeper).' \
+            '' \
+            "Commit: \`${{ github.sha }}\`" \
+            "Firefox base: ${{ env.VERSION }}")"
           gh release create "$TAG" \
             "${{ steps.dmg.outputs.path }}" \
             --title "BearBrowser Nightly ${DATE}" \
-            --notes "Automated nightly build from \`main\`.
-
-**Not notarized — developer use only.**
-To open: right-click BearBrowser.app → Open (bypasses Gatekeeper).
-
-Commit: \`${{ github.sha }}\`
-Firefox base: ${{ env.VERSION }}" \
+            --notes "$NOTES" \
             --prerelease
