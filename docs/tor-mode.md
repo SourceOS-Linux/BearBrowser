@@ -99,15 +99,24 @@ and dry-runs the whole stack with GNU patch on Linux (authoritative). Findings:
   150-authored patches reject on the 140 tree anyway. Omitting is behaviorally
   identical to disabling-via-override. The default 150 build keeps them active.
 
+### ESR dirname mismatch — FIXED
+The LibreWolf Makefile derived the source *dirname* from `$(version)`
+(`ff_source_dir:=firefox-$(version)`), so a `version` of `140.12.0esr` made it
+look for `firefox-140.12.0esr` while the tarball extracts to `firefox-140.12.0` —
+the `mv $(ff_source_dir) $(lw_source_dir)` step would fail. `apply-sourceos-
+overlays.sh --profile tor-mode` now patches the Makefile to
+`basever:=$(subst esr,,$(version))` / `ff_source_dir:=firefox-$(basever)`, so the
+dirname drops the esr suffix while the tarball name and fetch URL keep it (those
+paths exist on archive.mozilla.org). `$(subst esr,,X)` is a no-op for release
+versions, so the default 150 build is unaffected. Verified: esr →
+`firefox-140.12.0`, release → `firefox-150.0.1`.
+
 ### Still open
 - **OS-spoof line numbers.** The SPEC offsets were resolved on the 150 tree;
   re-resolve against `firefox-140.12.0` when authoring the patch.
-- **The 140.0.4-1 mirror tag's `version` override → ESR dirname mismatch.** The
-  LibreWolf Makefile derives the source *dirname* from `$(version)` too, so a
-  `version` of `140.12.0esr` makes it look for `firefox-140.12.0esr` while the
-  tarball extracts to `firefox-140.12.0`. The real build flow needs the dirname
-  decoupled from the esr-suffixed tarball/URL (a small Makefile fixup); the
-  patch-apply gate already handles this by discovering the real dir.
+- **Compile + the build runner.** Patch-apply is green; a full `./mach build` of
+  the Tor-mode ESR tree still needs a runner that won't time out (see the SIGTERM
+  on the free GitHub runner).
 
 Net: Tor mode gives **full network-layer anonymity** plus a JS identity that is
 version-aligned to the cohort (`140.0`) on current-security ESR source — with the

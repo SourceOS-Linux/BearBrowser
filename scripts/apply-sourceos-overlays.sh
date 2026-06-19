@@ -169,6 +169,32 @@ if [ "$profile" = "tor-mode" ]; then
   if [ -n "$tor_ff_version" ]; then
     echo "tor-mode: retargeting Firefox source -> $tor_ff_version (was $(cat "$workspace/source/version" 2>/dev/null))"
     printf '%s\n' "$tor_ff_version" > "$workspace/source/version"
+
+    # Makefile dirname fixup. The LibreWolf Makefile derives the source DIRNAME
+    # from $(version) too: `ff_source_dir:=firefox-$(version)`. For an esr string
+    # that is wrong — Mozilla's firefox-140.12.0esr.source.tar.xz extracts to
+    # `firefox-140.12.0` (no esr suffix), so the unpatched `mv $(ff_source_dir)
+    # $(lw_source_dir)` fails. The tarball name and fetch URL must KEEP the esr
+    # suffix (that path exists on archive.mozilla.org); only the dirname must drop
+    # it. Introduce `basever:=$(subst esr,,$(version))` and use it for the dirname.
+    # $(subst esr,,X) is a no-op for non-esr versions, so this is safe in general.
+    mk="$workspace/source/Makefile"
+    if grep -q '^ff_source_dir:=firefox-$(version)' "$mk"; then
+      python3 - "$mk" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace(
+    "ff_source_dir:=firefox-$(version)",
+    "basever:=$(subst esr,,$(version))\nff_source_dir:=firefox-$(basever)",
+    1,
+)
+open(p, "w").write(s)
+print("tor-mode: patched Makefile ff_source_dir to strip esr suffix (dirname vs tarball)")
+PY
+    else
+      echo "WARNING: Makefile 'ff_source_dir:=firefox-\$(version)' line not found — esr dirname fixup skipped, build may fail at the mv step" >&2
+    fi
   fi
 fi
 
