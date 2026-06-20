@@ -4687,9 +4687,14 @@ static NSString *kFaviconJS=@"(function(){"
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
     [[BBHistoryStore shared] recordTitle:tab.title url:url];
   });
-  // Capture server trust for cert inspector — private KVC, graceful if absent
+  // Capture server trust for cert inspector — private KVC. `_serverTrust` was
+  // removed/renamed on newer WebKit (macOS 26 / WebKit 21623+), and valueForKey:
+  // on an UNDEFINED key raises NSUndefinedKeyException (it does NOT return nil),
+  // which would abort the app on every finished navigation. Guard it.
   if (wv==self.webView) {
-    SecTrustRef trust=(__bridge SecTrustRef)[wv valueForKey:@"_serverTrust"];
+    SecTrustRef trust=NULL;
+    @try { trust=(__bridge SecTrustRef)[wv valueForKey:@"_serverTrust"]; }
+    @catch (NSException *e) { trust=NULL; }
     if (trust) { CFRetain(trust); if(self.currentTrust) CFRelease(self.currentTrust); self.currentTrust=trust; }
     else        { if(self.currentTrust){ CFRelease(self.currentTrust); self.currentTrust=nil; } }
   }
