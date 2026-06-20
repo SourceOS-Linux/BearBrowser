@@ -98,13 +98,14 @@ jobs:
         run: |
           cd lw
           echo "$TOR_ESR_VERSION" > version
-          # Tor mode omits the bearbrowser anti-fp patches (CanvasTextMetrics +
-          # WebAudioFarble) — they are DISABLED to match the Tor Browser cohort, so
-          # compiling them in is pointless, and these 150-authored patches reject on
-          # the 140 ESR tree anyway (the default 150 build keeps them). So the
-          # Tor-mode ESR stack is the LibreWolf stack only, matching what
-          # apply-sourceos-overlays.sh --profile tor-mode injects (i.e. nothing).
-          echo "tor-mode stack: $(grep -c . assets/patches.txt) LibreWolf patches against firefox-$(cat version) (anti-fp patches omitted by design)"
+          # Tor mode omits the canvas/audio anti-fp patches (disabled to match the
+          # cohort; they're 150-authored and reject on 140 anyway) — but it DOES
+          # need the OS-spoof patch: forcing the Windows identity is a cohort
+          # requirement. Register only that one, matching apply-sourceos-overlays.sh
+          # --profile tor-mode.
+          cp ../overlay/gecko-patches/anti-fingerprint/anti-fp-tor-os-spoof.patch patches/
+          echo "patches/anti-fp-tor-os-spoof.patch" >> assets/patches.txt
+          echo "tor-mode stack: $(grep -c . assets/patches.txt) patches (LibreWolf + OS-spoof) against firefox-$(cat version)"
       - name: Fetch ESR source
         run: |
           cd lw

@@ -248,7 +248,29 @@ done
 afp_dir="$repo_root/gecko-patches/anti-fingerprint"
 patches_txt="$workspace/source/assets/patches.txt"
 if [ "$profile" = "tor-mode" ]; then
-  echo "feature-layer: tor-mode omits bearbrowser anti-fp patches (disabled to match cohort; see docs/tor-mode.md)"
+  echo "feature-layer: tor-mode omits the canvas/audio anti-fp patches (disabled to match cohort; see docs/tor-mode.md)"
+  # ...but tor-mode DOES need the OS-spoof patch: Tor forces the Windows identity
+  # on all desktop platforms, which is a cohort REQUIREMENT (not one of our extra
+  # protections). It's gated on -DBEARBROWSER_FORCE_WIN_SPOOF, set below.
+  osspoof="anti-fp-tor-os-spoof.patch"
+  if [ -f "$afp_dir/$osspoof" ] && [ -f "$patches_txt" ]; then
+    mkdir -p "$workspace/source/patches"
+    cp "$afp_dir/$osspoof" "$workspace/source/patches/$osspoof"
+    grep -qxF "patches/$osspoof" "$patches_txt" || echo "patches/$osspoof" >> "$patches_txt"
+    echo "feature-layer: registered tor-mode OS-spoof patch $osspoof"
+  fi
+  # Turn the spoof on at compile time. The macro gates nsRFPService.h + Navigator
+  # .cpp so the whole identity (UA/oscpu/appVersion/platform, main + workers)
+  # reports Windows. The default 150 build never sets it -> real OS.
+  mozcfg="$workspace/source/assets/mozconfig"
+  if [ -f "$mozcfg" ] && ! grep -q "BEARBROWSER_FORCE_WIN_SPOOF" "$mozcfg"; then
+    {
+      echo ''
+      echo '# BearBrowser Tor mode: present the Windows identity (Tor Browser cohort).'
+      echo 'export CXXFLAGS="${CXXFLAGS} -DBEARBROWSER_FORCE_WIN_SPOOF"'
+    } >> "$mozcfg"
+    echo "feature-layer: tor-mode mozconfig sets -DBEARBROWSER_FORCE_WIN_SPOOF"
+  fi
 elif [ -d "$afp_dir" ] && [ -f "$patches_txt" ]; then
   mkdir -p "$workspace/source/patches"
   for p in anti-fp-canvas-text-metrics.patch anti-fp-audio.patch; do
