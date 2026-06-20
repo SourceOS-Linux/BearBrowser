@@ -42,17 +42,28 @@ value.** Three cases:
 > You cannot be *uniquely-best-BearBrowser* and *network-anonymous* at the same
 > time. You pick per session. That's the honest physics of it.
 
-## §OS spoof — the biggest lever (needs a patch, not a pref)
+## §OS spoof — the biggest lever (a compile-time patch)
 Tor Browser presents `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0)
-Gecko/20100101 Firefox/140.0` for **all** desktop platforms. RFP computes its own
-UA and **ignores** `general.useragent.override`, so this cannot be a pref — it is an
-`nsRFPService` patch across ~8 use-sites (UA, platform, oscpu, appVersion, worker
-equivalents, maxTouchPoints). Fully specified in
-`gecko-patches/anti-fingerprint/anti-fp-tor-os-spoof.SPEC.md`; the `tor-mode`
-profile already sets the trigger pref `bearbrowser.tor-mode.spoof-os=windows`
-(a no-op until the patch lands). It is a *coordinated* change — one missed site =
-an inconsistent identity that is worse than no spoof — so it is authored with a
-compiler in the loop, not blind.
+Gecko/20100101 Firefox/140.0` for **all** desktop platforms, so Mac/Linux users
+hide in the Windows majority. RFP computes its own UA and **ignores**
+`general.useragent.override`, so this must be a patch.
+
+The patch (`gecko-patches/anti-fingerprint/anti-fp-tor-os-spoof.patch`, **applies
+cleanly to firefox-140.12.0** — verified locally + in CI) turned out far smaller
+than first specced. Every spoofed value except `navigator.platform` flows from the
+`SPOOFED_*` macros in `nsRFPService.h` — `navigator.userAgent` (nsRFPService),
+`navigator.oscpu`/`appVersion` (Navigator + WorkerNavigator), and the worker copies
+(RuntimeService calls `Navigator::Get*`). So **one `#ifdef` in the header** forces
+UA + oscpu + appVersion consistently, and `navigator.platform` (the one hardcoded
+site) gets a one-line condition. No per-site coordination, no runtime pref, no
+StaticPrefs codegen — so no inconsistent-identity risk.
+
+It is gated on `-DBEARBROWSER_FORCE_WIN_SPOOF`, which `apply-sourceos-overlays.sh
+--profile tor-mode` sets in the workspace mozconfig and injects the patch. The
+default 150 build never defines it → real OS. `maxTouchPoints` stays 0 (Tor desktop)
+rather than Windows' 10. Compile-verification lands with the Forgejo build; the
+SPEC file (`anti-fp-tor-os-spoof.SPEC.md`) documented the original ~8-site runtime
+approach and is now superseded by this simpler compile-time patch.
 
 ## §version — ride the 140 line, not 150
 Default BearBrowser is **Firefox 150**; the live Tor cohort is **Firefox 140 ESR**.

@@ -88,11 +88,10 @@ user_pref("webgl.enable-debug-renderer-info", false);  // mask real GPU vendor/r
 //
 // (c) The BIG one: Tor makes EVERY desktop platform report Windows so Mac/Linux
 // users hide in the Windows majority. RFP computes its own UA and IGNORES
-// general.useragent/platform/oscpu.override, so this CANNOT be a pref — it needs
-// the nsRFPService OS-spoof patch. This pref is the trigger that patch reads; it is
-// a NO-OP until the patch lands. See
-// gecko-patches/anti-fingerprint/anti-fp-tor-os-spoof.SPEC.md.
-user_pref("bearbrowser.tor-mode.spoof-os", "windows");
+// general.useragent/platform/oscpu.override, so this is NOT a pref — it is the
+// compile-time OS-spoof patch (gecko-patches/anti-fingerprint/
+// anti-fp-tor-os-spoof.patch), built in via -DBEARBROWSER_FORCE_WIN_SPOOF which
+// apply-sourceos-overlays.sh --profile tor-mode sets. Nothing to set here.
 //
 // Match Tor Browser's first-party isolation posture.
 user_pref("privacy.firstparty.isolate", false);     // dFPI supersedes; keep consistent
