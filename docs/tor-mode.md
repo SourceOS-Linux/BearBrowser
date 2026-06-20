@@ -112,11 +112,14 @@ versions, so the default 150 build is unaffected. Verified: esr →
 `firefox-140.12.0`, release → `firefox-150.0.1`.
 
 ### Still open
-- **OS-spoof line numbers.** The SPEC offsets were resolved on the 150 tree;
-  re-resolve against `firefox-140.12.0` when authoring the patch.
-- **Compile + the build runner.** Patch-apply is green; a full `./mach build` of
-  the Tor-mode ESR tree still needs a runner that won't time out (see the SIGTERM
-  on the free GitHub runner).
+- **Compile + the build runner.** Patch-apply is green; `tor-esr-patch-apply` CI
+  proves the full Tor-mode stack (LibreWolf patches + OS-spoof) applies cleanly to
+  `firefox-140.12.0`. A full `./mach build` needs a large runner; Forgejo/Woodpecker
+  is the production path (Tier 3 `full-build` job, `workflow_dispatch` only).
+
+~~OS-spoof line numbers~~ — **RESOLVED** (2026-06-19). `tor-esr-patch-apply` CI
+includes the OS-spoof patch and passes green on `main`. The 150-authored hunk
+offsets apply to `firefox-140.12.0` without adjustment.
 
 Net: Tor mode gives **full network-layer anonymity** plus a JS identity that is
 version-aligned to the cohort (`140.0`) on current-security ESR source — with the
