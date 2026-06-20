@@ -44,7 +44,7 @@ jobs:
             pkg_update: dnf makecache -q
             pkg_install: >-
               dnf install -y
-              gcc gcc-c++ make python3 python3-pip git curl which
+              gcc gcc-c++ make python3 python3-pip git curl wget which
               gtk3-devel dbus-glib-devel libXt-devel libXcomposite-devel
               libxcb-devel pulseaudio-libs-devel alsa-lib-devel
               nasm yasm zip unzip findutils diffutils patch
