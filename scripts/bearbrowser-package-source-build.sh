@@ -146,20 +146,24 @@ if [ ! -d "$profile_dir" ]; then
   exit 1
 fi
 
-# user.js goes into browser/defaults/preferences/
+# user.js -> browser/defaults/preferences/ (default-pref file).
+# user.js uses user_pref(), which is ONLY valid in a profile's prefs.js — a
+# default-pref file must use pref(). Convert so the prefs actually take effect.
 pref_dest="$out_app/Contents/Resources/browser/defaults/preferences"
 mkdir -p "$pref_dest"
 if [ -f "$profile_dir/user.js" ]; then
-  cp "$profile_dir/user.js" "$pref_dest/bearbrowser-user.js"
-  echo "      user.js → $pref_dest/bearbrowser-user.js"
+  python3 "$script_dir/userjs-to-autoconfig.py" \
+    "$profile_dir/user.js" "$pref_dest/bearbrowser-user.js" --profile "$profile"
+  echo "      user.js → $pref_dest/bearbrowser-user.js (user_pref→pref)"
 fi
 
 # policies.json goes into distribution/
 policy_dest="$out_app/Contents/Resources/distribution"
 mkdir -p "$policy_dest"
 if [ -f "$profile_dir/policies.json" ]; then
-  cp "$profile_dir/policies.json" "$policy_dest/policies.json"
-  echo "      policies.json → $policy_dest/policies.json"
+  # Strip inline // comments — Firefox rejects a commented policies.json.
+  python3 "$script_dir/strip-json-comments.py" "$profile_dir/policies.json" "$policy_dest/policies.json"
+  echo "      policies.json → $policy_dest/policies.json (comments stripped)"
 fi
 
 # ── Step 5: Ad-hoc sign ───────────────────────────────────────────────────────

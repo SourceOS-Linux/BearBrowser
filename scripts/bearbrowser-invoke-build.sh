@@ -118,13 +118,17 @@ if [ -d "$profile_dir" ]; then
   profile_dest="browser/app/profile"
   mkdir -p "$profile_dest"
   if [ -f "$profile_dir/user.js" ]; then
-    cp "$profile_dir/user.js" "$profile_dest/bearbrowser-${profile}.js"
-    echo "settings: user.js -> $profile_dest/bearbrowser-${profile}.js"
+    # browser/app/profile/*.js is a default-pref file (pref()), not a user.js
+    # (user_pref()). Convert so the prefs actually apply.
+    python3 "$script_dir/userjs-to-autoconfig.py" \
+      "$profile_dir/user.js" "$profile_dest/bearbrowser-${profile}.js" --profile "$profile"
+    echo "settings: user.js -> $profile_dest/bearbrowser-${profile}.js (user_pref→pref)"
   fi
   if [ -f "$profile_dir/policies.json" ]; then
     mkdir -p "distribution"
-    cp "$profile_dir/policies.json" "distribution/policies.json"
-    echo "settings: policies.json -> distribution/policies.json"
+    # Strip inline // comments — Firefox rejects a commented policies.json.
+    python3 "$script_dir/strip-json-comments.py" "$profile_dir/policies.json" "distribution/policies.json"
+    echo "settings: policies.json -> distribution/policies.json (comments stripped)"
   fi
 else
   echo "WARNING: profile directory not found: $profile_dir"
