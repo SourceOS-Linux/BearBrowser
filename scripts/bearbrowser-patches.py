@@ -264,7 +264,13 @@ def bearbrowser_patches():
             "# Prefs starting with \"bidi.\"\n"
             "#---------------------------------------------------------------------------"
         )
-        if "bearbrowser.webgl.prompt" in _yaml and "bidi." in _yaml:
+        # Insert the canonical bearbrowser.* block whenever the bidi.* anchor is
+        # present. (Previously this also required bearbrowser.webgl.prompt to be
+        # pre-seeded by an earlier patch — true on 150, but NOT on 140 ESR, so the
+        # whole block was silently skipped → StaticPrefs_bearbrowser.h never
+        # generated → gfxUserFontSet.cpp failed. The strip below dedupes any
+        # existing section, so this is safe on both trees.)
+        if _bidi_marker in _yaml:
             # Remove any existing bearbrowser.* section (misplaced or outdated) then
             # insert the canonical block immediately before bidi.*.
             _bb_section_start = (
