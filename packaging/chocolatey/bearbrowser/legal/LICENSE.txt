@@ -1,0 +1,3 @@
+BearBrowser is built on Firefox ESR (Mozilla Public License 2.0).
+BearBrowser-specific code: MIT License
+See https://github.com/SourceOS-Linux/BearBrowser/blob/main/LICENSE

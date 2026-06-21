@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>bearbrowser</id>
+    <version>0.1.0</version>
+    <packageSourceUrl>https://github.com/SourceOS-Linux/BearBrowser</packageSourceUrl>
+    <owners>SourceOS-Linux</owners>
+    <title>BearBrowser</title>
+    <authors>SourceOS-Linux</authors>
+    <projectUrl>https://github.com/SourceOS-Linux/BearBrowser</projectUrl>
+    <licenseUrl>https://github.com/SourceOS-Linux/BearBrowser/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <bugTrackerUrl>https://github.com/SourceOS-Linux/BearBrowser/issues</bugTrackerUrl>
+    <tags>browser privacy firefox gecko anti-fingerprinting sourceos privacy-browser</tags>
+    <summary>Gecko-first privacy browser with 101 JS anti-fingerprinting protections</summary>
+    <description><![CDATA[
+# BearBrowser
+
+A Gecko-first (Firefox ESR) privacy browser hardened against fingerprinting and tracking.
+
+## Features
+
+- **Gecko engine (Firefox ESR)** — rides FF140 ESR cohort for fingerprinting crowd anonymity
+- **101 JS fingerprinting protections** — Canvas, WebGL, AudioContext, Fonts, Timing, WebRTC all spoofed or normalized
+- **OS spoof layer** — reports normalized platform to avoid cross-session tracking
+- **Anti-tracking** — uBlock-equivalent content filtering baked in, not as extension
+- **SourceOS sovereign** — no Google sync, no telemetry, no cloud dependency
+- **Windows native** — full Win32 browser integration, pinnable to taskbar
+- **Automatic updates** — via Chocolatey or built-in update check
+
+## Privacy Model
+
+BearBrowser's fingerprinting shield operates at 101 distinct surfaces:
+- Canvas 2D + WebGL pixel data randomization
+- AudioContext frequency response spoofing
+- Font enumeration normalization (reports common set)
+- Screen resolution + color depth normalization
+- Timezone offset stabilization
+- Navigator property normalization
+- Hardware concurrency normalization
+- Battery status API disabled
+- WebRTC leak prevention
+- Sensor API disabled
+
+## Windows Notes
+
+On Windows, BearBrowser uses the Gecko engine exclusively (WKWebView is macOS-only).
+The browser registers itself as a default browser option in Windows settings.
+    ]]></description>
+    <releaseNotes>https://github.com/SourceOS-Linux/BearBrowser/releases</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+    <file src="legal\**" target="legal" />
+  </files>
+</package>
