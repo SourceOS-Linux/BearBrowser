@@ -66,7 +66,7 @@
 +  // fingerprint cannot be linked between sessions — RFP randomizes canvas but
 +  // not audio, and this closes that residual).
 +  static const double sFarbleFactor = []() {
-+    uint64_t r = mozilla::RandomUint64OrZero();
++    uint64_t r = mozilla::RandomUint64().valueOr(0);
 +    double frac = (double)(r % 2000001) / 1000000.0 - 1.0;  // [-1, 1]
 +    return 1.0 + frac * 1e-7;
 +  }();
