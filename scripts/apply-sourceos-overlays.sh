@@ -249,6 +249,14 @@ afp_dir="$repo_root/gecko-patches/anti-fingerprint"
 patches_txt="$workspace/source/assets/patches.txt"
 if [ "$profile" = "tor-mode" ]; then
   echo "feature-layer: tor-mode omits the canvas/audio anti-fp patches (disabled to match cohort; see docs/tor-mode.md)"
+  # Drop msix.patch (Windows Store packaging) from the tor-mode stack: it's
+  # irrelevant to a Linux/macOS Tor browser AND it fails to apply on the 140 ESR
+  # tree (hunk drift), which aborts the whole `make` build. The CI patch-apply
+  # gate already excludes it; do the same for the real build.
+  if [ -f "$patches_txt" ]; then
+    grep -v 'patches/msix\.patch' "$patches_txt" > "$patches_txt.tmp" && mv "$patches_txt.tmp" "$patches_txt"
+    echo "feature-layer: tor-mode dropped msix.patch (Windows-only; drifts on ESR)"
+  fi
   # ...but tor-mode DOES need the OS-spoof patch: Tor forces the Windows identity
   # on all desktop platforms, which is a cohort REQUIREMENT (not one of our extra
   # protections). It's gated on -DBEARBROWSER_FORCE_WIN_SPOOF, set below.
