@@ -66,6 +66,17 @@ for p in $profiles; do
   log "[$p] BUILT: $bin"
   "$bin" --version > "$art/$p-version.txt" 2>&1 || true
 
+  # Firefox RUNTIME libs — `mach bootstrap` installs BUILD deps, not run deps, so
+  # geckodriver couldn't launch the binary headless (empty scorecard). Install once.
+  if [ ! -f /tmp/.bb-runtime-deps ]; then
+    log "installing Firefox runtime libs for the scorecard..."
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+      libgtk-3-0t64 libdbus-glib-1-2 libxt6t64 libasound2t64 libx11-xcb1 libpci3 >/dev/null 2>&1 \
+    || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+      libgtk-3-0 libdbus-glib-1-2 libxt6 libasound2 libx11-xcb1 libpci3 >/dev/null 2>&1 || true
+    touch /tmp/.bb-runtime-deps
+  fi
+
   # ── Scorecard: drive the REAL binary (authoritative) ──
   log "[$p] measuring fingerprint scorecard..."
   PATH="$repo/node_modules/.bin:$PATH" \
