@@ -56,9 +56,12 @@ for p in $profiles; do
     log "[$p] FAIL: build rc=$rc — see $p-build.log (tail below)"; tail -25 "$art/$p-build.log"; fail=1; continue
   fi
 
-  bin="$(find "$ws" -type f -name firefox -path '*dist/bin*' 2>/dev/null | head -1)"
+  # The branded build names the binary bearbrowser/librewolf, not firefox.
+  bin="$(find "$ws" -type f \( -name bearbrowser -o -name librewolf -o -name firefox \) -path '*dist/bin*' 2>/dev/null | head -1)"
   if [ -z "$bin" ]; then
-    log "[$p] FAIL: build succeeded but no dist/bin/firefox found"; fail=1; continue
+    log "[$p] FAIL: build succeeded but no dist/bin binary found (looked for bearbrowser/librewolf/firefox)"
+    find "$ws" -type f -path '*dist/bin*' 2>/dev/null | grep -viE '\.(so|js|json|txt|xpi|ini)$' | head -20
+    fail=1; continue
   fi
   log "[$p] BUILT: $bin"
   "$bin" --version > "$art/$p-version.txt" 2>&1 || true
