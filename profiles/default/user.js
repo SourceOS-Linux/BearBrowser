@@ -1,18 +1,3 @@
-#!/bin/bash
-set -e
-
-case "$1" in
-  configure)
-    # Write user.js fingerprinting profile
-    PROFILE_DIR="$HOME/.bearbrowser/profiles/default"
-    if [ -n "$SUDO_USER" ]; then
-      USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
-      PROFILE_DIR="$USER_HOME/.bearbrowser/profiles/default"
-    fi
-    mkdir -p "$PROFILE_DIR"
-
-    # Write 101-pref fingerprinting shield
-    cat > "$PROFILE_DIR/user.js" << 'USERJS'
 // BearBrowser fingerprinting shield — 101 surfaces (Linux)
 // Source of truth: profiles/default/user.js — consumed by all platform packaging
 
@@ -150,24 +135,3 @@ user_pref("clipboard.autocopy", false);
 user_pref("extensions.pocket.enabled", false);
 user_pref("extensions.screenshots.disabled", true);
 user_pref("reader.parse-on-load.enabled", false);
-USERJS
-
-    # Register MIME types
-    if command -v update-desktop-database >/dev/null 2>&1; then
-      update-desktop-database -q /usr/share/applications/ || true
-    fi
-    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-      gtk-update-icon-cache -q -t /usr/share/icons/hicolor/ >/dev/null 2>&1 || true
-    fi
-
-    # Register as x-scheme-handler
-    if command -v xdg-mime >/dev/null 2>&1; then
-      xdg-mime default bearbrowser.desktop x-scheme-handler/http x-scheme-handler/https 2>/dev/null || true
-    fi
-
-    echo "BearBrowser installed."
-    echo "  101 fingerprinting protections active."
-    echo "  Profile: $PROFILE_DIR"
-    ;;
-esac
-exit 0
