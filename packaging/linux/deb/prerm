@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+case "$1" in
+  remove|upgrade)
+    if command -v xdg-mime >/dev/null 2>&1; then
+      # Only remove if BearBrowser is the default
+      current=$(xdg-mime query default x-scheme-handler/https 2>/dev/null || true)
+      if [ "$current" = "bearbrowser.desktop" ]; then
+        xdg-mime default firefox.desktop x-scheme-handler/http x-scheme-handler/https 2>/dev/null || true
+      fi
+    fi
+    ;;
+esac
+exit 0

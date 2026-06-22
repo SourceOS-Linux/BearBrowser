@@ -1,0 +1,21 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=BearBrowser
+GenericName=Web Browser
+Comment=Privacy-first Gecko browser with 101 fingerprinting protections
+Exec=bearbrowser %u
+Icon=bearbrowser
+StartupNotify=true
+StartupWMClass=BearBrowser
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;application/xml;application/rss+xml;application/rdf+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/ftp;
+Actions=new-window;new-private-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=bearbrowser --new-window %u
+
+[Desktop Action new-private-window]
+Name=New Private Window
+Exec=bearbrowser --private-window %u

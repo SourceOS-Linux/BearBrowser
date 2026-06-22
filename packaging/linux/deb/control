@@ -1,0 +1,17 @@
+Package: bearbrowser
+Version: 0.1.0
+Section: web
+Priority: optional
+Architecture: amd64
+Maintainer: SourceOS Linux <maintainers@sourceos.ai>
+Depends: libgtk-3-0, libdbus-glib-1-2, libx11-6, libxcomposite1, libxdamage1, libxext6, libxfixes3, libxrandr2, libasound2
+Homepage: https://github.com/SourceOS-Linux/BearBrowser
+Description: BearBrowser — Gecko-first privacy browser with 101 fingerprinting protections
+ BearBrowser is built on Firefox ESR with a 101-surface fingerprinting shield.
+ .
+ Features:
+  - Gecko engine (Firefox ESR 140) riding the FF ESR cohort for crowd anonymity
+  - 101 JS fingerprinting protections (Canvas, WebGL, AudioContext, Fonts, Timing)
+  - OS spoof layer — normalized platform reporting across sessions
+  - Anti-tracking baked in (no extension needed)
+  - No telemetry, no Google sync, no cloud dependency
