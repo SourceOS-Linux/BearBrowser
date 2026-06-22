@@ -1,0 +1,45 @@
+{
+  "app-id": "ai.sourceos.BearBrowser",
+  "runtime": "org.freedesktop.Platform",
+  "runtime-version": "23.08",
+  "sdk": "org.freedesktop.Sdk",
+  "command": "bearbrowser",
+  "finish-args": [
+    "--share=ipc",
+    "--share=network",
+    "--socket=x11",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--socket=pulseaudio",
+    "--device=dri",
+    "--filesystem=home",
+    "--filesystem=xdg-download",
+    "--persist=.bearbrowser",
+    "--env=HOME_URL=about:blank",
+    "--env=STARTUP_HOMEPAGE=about:blank",
+    "--talk-name=org.freedesktop.Notifications",
+    "--talk-name=org.gtk.vfs.*",
+    "--own-name=org.bearbrowser.*"
+  ],
+  "modules": [
+    {
+      "name": "bearbrowser",
+      "buildsystem": "simple",
+      "build-commands": [
+        "[ -f dist/linux/BearBrowser ] && install -Dm755 dist/linux/BearBrowser /app/lib/bearbrowser/BearBrowser || echo 'Waiting for GCP build pipeline'",
+        "install -Dm644 profiles/default/user.js /app/lib/bearbrowser/defaults/profile/user.js",
+        "printf '#!/bin/sh\\nexec /app/lib/bearbrowser/BearBrowser --profile ~/.bearbrowser/profiles/default \"$@\"' > /app/bin/bearbrowser && chmod 755 /app/bin/bearbrowser",
+        "install -Dm644 packaging/linux/bearbrowser.desktop /app/share/applications/ai.sourceos.BearBrowser.desktop",
+        "[ -f packaging/linux/ai.sourceos.BearBrowser.metainfo.xml ] && install -Dm644 packaging/linux/ai.sourceos.BearBrowser.metainfo.xml /app/share/metainfo/ || true",
+        "[ -f branding/bearbrowser.svg ] && install -Dm644 branding/bearbrowser.svg /app/share/icons/hicolor/scalable/apps/ai.sourceos.BearBrowser.svg || true"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/SourceOS-Linux/BearBrowser.git",
+          "branch": "main"
+        }
+      ]
+    }
+  ]
+}
