@@ -231,8 +231,14 @@ async function collect(prefs) {
 const VECTORS = [
   // cohort: a matcher; if the hardened value matches, it's a uniform RFP cohort
   // value (good) even when identical to control — NOT a device leak.
-  { key: 'userAgent', label: 'User-Agent', kind: 'mask', cohort: (a) => /Mac OS X 10\.15;.*Firefox\/\d+\.0$/.test(a) },
-  { key: 'platform', label: 'navigator.platform', kind: 'mask', cohort: (a) => a === 'MacIntel' },
+  // RFP presents a per-OS uniform cohort UA. A build is judged against ITS OWN
+  // OS cohort (Mac/Windows/Linux), not hardcoded Mac — otherwise a Linux build
+  // is wrongly flagged for reporting Linux. (tor-mode forces the Windows cohort
+  // on all platforms via the OS-spoof patch; that's covered by the Windows arm.)
+  { key: 'userAgent', label: 'User-Agent', kind: 'mask',
+    cohort: (a) => /(Macintosh; Intel Mac OS X 10\.15|Windows NT 10\.0; Win64; x64|X11; Linux x86_64);.*Firefox\/\d+\.0$/.test(a) },
+  { key: 'platform', label: 'navigator.platform', kind: 'mask',
+    cohort: (a) => a === 'MacIntel' || a === 'Win32' || a === 'Linux x86_64' },
   { key: 'hardwareConcurrency', label: 'hardwareConcurrency', kind: 'fixed', expect: 2 },
   { key: 'deviceMemory', label: 'deviceMemory', kind: 'fixed', expect: 'undefined' },
   { key: 'maxTouchPoints', label: 'maxTouchPoints', kind: 'fixed', expect: 0 },
@@ -271,10 +277,23 @@ function classify(v, control, h1, h2) {
 
 const GOOD = new Set(['NORMALIZED', 'RANDOMIZED', 'MATCHES-COHORT']);
 
+// A --bin build BAKES the hardening into its autoconfig defaults, so an empty-pref
+// "control" still runs hardened (control == hardened) and every `mask` vector
+// wrongly scores as not-normalized. Force a TRUE unhardened baseline by turning
+// off the baked-in protections (these are default prefs, so user prefs override).
+const CONTROL_PREFS = {
+  'privacy.resistFingerprinting': false,
+  'privacy.fingerprintingProtection': false,
+  'privacy.fingerprintingProtection.overrides': '',
+  'privacy.resistFingerprinting.letterboxing': false,
+  'font.system.whitelist': '',
+  'gfx.bundled-fonts.activate': 0,
+};
+
 (async () => {
   const prefs = profilePrefs(profile);
   process.stderr.write(`launching Gecko x3 (control + ${profile} x2)...\n`);
-  const control = await collect({});
+  const control = await collect(CONTROL_PREFS);
   const h1 = await collect(prefs);
   const h2 = await collect(prefs);
 
