@@ -19,7 +19,7 @@ MACHINE="${BB_GCP_MACHINE:-c2d-standard-32}"
 IMAGE_FAMILY="${BB_GCP_IMAGE_FAMILY:-ubuntu-2404-lts-amd64}"
 IMAGE_PROJECT="${BB_GCP_IMAGE_PROJECT:-ubuntu-os-cloud}"
 DISK_GB="${BB_GCP_DISK_GB:-150}"
-MAX_HOURS="${BB_GCP_MAX_HOURS:-5}"
+MAX_HOURS="${BB_GCP_MAX_HOURS:-3}"
 SERVICE_ACCOUNT="${BB_GCP_SA:-synapseiq-build@socioprophet-platform.iam.gserviceaccount.com}"
 BUCKET="${BB_GCP_BUCKET:-sourceos-artifacts-socioprophet}"
 PROFILES="${BB_PROFILES:-human-secure tor-mode}"
@@ -35,23 +35,53 @@ while [ "$#" -gt 0 ]; do
     --instance) INSTANCE="${2:?}"; shift 2 ;;
     --keep)     keep="1"; shift ;;
     --dry-run)  dry_run="1"; shift ;;
+    --collect)  collect="${2:?}"; shift 2 ;;
     -h|--help)  grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "ERROR: unknown arg: $1" >&2; exit 1 ;;
   esac
 done
 
+# --collect MODE: recover a build whose poller died. Download artifacts from GCS
+# and delete the VM if it's still around. No teardown trap needed here.
+collect="${collect:-}"
+if [ -n "$collect" ]; then
+  pfx="gs://$BUCKET/bearbrowser-builds/$collect"
+  out="$repo_root/build/gcp-artifacts/$collect"; mkdir -p "$out"
+  echo ">> Collecting $collect from $pfx ..."
+  rc="$(gcloud storage cat "$pfx/DONE" 2>/dev/null | tr -dc 0-9)"
+  if [ -z "$rc" ]; then echo "   no DONE marker yet — build still running or never finished."; fi
+  gcloud storage cp -r "$pfx/artifacts/*" "$out/" >/dev/null 2>&1 && echo "   artifacts -> $out" || echo "   no artifacts."
+  gcloud storage cp "$pfx/build.log" "$out/" >/dev/null 2>&1 || true
+  if gcloud compute instances describe "$collect" --zone="$ZONE" >/dev/null 2>&1; then
+    echo ">> Deleting leftover VM $collect ..."
+    gcloud compute instances delete "$collect" --zone="$ZONE" --quiet 2>/dev/null && echo "   deleted."
+  else
+    echo "   VM already gone."
+  fi
+  echo ">> DONE rc=${rc:-unknown}. Files:"; ls -lh "$out" 2>/dev/null | sed 's/^/   /'
+  exit 0
+fi
+
 PREFIX="gs://$BUCKET/bearbrowser-builds/$INSTANCE"
-created=""
+created=""; build_done=""
 cleanup() {
   local rc=$?
-  if [ -n "$created" ] && [ -z "$keep" ]; then
+  [ -z "$created" ] && exit "$rc"
+  if [ -n "$keep" ]; then
+    echo ">> --keep: $INSTANCE left running (delete it when done)."
+  elif [ -n "$build_done" ]; then
     echo ">> Tearing down $INSTANCE ..."
     gcloud compute instances delete "$INSTANCE" --zone="$ZONE" --quiet 2>/dev/null \
       && echo ">> $INSTANCE deleted." \
-      || { echo "!! WARNING: delete failed — $INSTANCE MAY STILL BE BILLING."; \
-           echo "!! Run: gcloud compute instances delete $INSTANCE --zone=$ZONE --quiet"; }
-  elif [ -n "$created" ]; then
-    echo ">> --keep set: $INSTANCE left running (remember to delete it)."
+      || echo "!! delete failed — run: gcloud compute instances delete $INSTANCE --zone=$ZONE --quiet"
+  else
+    # Interrupted BEFORE the build finished (e.g. the Mac slept and the harness
+    # killed this poller). Do NOT delete — the VM builds autonomously, pushes
+    # results to GCS, and GCP auto-deletes it at --max-run-duration. This is the
+    # fix for the recurring "build vanished" problem.
+    echo "!! Poller exited before build finished — LEAVING $INSTANCE up to finish on its own."
+    echo "!! It will push results to $PREFIX and auto-delete (max-run-duration)."
+    echo "!! Recover results + teardown later with:  scripts/gcp-build-linux.sh --collect $INSTANCE"
   fi
   exit "$rc"
 }
@@ -103,6 +133,7 @@ build_rc="1"
 while :; do
   if gcloud storage cat "$PREFIX/DONE" >/tmp/bb-done 2>/dev/null; then
     build_rc="$(tr -dc 0-9 </tmp/bb-done)"; build_rc="${build_rc:-0}"
+    build_done="1"   # genuine completion -> trap may now delete the VM
     echo "   build finished (rc=$build_rc)."; break
   fi
   if [ "$(date +%s)" -gt "$deadline" ]; then echo "!! build exceeded ${MAX_HOURS}h cap — tearing down."; break; fi
