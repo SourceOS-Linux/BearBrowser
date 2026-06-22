@@ -291,6 +291,29 @@ def bearbrowser_patches():
             pref_yaml.write_text(_yaml)
             print(f"Fixed StaticPrefList.yaml: canonical bearbrowser.* block placed before bidi.*")
 
+    # Register the "bearbrowser" group in modules/libpref/moz.build pref_groups.
+    # The per-group header StaticPrefs_bearbrowser.h is ONLY generated for groups
+    # listed there; StaticPrefsAll.h references the group (from the YAML) but the
+    # header won't exist unless the group is in pref_groups. On 150 LibreWolf's
+    # source carries a librewolf group that branding renames; on 140 ESR it does
+    # NOT, so gfxUserFontSet.cpp's #include of StaticPrefs_bearbrowser.h fails.
+    # Insert "bearbrowser" into the initial pref_groups list if absent (idempotent).
+    _libpref_mb = Path("modules/libpref/moz.build")
+    if _libpref_mb.exists():
+        _mb = _libpref_mb.read_text()
+        if '"bearbrowser"' not in _mb and "'bearbrowser'" not in _mb:
+            import re as _re2
+            # Insert as the first entry of the `pref_groups = [` list.
+            _mb2, _n = _re2.subn(r'(pref_groups\s*=\s*\[\s*\n)',
+                                 r'\1    "bearbrowser",\n', _mb, count=1)
+            if _n:
+                _libpref_mb.write_text(_mb2)
+                print("Registered 'bearbrowser' in modules/libpref/moz.build pref_groups")
+            else:
+                print("WARNING: could not find 'pref_groups = [' in libpref/moz.build — StaticPrefs_bearbrowser.h may not generate")
+        else:
+            print("note: 'bearbrowser' already in libpref/moz.build pref_groups")
+
     # ── Accept-Language / Intl locale normalization ───────────────────────────
     # Patch StaticPrefList.yaml: set en-US defaults for intl prefs that control
     # both the HTTP Accept-Language header (sent before JS runs) and Intl API
