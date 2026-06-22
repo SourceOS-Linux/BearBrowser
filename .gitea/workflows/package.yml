@@ -1,0 +1,73 @@
+name: Package & Publish
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+  workflow_dispatch:
+
+jobs:
+  linux-deb:
+    name: Linux .deb
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "PKG_VERSION=${VERSION#v}" >> $GITHUB_ENV
+      - name: Install build deps
+        run: sudo apt-get install -y dpkg-dev
+      - name: Build .deb
+        run: |
+          cd packaging/linux/deb
+          bash build-deb.sh "${{ env.PKG_VERSION }}" "amd64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bearbrowser-deb
+          path: packaging/linux/deb/bearbrowser_*.deb
+
+  chocolatey:
+    name: Chocolatey .nupkg
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set version
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          echo "PKG_VERSION=${VERSION#v}" >> $GITHUB_ENV
+      - name: Pack
+        shell: powershell
+        run: |
+          $nuspec = "packaging/chocolatey/bearbrowser/bearbrowser.nuspec"
+          (Get-Content $nuspec) -replace '<version>.*</version>', "<version>${{ env.PKG_VERSION }}</version>" | Set-Content $nuspec
+          cd packaging/chocolatey/bearbrowser
+          choco pack
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bearbrowser-nupkg
+          path: packaging/chocolatey/bearbrowser/*.nupkg
+
+  windows-installer:
+    name: Windows NSIS installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install NSIS
+        shell: powershell
+        run: choco install nsis --yes --no-progress
+      - name: Build installer
+        shell: powershell
+        run: |
+          # Placeholder: run makensis when BearBrowser-windows.nsi exists
+          if (Test-Path "packaging/windows/BearBrowser.nsi") {
+            & "C:\Program Files (x86)\NSIS\makensis.exe" packaging/windows/BearBrowser.nsi
+          } else {
+            Write-Host "NSIS script not yet created — Windows installer pending GCP build"
+          }
+      - uses: actions/upload-artifact@v4
+        if: hashFiles('packaging/windows/*.exe') != ''
+        with:
+          name: bearbrowser-windows-installer
+          path: packaging/windows/*.exe
