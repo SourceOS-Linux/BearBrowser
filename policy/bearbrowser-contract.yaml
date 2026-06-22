@@ -1,136 +1,463 @@
+# =============================================================================
+# BearBrowser agent-runtime governance contract
+# =============================================================================
+# WHAT THIS IS
+#   The formally-specified governance contract for the BearBrowser
+#   `agent-runtime` profile. It declares what an agent (TurtleTerm's copilot)
+#   IS and ISN'T allowed to do when driving the browser, in the canonical
+#   SourceOS policy vocabulary. The agent-control bridge (see
+#   docs/agent-control-bridge.md) evaluates every requested action against this
+#   contract and emits replayable attestation.
+#
+# HONESTY NOTE — RUNTIME BINDING PENDING
+#   BearBrowser has no compiled binary yet (the LibreWolf compile lane is wired
+#   in scripts/bearbrowser-build-binary.sh but has not been run). This contract
+#   and the bridge spec are the differentiating IP and are ready the moment the
+#   binary lands. The runtime enforcement point (the control endpoint inside the
+#   browser process) is NOT yet live. Nothing here should be read as a claim of
+#   a working automation surface today — it is the governance + control contract
+#   that the surface will be wired to.
+#
+# SPEC GROUNDING (canonical sourceos-spec schemas, $id cited inline)
+#   This document is the human/operator-facing contract. Each block is annotated
+#   with the canonical schema whose vocabulary it conforms to, so a policy
+#   compiler can project this YAML into the typed objects:
+#     - Policy            https://schemas.srcos.ai/v2/Policy.json
+#     - Rule              https://schemas.srcos.ai/v2/Rule.json
+#     - PolicyCondition   https://schemas.srcos.ai/v2/PolicyCondition.json
+#     - Obligation        https://schemas.srcos.ai/v2/Obligation.json
+#     - SubjectSelector   https://schemas.srcos.ai/v2/SubjectSelector.json
+#     - ObjectSelector    https://schemas.srcos.ai/v2/ObjectSelector.json
+#     - NetworkAccessProfile  https://schemas.srcos.ai/v2/NetworkAccessProfile.json
+#     - ExecutionSurface  https://schemas.srcos.ai/v2/ExecutionSurface.json
+#     - ReasoningEvent    https://schemas.srcos.ai/v2/ReasoningEvent.json
+#     - ReasoningRun      https://schemas.srcos.ai/v2/ReasoningRun.json
+#     - ReasoningReceipt  https://schemas.srcos.ai/v2/ReasoningReceipt.json
+#   The reasoning family is specVersion "2.0.0" with URN prefixes
+#   urn:srcos:reasoning-run: / urn:srcos:reasoning-event: /
+#   urn:srcos:receipt:reasoning: and safe-trace = summaries only.
+#   Reference implementation that this contract's emission posture mirrors:
+#   TurtleTerm/assets/sourceos/bin/turtle-agentd (_open_reasoning_run,
+#   _emit_reasoning_event, _close_reasoning_run).
+# =============================================================================
+
 apiVersion: sourceos.dev/v1alpha1
 kind: BrowserPolicyContract
+specVersion: "2.0.0"
+
 metadata:
-  name: bearbrowser
+  name: bearbrowser-agent-runtime
   labels:
     sourceos.dev/product: BearBrowser
-    sourceos.dev/runtime: browser
+    sourceos.dev/runtime: agent-browser
+    sourceos.dev/profile: agent-runtime
+  conformsTo:
+    # The canonical schema $ids this contract projects into.
+    - https://schemas.srcos.ai/v2/Policy.json
+    - https://schemas.srcos.ai/v2/Rule.json
+    - https://schemas.srcos.ai/v2/PolicyCondition.json
+    - https://schemas.srcos.ai/v2/Obligation.json
+    - https://schemas.srcos.ai/v2/NetworkAccessProfile.json
+    - https://schemas.srcos.ai/v2/ExecutionSurface.json
+    - https://schemas.srcos.ai/v2/ReasoningEvent.json
+  runtimeBinding: pending-librewolf-binary
+
 spec:
-  defaultMode: humanSecure
+  # ---------------------------------------------------------------------------
+  # IDENTITY — who this policy governs.
+  # Projects to Policy.scope (Policy.json $id above) using SubjectSelector /
+  # ObjectSelector vocabulary.
+  # ---------------------------------------------------------------------------
+  identity:
+    # The canonical Policy URN this contract compiles to.
+    policyId: urn:srcos:policy:bearbrowser-agent-runtime
+    # The agent actor. The browser-agent grant is the browser projection of the
+    # TurtleTerm copilot identity.
+    agentActor: urn:srcos:agent:turtle-copilot
+    browserAgentGrant: urn:srcos:agent:turtle-copilot#bearbrowser
+    profile: agent-runtime
+    # Policy.scope projection. subjects[].kind / objects[].objectType are the
+    # only enum values SubjectSelector.json / ObjectSelector.json permit.
+    scope:
+      subjects:
+        - kind: workload                 # SubjectSelector.kind
+          match:
+            agentRef: urn:srcos:agent:turtle-copilot
+            profile: agent-runtime
+      objects:
+        - objectType: run                # ObjectSelector.objectType — browser sessions are governed runs
+        - objectType: asset              # downloaded files / captures
+        - objectType: provenance         # the reasoning evidence stream
+      purposes:
+        - browser-automation
+        - web-research
+        - form-fill-gated
+    # Every governed browser session is anchored to a ReasoningRun + workspace.
+    session:
+      requireSessionId: true
+      requireAgentId: true
+      requireWorkspaceId: true
+      requireReasoningRun: true          # urn:srcos:reasoning-run: opened per session
+      maxDefaultTtlMinutes: 120
+      ephemeralByDefault: true
+      cleanupOnExit: true
+
+  # ---------------------------------------------------------------------------
+  # DEFAULT DECISION — deny-by-default, matching Policy semantics and the
+  # NetworkAccessProfile.defaultDecision "deny" posture.
+  # ---------------------------------------------------------------------------
   defaultDecision: deny
-  modes:
-    humanSecure:
-      description: Privacy-first human browser profile derived from LibreWolf with SourceOS workspace integration.
-      profilePersistence: persistent
-      automation: disabledByDefault
-      downloads:
-        governed: true
-        mountClass: user-downloads
-        defaultDecision: allowWithinWorkspace
-        requireProvenanceEvent: true
-      captures:
-        screenshots: userInitiatedOnly
-        domSnapshots: disabledByDefault
-        provenanceLog: optional
-      network:
-        policyRequired: true
-        defaultDecision: allowPublicWeb
-        denyPrivateNetworkByDefault: false
-        requireEgressAttribution: true
-      filesystem:
-        policyRequired: true
-        defaultDecision: denyHostFilesystem
-        allowedMountClasses:
-          - user-downloads
-          - workspace-documents
-      credentials:
-        sharedWithAgents: false
-        source: humanProfileOnly
-        export: denied
-      nativeMessaging:
-        defaultDecision: deny
-        allowlistRequired: true
-      clipboard:
-        defaultDecision: userMediated
-      mediaDevices:
-        camera: userMediated
-        microphone: userMediated
-        screenShare: userMediated
-    agentRuntime:
-      description: Governed browser execution surface for local, cloud, and fog agents.
-      profilePersistence: ephemeralByDefault
-      automation: policyMediated
-      defaultDecision: deny
-      session:
-        requireSessionId: true
-        requireAgentId: true
-        requireWorkspaceId: true
-        maxDefaultTtlMinutes: 120
-        cleanupOnExit: true
-      downloads:
-        governed: true
-        mountClass: agent-downloads
-        defaultDecision: denyOutsideMount
-        requireProvenanceEvent: true
-        requireContentHash: true
-      captures:
-        screenshots: policyMediated
-        domSnapshots: policyMediated
-        pdfExports: policyMediated
-        provenanceLog: required
-        defaultDecision: denyUnlessGranted
-      network:
-        policyRequired: true
-        defaultDecision: denyUnlessGranted
-        denyPrivateNetworkByDefault: true
-        denyLoopbackByDefault: true
-        denyMetadataServices: true
-        requireEgressAttribution: true
-        allowedByPolicy:
-          - publicWeb
-          - explicitDomainAllowlist
-          - workspaceApprovedEndpoints
-      filesystem:
-        policyRequired: true
-        defaultDecision: denyHostFilesystem
-        noAmbientHomeAccess: true
-        noAmbientSshAccess: true
-        noAmbientCloudCredentialAccess: true
-        allowedMountClasses:
-          - agent-downloads
-          - agent-profile
-          - agent-captures
-          - agent-cache
-          - workspace-input-readonly
-      credentials:
-        sharedWithHumanProfile: false
-        sharedWithAgents: false
-        source: policyBrokerOnly
-        export: denied
-        persistence: sessionScoped
-        requireCredentialBoundaryEvents: true
-      nativeMessaging:
-        defaultDecision: deny
-        allowlistRequired: true
-        allowedHosts: []
-      extensions:
-        defaultDecision: deny
-        install: policyMediated
-        allowlistRequired: true
-      clipboard:
-        defaultDecision: deny
-        policyMediated: true
-      mediaDevices:
-        camera: denied
-        microphone: denied
-        screenShare: policyMediated
-      devtools:
-        defaultDecision: policyMediated
-        remoteDebugging:
-          defaultDecision: deny
-          bindAddress: 127.0.0.1
-          requireEphemeralPort: true
-          requireSessionToken: true
+
+  # ---------------------------------------------------------------------------
+  # ACTION CLASSES — the heart of the contract.
+  # Each action maps to a Rule (Rule.json): effect = permit|deny,
+  # operations ⊆ {read, write, export, transform, share}, and an optional
+  # PolicyCondition (PolicyCondition.json) expressed in jsonlogic.
+  #
+  # CLASSES:
+  #   allowed     — permitted unconditionally within the profile (read-shaped,
+  #                 non-mutating). Still emits a ReasoningEvent (see obligations).
+  #   gated       — permitted ONLY with explicit per-action human/operator
+  #                 approval. Mirrors the assistant safety rules: financial,
+  #                 credential, download, and irreversible/side-effecting actions
+  #                 require confirmation. Emits a policy-decision event.
+  #   prohibited  — denied unconditionally. No approval path in this profile.
+  # ---------------------------------------------------------------------------
+  actions:
+
+    # ---- ALLOWED (read-shaped, non-mutating; permit unconditionally) --------
+    allowed:
+      # rule.effect=permit, rule.operations=[read]
+      - action: navigate
+        rule: { effect: permit, operations: [read] }
+        replayClass: exact            # deterministic on a static page
+        eventType: browser.navigate
+        note: Load a URL. Subject to the network access profile below.
+      - action: read-dom
+        rule: { effect: permit, operations: [read] }
+        replayClass: exact
+        eventType: browser.read-dom
+      - action: query-selector
+        rule: { effect: permit, operations: [read] }
+        replayClass: exact
+        eventType: browser.query-selector
+      - action: extract-text
+        rule: { effect: permit, operations: [read] }
+        replayClass: exact
+        eventType: browser.extract-text
+        note: Returns bounded summaries to the agent; raw page text never enters the trace.
+      - action: screenshot
+        rule: { effect: permit, operations: [read] }
+        replayClass: best-effort      # pixels vary with render timing
+        eventType: browser.screenshot
+        note: Capture artifact written to the agent-captures mount, hashed, provenance-logged.
+      - action: scroll
+        rule: { effect: permit, operations: [read] }
+        replayClass: exact
+        eventType: browser.scroll
+      - action: wait
+        rule: { effect: permit, operations: [read] }
+        replayClass: exact
+        eventType: browser.wait
+      - action: click
+        rule:
+          effect: permit
+          operations: [read]
+          # PolicyCondition (jsonlogic): in-page navigation/expansion clicks are
+          # allowed; a click that the planner classifies as a form submission or
+          # an outbound state mutation is reclassified to the gated `submit-form`.
+          condition:
+            language: jsonlogic
+            expr:
+              "!":
+                - { "in": ["mutation", { "var": "action.sideEffectClasses" }] }
+            notes: A click with no declared side-effect class is read-shaped; mutating clicks route to gated.
+        replayClass: best-effort
+        eventType: browser.click
+      - action: fill-form-field
+        rule:
+          effect: permit
+          operations: [write]
+          # Typing into a field is permitted; SUBMITTING is gated. Credential /
+          # payment / government-ID fields are PROHIBITED (see below) and this
+          # condition denies them at fill time, not just at submit time.
+          condition:
+            language: jsonlogic
+            expr:
+              "!":
+                - { "in": [{ "var": "field.sensitivity" }, ["credential", "payment", "government-id"]] }
+            notes: Filling sensitive field classes is denied here and handled by the prohibited block.
+        replayClass: best-effort
+        eventType: browser.fill-form-field
+
+    # ---- GATED (require explicit per-action approval; permit-with-obligation) -
+    # Each gated action compiles to a Rule whose PolicyCondition requires an
+    # approval token for THIS action instance, plus an emit-policy-decision
+    # obligation. Default (no token) => deny.
+    gated:
+      - action: submit-form
+        rule:
+          effect: permit
+          operations: [write, share]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: non-replayable-side-effect
+        eventType: browser.submit-form
+        reason: Irreversible outbound state mutation.
+      - action: file-download
+        rule:
+          effect: permit
+          operations: [write]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: non-replayable-side-effect
+        eventType: browser.file-download
+        reason: Writes to disk (quarantined agent-downloads mount); requires content hash + provenance.
+      - action: oauth-grant
+        rule:
+          effect: permit
+          operations: [write, share]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: non-replayable-side-effect
+        eventType: browser.oauth-grant
+        reason: Delegates authority; high blast radius.
+      - action: payment-autofill
+        rule:
+          effect: permit
+          operations: [write]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: non-replayable-side-effect
+        eventType: browser.payment-autofill
+        reason: Financial. Autofill of stored instruments only; manual entry of card numbers is prohibited.
+      - action: cross-origin-post
+        rule:
+          effect: permit
+          operations: [share]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: non-replayable-side-effect
+        eventType: browser.cross-origin-post
+        reason: Exfiltration risk; defeats first-party isolation if ungated.
+      - action: clipboard-write
+        rule:
+          effect: permit
+          operations: [write]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: non-replayable-side-effect
+        eventType: browser.clipboard-write
+        reason: Writes into the host clipboard shared with the human.
+      - action: geolocation
+        rule:
+          effect: permit
+          operations: [read]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: evidence-only
+        eventType: browser.geolocation
+        reason: Discloses location; default-disabled by the shield (geo.enabled=false).
+      - action: camera-mic
+        rule:
+          effect: permit
+          operations: [read]
+          condition:
+            language: jsonlogic
+            expr: { "==": [{ "var": "approval.granted" }, true] }
+        requiresApproval: per-action
+        replayClass: evidence-only
+        eventType: browser.camera-mic
+        reason: Sensor capture; default-denied by the shield (media.navigator.enabled=false).
+
+    # ---- PROHIBITED (deny unconditionally; no approval path in this profile) -
+    # Each compiles to a Rule with effect=deny and NO condition (applies always).
+    # These are the hard floor — even an approval token cannot unlock them.
+    prohibited:
+      - action: enter-credentials
+        rule: { effect: deny, operations: [write] }
+        eventType: browser.policy.violation
+        reason: Agent must never type usernames/passwords. Auth is the human's responsibility.
+      - action: enter-payment-details
+        rule: { effect: deny, operations: [write] }
+        eventType: browser.policy.violation
+        reason: Manual entry of card/bank numbers is forbidden (autofill of stored instruments is gated).
+      - action: enter-government-id
+        rule: { effect: deny, operations: [write] }
+        eventType: browser.policy.violation
+        reason: SSN / passport / national-ID entry is forbidden.
+      - action: modify-access-controls
+        rule: { effect: deny, operations: [write, transform] }
+        eventType: browser.policy.violation
+        reason: No changing account permissions, sharing settings, or security config.
+      - action: bypass-captcha
+        rule: { effect: deny, operations: [transform] }
+        eventType: browser.policy.violation
+        reason: No CAPTCHA-solving or anti-bot circumvention.
+      - action: execute-trade-or-transfer
+        rule: { effect: deny, operations: [write, share] }
+        eventType: browser.policy.violation
+        reason: No trades, transfers, purchases, or money movement — matches the assistant financial-action floor.
+
+  # ---------------------------------------------------------------------------
+  # NETWORK ACCESS PROFILE
+  # Projects to NetworkAccessProfile.json
+  # ($id https://schemas.srcos.ai/v2/NetworkAccessProfile.json).
+  # Field names/enums conform to that schema exactly.
+  # ---------------------------------------------------------------------------
+  networkAccess:
+    id: urn:srcos:network-access-profile:bearbrowser-agent-runtime
+    type: NetworkAccessProfile
+    specVersion: "2.0.0"
+    name: BearBrowser agent-runtime egress
+    scope: agent-machine                 # enum: NetworkAccessProfile.scope
+    defaultDecision: deny                # enum: deny | allow-with-policy | ask
+    profiles:
+      - profileId: bearbrowser-agent-egress
+        profileClass: zero-trust         # enum: NetworkAccessProfile.profiles[].profileClass
+        priority: 0
+        defaultEgress: allow-listed      # enum: deny | allow-listed | allow-with-prompt | allow-any
+        allowDomains:
+          - "*"                          # public web is reachable; first-party isolation enforced in-browser
+        denyDomains: []
+        denyCidrs:
+          # No private-network / loopback / cloud-metadata egress from the agent
+          # browser. Consistent with the SSRF posture and the shield.
+          - 169.254.169.254/32           # cloud instance metadata
+          - 127.0.0.0/8                  # loopback (the control endpoint is the ONLY loopback surface)
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+          - fd00::/8
+        notes: >-
+          First-party isolation ON (consistent with the 101-pref shield in
+          profiles/default/user.js). No telemetry egress of any kind.
+    precedence: [enterprise, workspace, device, agent]
+    evidence:
+      emitNetworkDecision: true
+      emitFirewallBinding: true
+      emitMeshBinding: false
+      emitModelProviderRoute: false
+      redactDestinationPath: true        # destination paths redacted from evidence — safe-trace
+    telemetry: disabled                  # belt-and-suspenders with the DisableTelemetry policy
+
+  # ---------------------------------------------------------------------------
+  # EXECUTION SURFACE
+  # Projects to ExecutionSurface.json
+  # ($id https://schemas.srcos.ai/v2/ExecutionSurface.json).
+  # ---------------------------------------------------------------------------
+  executionSurface:
+    pty: false
+    workdir: /workspace
+    background: true
+    reviewOnly: false
+    worktreeStrategy: none
+    sandboxMode: browser-sandbox         # enum: ExecutionSurface.sandboxMode
+    networkMode: allowlist               # enum: none | allowlist | full
+    egressAllowlist:
+      - public-web
+    elevated: false
+    protectedPaths:                      # ExecutionSurface.protectedPaths — host secrets off-limits
+      - $HOME
+      - ~/.ssh
+      - ~/.aws
+      - ~/.config/gh
+    approvalProfile: bearbrowser-gated-actions
+
+  # ---------------------------------------------------------------------------
+  # OBLIGATIONS
+  # Project to Obligation.json ($id https://schemas.srcos.ai/v2/Obligation.json).
+  # Obligation.name is a fixed enum: log_access | retain_provenance |
+  # mask_fields | obfuscate_before_export | aggregate_only | attest_container.
+  # Obligation.when is pre | post | runtime. params is free-form.
+  # ---------------------------------------------------------------------------
+  obligations:
+    # Every action emits a conformant ReasoningEvent
+    # ($id https://schemas.srcos.ai/v2/ReasoningEvent.json), summary-only.
+    - name: log_access
+      when: post
+      params:
+        emit: ReasoningEvent
+        schema: https://schemas.srcos.ai/v2/ReasoningEvent.json
+        specVersion: "2.0.0"
+        eventTypePrefix: browser.
+        runRefRequired: true             # urn:srcos:reasoning-run: opened at session start
+        traceLevel: workspace-safe       # ReasoningEvent.traceLevel enum
+        trustLevel: untrusted-observation  # page content is untrusted; ReasoningEvent.trustLevel enum
+    # Gated AND prohibited(violation) actions additionally emit a policy-decision.
+    - name: log_access
+      when: runtime
+      params:
+        emit: PolicyDecision
+        appliesTo: [gated, prohibited]
+        description: Records permit/deny + the approval token reference (token value never logged).
+    # Provenance retained for every session and every artifact.
+    - name: retain_provenance
+      when: post
+      params:
+        provenanceMount: agent-captures
+        downloadProvenanceEvent: browser.download.created
+        requireSha256: true
+    # Secrets redacted; only bounded summaries in the trace (safe-trace boundary).
+    - name: mask_fields
+      when: pre
+      params:
+        redact: [credentials, tokens, cookies, authorization-headers, payment-instruments]
+        rawPageContent: never-in-trace   # mirrors ReasoningRun.safeTrace.rawPrivateReasoning="not-collected"
+        summaryMaxChars: 500             # matches turtle-agentd _emit_reasoning_event summary cap
+    # The browser session container/sandbox is attested before automation opens.
+    - name: attest_container
+      when: pre
+      params:
+        surface: browser-sandbox
+        mountPlan: mounts/agent-browser-mounts.yaml
+
+  # ---------------------------------------------------------------------------
+  # FINGERPRINTING POSTURE — spoof normality, ride the ESR cohort.
+  # The agent browser must NOT look like an automation rig; it presents the same
+  # surface as a human BearBrowser instance so it blends into the Firefox ESR
+  # cohort. Source of truth is the 101-pref shield.
+  # ---------------------------------------------------------------------------
+  fingerprinting:
+    posture: spoof-normality
+    cohort: firefox-esr
+    shield: profiles/default/user.js     # the 101-pref shield (frozen at 101/101)
+    inheritsShield: true
+    automationMarkersHidden: true        # navigator.webdriver and CDP markers suppressed in agent-runtime
+    note: >-
+      The control endpoint is loopback-only and never alters the public
+      fingerprint surface. The page sees a normal ESR-cohort BearBrowser.
+
+  # ---------------------------------------------------------------------------
+  # AUDIT — required events and their sinks (unchanged fabric contract).
+  # ---------------------------------------------------------------------------
   audit:
     requiredEvents:
       - browser.session.started
       - browser.session.ended
-      - browser.navigation.requested
-      - browser.navigation.completed
+      - browser.navigate
+      - browser.policy.decision
+      - browser.policy.violation
       - browser.download.created
       - browser.capture.created
-      - browser.policy.violation
       - browser.credential.boundary
+    reasoningEventStream: ReasoningEvent   # https://schemas.srcos.ai/v2/ReasoningEvent.json
+    sessionRun: ReasoningRun               # https://schemas.srcos.ai/v2/ReasoningRun.json
+    sessionReceipt: ReasoningReceipt        # https://schemas.srcos.ai/v2/ReasoningReceipt.json
     eventSink: AgentPlane
     policyDecisionSink: PolicyFabric
     workspaceVisibilitySink: ProphetWorkspace
