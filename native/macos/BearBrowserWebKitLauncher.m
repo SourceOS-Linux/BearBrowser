@@ -2489,9 +2489,12 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(assign) SecTrustRef      currentTrust;        // TLS trust for current page cert inspector
 @property(strong) id               addrDismissMonitor;   // local event monitor (must be removed to avoid firing after teardown)
 @property(strong) id               contextMenuMonitor;
+@property(strong) id               middleClickMonitor;
 @property(strong) NSButton        *starButton;           // bookmark this page (address bar)
 @property(strong) NSTextField     *statusBar;            // Chrome-style hovered-link bubble (bottom-left)
 @property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
+@property(assign) BOOL    readerMode;
+@property(strong) NSURL  *readerOriginalURL;
 @end
 
 // Retains a controller for every open browser window. Both NSApplication.delegate
@@ -2585,6 +2588,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(viewM,@"Enter Full Screen",@selector(toggleFullScreen:),@"f",Cmd|Ctrl);
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Downloads",@selector(toggleDownloadPanel:),@"j",Cmd|Shift);
+  mi(viewM,@"Show Reader",@selector(toggleReader:),@"r",Cmd|Ctrl);
   mi(viewM,@"Read Aloud",@selector(readAloud:),@"r",Cmd|Opt);
   [viewM addItem:[NSMenuItem separatorItem]];
   NSMenuItem *devI=[viewM addItemWithTitle:@"Developer" action:nil keyEquivalent:@""];
@@ -4390,6 +4394,7 @@ static NSMutableArray *gBBWindowControllers;
   // Tear down local event monitors so they stop firing against torn-down state.
   if (self.addrDismissMonitor) { [NSEvent removeMonitor:self.addrDismissMonitor]; self.addrDismissMonitor=nil; }
   if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
+  if (self.middleClickMonitor) { [NSEvent removeMonitor:self.middleClickMonitor]; self.middleClickMonitor=nil; }
   // Release this window's controller. Deferred so we never dealloc self midway
   // through this very method (the removal can drop the last strong reference).
   dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
@@ -4493,6 +4498,53 @@ static NSMutableArray *gBBWindowControllers;
   [self loadStartPage:self.webView];
 }
 - (void)openBearHelp:(id)s { [self addTabPrivate:NO]; [self loadStartPage:self.webView]; }
+// Reader mode: extract the main article (best-effort, by paragraph density) and
+// render it in our OWN clean template, so the layout is fully under our control.
+- (void)toggleReader:(id)s {
+  if (self.readerMode) {
+    self.readerMode=NO;
+    if (self.readerOriginalURL) [self.webView loadRequest:[NSURLRequest requestWithURL:self.readerOriginalURL]];
+    else [self.webView reload];
+    return;
+  }
+  NSString *js=
+    @"(function(){function sc(el){var t=0;el.querySelectorAll('p').forEach(function(x){t+=(x.innerText||'').length;});return t;}"
+    @"var best=document.body,bs=0;"
+    @"document.querySelectorAll('article,main,[role=main],section,div').forEach(function(el){var s=sc(el);if(s>bs){bs=s;best=el;}});"
+    @"var title=((document.querySelector('h1')||{}).innerText)||document.title||'';"
+    @"var blocks=[];best.querySelectorAll('h1,h2,h3,h4,p,li,blockquote,pre,img').forEach(function(el){"
+    @"if(el.tagName==='IMG'){if(el.src)blocks.push({t:'img',src:el.src});}"
+    @"else{var x=(el.innerText||'').trim();if(x.length>1)blocks.push({t:el.tagName.toLowerCase(),x:x});}});"
+    @"return JSON.stringify({title:title,blocks:blocks});})();";
+  [self.webView evaluateJavaScript:js completionHandler:^(id r,NSError *e){
+    NSString *json=[r isKindOfClass:[NSString class]]?r:nil;
+    NSDictionary *obj=json?[NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]:nil;
+    NSArray *blocks=obj[@"blocks"];
+    if (![blocks isKindOfClass:[NSArray class]] || blocks.count<2) { NSBeep(); return; }
+    NSMutableString *body=[NSMutableString string];
+    for (NSDictionary *b in blocks) {
+      NSString *t=b[@"t"];
+      if ([t isEqualToString:@"img"]) { NSString *src=b[@"src"]; if(src.length)[body appendFormat:@"<img src=\"%@\">",[self htmlEscape:src]]; }
+      else if ([t isEqualToString:@"li"]) [body appendFormat:@"<li>%@</li>",[self htmlEscape:b[@"x"]]];
+      else [body appendFormat:@"<%@>%@</%@>",t,[self htmlEscape:b[@"x"]],t];
+    }
+    NSString *title=[self htmlEscape:obj[@"title"]?:@""];
+    NSString *html=[NSString stringWithFormat:
+      @"<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
+      @"<style>:root{color-scheme:light dark}"
+      @"body{max-width:42rem;margin:0 auto;padding:48px 24px 96px;"
+      @"font:18px/1.7 -apple-system,Georgia,serif;color:#1d1d1f;background:#fff}"
+      @"@media(prefers-color-scheme:dark){body{color:#e8e8ea;background:#1c1c1e}}"
+      @"h1{font-size:2em;line-height:1.2;margin:0 0 .6em}h2,h3,h4{line-height:1.3;margin:1.4em 0 .4em}"
+      @"p,li,blockquote,pre{margin:0 0 1em}blockquote{padding-left:1em;border-left:3px solid #ccc;color:#666}"
+      @"pre{white-space:pre-wrap;font:14px/1.5 ui-monospace,monospace;background:rgba(127,127,127,.12);padding:12px;border-radius:8px}"
+      @"img{max-width:100%%;height:auto;border-radius:8px;margin:1em 0}</style>"
+      @"<h1>%@</h1>%@", title, body];
+    self.readerOriginalURL=self.webView.URL;
+    self.readerMode=YES;
+    [self.webView loadHTMLString:html baseURL:self.webView.URL];
+  }];
+}
 - (void)openBookmarkManager:(id)s {
   CGFloat W=640,Hh=460;
   NSWindow *bw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
@@ -5353,6 +5405,28 @@ static NSString *kFaviconJS=@"(function(){"
       });
     }];
     return nil; // swallow the original right-click
+  }];
+  // Middle-click a link → open in a new background tab (Chrome behavior).
+  self.middleClickMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskOtherMouseDown handler:^NSEvent*(NSEvent *e){
+    if (e.buttonNumber!=2) return e;
+    BBDelegate *s=weak; if(!s||e.window!=s.window) return e;
+    NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
+    if(!NSPointInRect(pt,s.webView.bounds)) return e;
+    NSString *js=[NSString stringWithFormat:
+      @"(function(){var el=document.elementFromPoint(%f,%f);"
+      @"while(el){if(el.tagName==='A'&&el.href)return el.href;el=el.parentElement;}return '';})();",
+      pt.x, s.webView.bounds.size.height-pt.y];
+    [s.webView evaluateJavaScript:js completionHandler:^(id r,NSError *err){
+      NSString *href=[r isKindOfClass:[NSString class]]?r:@""; if(!href.length) return;
+      NSURL *u=[NSURL URLWithString:href]; if(!u) return;
+      dispatch_async(dispatch_get_main_queue(),^{
+        NSInteger prev=s.activeTabIndex;
+        [s addTabPrivate:s.activeTab.isPrivate];
+        [s.webView loadRequest:[NSURLRequest requestWithURL:u]];
+        [s tabItemDidSelect:prev]; // stay on the current tab (open in background)
+      });
+    }];
+    return e;
   }];
 }
 
