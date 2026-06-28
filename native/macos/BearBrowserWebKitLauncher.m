@@ -307,6 +307,8 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(strong) NSImage   *favicon;
 @property(assign) BOOL       isLoading;
 @property(assign) BOOL       isPrivate;
+@property(assign) NSInteger  dialogCount;       // JS dialogs shown since last navigation
+@property(assign) BOOL       dialogsSuppressed; // user chose "Block additional dialogs"
 @end
 @implementation BBTab
 - (instancetype)init { self=[super init]; _title=@"New Tab"; return self; }
@@ -933,6 +935,31 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   for (NSDictionary *e in [self engines])
     if ([e[@"id"] isEqualToString:eid]) return [NSString stringWithFormat:e[@"url"],enc];
   return [NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",enc];
+}
+@end
+
+// ── BBAddressField — NSTextField subclass with Paste-and-Go context menu ─────
+@protocol BBAddressFieldDelegate <NSObject>
+- (void)addressFieldPasteAndGo:(NSString *)url;
+@end
+@interface BBAddressField : NSTextField
+@property(weak) id<BBAddressFieldDelegate> pasteDelegate;
+@end
+@implementation BBAddressField
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+  NSMenu *m=[super menuForEvent:event];
+  if (!m) m=[[NSMenu alloc]init];
+  NSString *clip=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+  if (clip.length) {
+    [m insertItemWithTitle:@"Paste and Go" action:@selector(bbPasteAndGo:) keyEquivalent:@"" atIndex:0];
+    [m itemAtIndex:0].target=self;
+    [m insertItem:[NSMenuItem separatorItem] atIndex:1];
+  }
+  return m;
+}
+- (void)bbPasteAndGo:(id)s {
+  NSString *clip=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+  if (clip.length && self.pasteDelegate) [self.pasteDelegate addressFieldPasteAndGo:clip];
 }
 @end
 
@@ -2502,7 +2529,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @end
 
 // ── BBDelegate ────────────────────────────────────────────────────────────────
-@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate,NSMenuDelegate>
+@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,BBAddressFieldDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate,NSMenuDelegate>
 @property(strong) NSWindow *window;
 @property(strong) NSMutableArray<BBTab *> *tabs;
 @property(strong) NSMutableArray<NSDictionary *> *recentlyClosed; // @{url,title}, newest last
@@ -2510,7 +2537,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) NSView    *root;
 @property(strong) NSView *toolbarBg;
 @property(strong) BBTabBarView *tabBarView;
-@property(strong) NSTextField  *address;
+@property(strong) BBAddressField *address;
 @property(strong) NSButton *backButton, *forwardButton, *reloadButton, *securityButton;
 @property(strong) NSProgressIndicator *progressBar;
 @property(strong) BBFindBar *findBar;
@@ -2531,6 +2558,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
 @property(assign) BOOL    readerMode;
 @property(strong) NSURL  *readerOriginalURL;
+@property(assign) BOOL    suppressInlineCompletion; // guard against re-entrant completion
 @end
 
 // Retains a controller for every open browser window. Both NSApplication.delegate
@@ -2758,6 +2786,7 @@ static NSMutableArray *gBBWindowControllers;
   self.window.titlebarAppearsTransparent=YES;
   self.window.titleVisibility=NSWindowTitleHidden;
   self.window.minSize=NSMakeSize(640,480);
+  self.window.collectionBehavior=NSWindowCollectionBehaviorFullScreenPrimary|NSWindowCollectionBehaviorManaged;
   self.window.delegate=self;
   if (useCenter) [self.window center]; else [self.window setFrame:contentFrame display:NO];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(windowWillClose:)
@@ -2801,12 +2830,13 @@ static NSMutableArray *gBBWindowControllers;
   CGFloat rightR=48;
   CGFloat rightGroupLeft=W-rightR-58;   // left edge of the action-button group (netBtn)
   CGFloat starX=rightGroupLeft-30;      // star sits just left of that group
-  self.address=[[NSTextField alloc]initWithFrame:NSMakeRect(x,btnY+1,starX-x-6,28)];
+  self.address=[[BBAddressField alloc]initWithFrame:NSMakeRect(x,btnY+1,starX-x-6,28)];
   self.address.autoresizingMask=NSViewWidthSizable;
   self.address.bezelStyle=NSTextFieldRoundedBezel;
   self.address.placeholderString=@"Search or enter address";
   self.address.font=[NSFont systemFontOfSize:13.5]; self.address.stringValue=@"";
-  self.address.delegate=self; [self.address.cell setWraps:NO]; [self.address.cell setScrollable:YES];
+  self.address.delegate=self; self.address.pasteDelegate=self;
+  [self.address.cell setWraps:NO]; [self.address.cell setScrollable:YES];
   [self.toolbarBg addSubview:self.address];
 
   // Bookmark star at the right end of the omnibox (Chrome-style). Click toggles a
@@ -3064,6 +3094,10 @@ static NSMutableArray *gBBWindowControllers;
   WKWebViewConfiguration *config=[[WKWebViewConfiguration alloc]init];
   if (priv) config.websiteDataStore=[WKWebsiteDataStore nonPersistentDataStore];
   [config.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+  // Allow inline video and picture-in-picture (required for YouTube/Netflix UX parity)
+  config.allowsInlinePredictions=NO; // don't interfere with our own omnibox
+  config.mediaTypesRequiringUserActionForPlayback=WKAudiovisualMediaTypeNone;
+  config.allowsAirPlayForMediaPlayback=YES;
   // Third-party cookie isolation — block cross-site cookies via private KVC key
   @try { [config.websiteDataStore.httpCookieStore
     performSelector:NSSelectorFromString(@"_setStorageBlockingPolicy:") withObject:@1]; } @catch(...) {}
@@ -4642,6 +4676,24 @@ static NSMutableArray *gBBWindowControllers;
   [self emitNav:@"navigation.requested" url:urlString reason:@"Dropdown navigation." private:self.activeTab.isPrivate];
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
 }
+- (void)addressFieldPasteAndGo:(NSString *)raw {
+  raw=[raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (!raw.length) return;
+  NSString *rawLower=raw.lowercaseString;
+  if ([rawLower hasPrefix:@"javascript:"]||[rawLower hasPrefix:@"view-source:"]||
+      [rawLower hasPrefix:@"webkit-"]||[rawLower hasPrefix:@"x-webkit"]) return;
+  BOOL hasScheme=[raw hasPrefix:@"http://"]||[raw hasPrefix:@"https://"]||[raw hasPrefix:@"file://"];
+  BOOL looksLikeURL=[raw rangeOfString:@" "].location==NSNotFound&&[raw rangeOfString:@"."].location!=NSNotFound;
+  NSURL *url=nil;
+  if (hasScheme) url=[NSURL URLWithString:raw];
+  else if (looksLikeURL) url=[NSURL URLWithString:[@"https://" stringByAppendingString:raw]];
+  else url=[NSURL URLWithString:[BBDelegate searchURLForQuery:raw]];
+  if (!url) return;
+  self.address.stringValue=url.absoluteString;
+  [self.window makeFirstResponder:self.webView];
+  [self emitNav:@"navigation.requested" url:url.absoluteString reason:@"Paste and go." private:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+}
 
 - (void)newTab:(id)s              { [self addTabPrivate:NO]; }
 - (void)newPrivateTab:(id)s       { [self addTabPrivate:YES]; }
@@ -4681,7 +4733,7 @@ static NSMutableArray *gBBWindowControllers;
 - (void)settingsCancel:(id)s { [NSApp stopModalWithCode:NSModalResponseCancel]; }
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=300;
+  CGFloat W=470,Hh=340;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -4706,6 +4758,10 @@ static NSMutableArray *gBBWindowControllers;
   NSButton *bmBar=[NSButton checkboxWithTitle:@"Show bookmarks bar" target:nil action:nil];
   bmBar.frame=NSMakeRect(192,y,260,20); bmBar.state=[ud boolForKey:@"BBShowBookmarksBar"]?NSControlStateValueOn:NSControlStateValueOff;
   [cv addSubview:bmBar]; y-=28;
+  NSButton *inline_ac=[NSButton checkboxWithTitle:@"Inline autocomplete in address bar" target:nil action:nil];
+  inline_ac.frame=NSMakeRect(192,y,280,20);
+  inline_ac.state=([ud objectForKey:@"BBInlineAutocomplete"]==nil||[ud boolForKey:@"BBInlineAutocomplete"])?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:inline_ac]; y-=28;
   NSButton *sug=[NSButton checkboxWithTitle:@"Search suggestions (sends typing to the engine)" target:nil action:nil];
   sug.frame=NSMakeRect(192,y,280,20); sug.state=[ud boolForKey:@"BBSearchSuggestions"]?NSControlStateValueOn:NSControlStateValueOff;
   [cv addSubview:sug]; y-=28;
@@ -4726,6 +4782,7 @@ static NSMutableArray *gBBWindowControllers;
   NSString *hp=[home.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
   if (hp.length) [ud setObject:hp forKey:@"BBHomepage"]; else [ud removeObjectForKey:@"BBHomepage"];
   [ud setBool:(bmBar.state==NSControlStateValueOn) forKey:@"BBShowBookmarksBar"];
+  [ud setBool:(inline_ac.state==NSControlStateValueOn) forKey:@"BBInlineAutocomplete"];
   [ud setBool:(sug.state==NSControlStateValueOn) forKey:@"BBSearchSuggestions"];
   [ud setBool:(clr.state==NSControlStateValueOn) forKey:@"BBClearOnQuit"];
   // Apply the bookmarks-bar choice immediately.
@@ -4845,7 +4902,8 @@ static NSMutableArray *gBBWindowControllers;
     // Block any attempt by page JS to navigate to dangerous schemes via this bridge
     NSString *inputLower=input.lowercaseString;
     if ([inputLower hasPrefix:@"javascript:"]||[inputLower hasPrefix:@"view-source:"]||
-        [inputLower hasPrefix:@"webkit-"]||[inputLower hasPrefix:@"x-webkit"]) return;
+        [inputLower hasPrefix:@"webkit-"]||[inputLower hasPrefix:@"x-webkit"]||
+        [inputLower hasPrefix:@"file:"]||[inputLower hasPrefix:@"data:"]) return; // pages can't drive local/data nav via the bridge
     // force: prefix bypasses Quad9 block (user explicitly clicked "Proceed anyway")
     BOOL forceNav=[input hasPrefix:@"force:"];
     if (forceNav) input=[input substringFromIndex:6];
@@ -4931,6 +4989,29 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   r.pageURL=page; r.resourceType=type; r.timestamp=[NSDate date]; r.blocked=blocked;
   r.category=[BBConnectionRecord classify:r.domain];
   [[BBNetworkMapPanel shared] pushRecord:r];
+}
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+  SEL a=item.action;
+  if (a==@selector(goBack:))           return self.webView.canGoBack;
+  if (a==@selector(goForward:))        return self.webView.canGoForward;
+  if (a==@selector(hardReload:))       return self.webView.URL!=nil;
+  if (a==@selector(reopenClosedTab:))  return self.recentlyClosed.count>0;
+  if (a==@selector(reloadOrStop:)) {
+    item.title=self.activeTab.isLoading?@"Stop":@"Reload Page";
+    return YES;
+  }
+  if (a==@selector(toggleReader:))     return self.webView.URL!=nil;
+  if (a==@selector(toggleBookmarkCurrent:)) {
+    NSString *url=self.webView.URL.absoluteString;
+    BOOL isBookmarked=url.length&&[[BBBookmarksStore shared] isBookmarked:url];
+    item.title=isBookmarked?@"Remove Bookmark":@"Bookmark This Page";
+    return self.webView.URL!=nil;
+  }
+  if (a==@selector(printPage:))        return self.webView.URL!=nil;
+  if (a==@selector(viewSource:))       return self.webView.URL!=nil;
+  if (a==@selector(prevTab:)||a==@selector(nextTab:)) return self.tabs.count>1;
+  if (a==@selector(focusAddressBar:))  return YES;
+  return YES; // default enabled
 }
 - (void)goBack:(id)s    { if(self.webView.canGoBack)    [self.webView goBack]; }
 - (void)goForward:(id)s { if(self.webView.canGoForward) [self.webView goForward]; }
@@ -5145,8 +5226,29 @@ static NSString *kFaviconJS=@"(function(){"
 
 // ── Address bar ───────────────────────────────────────────────────────────────
 - (void)controlTextDidBeginEditing:(NSNotification *)n { (void)n; }
+- (NSString *)bestURLCompletionFor:(NSString *)prefix {
+  // Strip scheme from prefix so "git" matches "https://github.com"
+  NSString *pl=prefix.lowercaseString;
+  NSArray *schemes=@[@"https://www.",@"http://www.",@"https://",@"http://"];
+  // Bookmarks first (user explicitly saved = high confidence)
+  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+    NSString *url=b.urlString; NSString *urlL=url.lowercaseString;
+    NSString *bare=urlL;
+    for (NSString *sc in schemes) { if ([urlL hasPrefix:sc]){bare=[urlL substringFromIndex:sc.length];break;} }
+    if ([bare hasPrefix:pl]||[urlL hasPrefix:pl]) return b.urlString;
+  }
+  // Then history
+  for (BBHistoryEntry *e in [[BBHistoryStore shared] search:prefix limit:5]) {
+    NSString *url=e.urlString; NSString *urlL=url.lowercaseString;
+    NSString *bare=urlL;
+    for (NSString *sc in schemes) { if ([urlL hasPrefix:sc]){bare=[urlL substringFromIndex:sc.length];break;} }
+    if ([bare hasPrefix:pl]||[urlL hasPrefix:pl]) return e.urlString;
+  }
+  return nil;
+}
 - (void)controlTextDidChange:(NSNotification *)n {
   if (n.object!=self.address) return;
+  if (self.suppressInlineCompletion) return;
   NSString *q=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
   // Remote suggestions only when enabled in Settings AND not in a private tab — never
   // send incognito keystrokes to the suggest endpoint.
@@ -5154,6 +5256,41 @@ static NSString *kFaviconJS=@"(function(){"
     [[NSUserDefaults standardUserDefaults] boolForKey:@"BBSearchSuggestions"] && !self.activeTab.isPrivate;
   if (q.length) [self.addressDropdown updateForQuery:q belowField:self.address inWindow:self.window];
   else [self.addressDropdown hide];
+  // Inline autocomplete (default ON, disabled by user pref or private mode)
+  // Only attempt if the typed text is URL-like (no spaces) and at least 2 chars.
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  BOOL inlineON=([ud objectForKey:@"BBInlineAutocomplete"]==nil||[ud boolForKey:@"BBInlineAutocomplete"])
+                && !self.activeTab.isPrivate && q.length>=2 && ![q containsString:@" "];
+  if (inlineON) {
+    NSString *full=[self bestURLCompletionFor:q];
+    if (full) {
+      // Determine what to show inline: strip scheme to match what the user typed
+      NSString *display=full;
+      NSArray *schemes=@[@"https://www.",@"http://www.",@"https://",@"http://"];
+      for (NSString *sc in schemes) {
+        if ([full.lowercaseString hasPrefix:sc.lowercaseString]) {
+          display=[full substringFromIndex:sc.length]; break;
+        }
+      }
+      if (display.length>q.length && [display.lowercaseString hasPrefix:q.lowercaseString]) {
+        NSTextView *tv=(NSTextView*)[self.address currentEditor];
+        if (tv) {
+          self.suppressInlineCompletion=YES;
+          // Set text to the completion, select only the appended portion
+          NSString *prev=tv.string;
+          tv.string=display;
+          // Only select the appended tail — so typing replaces it, Delete undoes it
+          NSRange tail=NSMakeRange(q.length, display.length-q.length);
+          [tv setSelectedRange:tail];
+          self.suppressInlineCompletion=NO;
+          // If we changed the field's displayed text, update again with the typed part
+          if (![prev isEqualToString:display]) {
+            [self.addressDropdown updateForQuery:q belowField:self.address inWindow:self.window];
+          }
+        }
+      }
+    }
+  }
 }
 - (void)controlTextDidEndEditing:(NSNotification *)n {
   if (n.object==self.address) [self.addressDropdown hide];
@@ -5201,27 +5338,6 @@ static NSString *kFaviconJS=@"(function(){"
 }
 
 // ── Navigation delegate ───────────────────────────────────────────────────────
-// ── JS dialog suppression ─────────────────────────────────────────────────────
-// Pages cannot trigger alert(), confirm(), or prompt() — these are classic attack
-// vectors: infinite alert loops, phishing via confirm, credential harvest via prompt.
-// All three are silently swallowed. The completion handlers are called immediately
-// so the page's JS execution continues normally (no hang).
-- (void)webView:(WKWebView*)wv runJavaScriptAlertPanelWithMessage:(NSString*)msg
-    initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void(^)(void))done {
-  BBLog([NSString stringWithFormat:@"[BLOCKED] JS alert() from %@: %@", frame.request.URL.host?:@"?", msg]);
-  done();
-}
-- (void)webView:(WKWebView*)wv runJavaScriptConfirmPanelWithMessage:(NSString*)msg
-    initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void(^)(BOOL))done {
-  BBLog([NSString stringWithFormat:@"[BLOCKED] JS confirm() from %@: %@", frame.request.URL.host?:@"?", msg]);
-  done(NO);
-}
-- (void)webView:(WKWebView*)wv runJavaScriptTextInputPanelWithPrompt:(NSString*)prompt
-    defaultText:(NSString*)def initiatedByFrame:(WKFrameInfo*)frame
-    completionHandler:(void(^)(NSString*))done {
-  BBLog([NSString stringWithFormat:@"[BLOCKED] JS prompt() from %@: %@", frame.request.URL.host?:@"?", prompt]);
-  done(nil);
-}
 // beforeunload dialogs — suppress "are you sure you want to leave?" gates
 - (void)webViewDidClose:(WKWebView*)wv { /* no action — suppresses beforeunload UI */ }
 
@@ -5257,6 +5373,106 @@ static NSString *kFaviconJS=@"(function(){"
   NSInteger ni=self.tabs.count-1; [self reloadTabBar];
   dispatch_async(dispatch_get_main_queue(),^{[self activateTab:ni];[self reloadTabBar];});
   return newWV;
+}
+// ── JS dialogs + file upload (WKUIDelegate) ───────────────────────────────────
+// Real NSAlert sheets for alert/confirm/prompt and NSOpenPanel for file upload.
+// Chrome-style abuse protection: after 3 dialogs without navigation the user gets
+// a "Block additional dialogs" checkbox. Once suppressed, dialogs no-op until nav.
+static const NSInteger kDialogAbuseThreshold = 3;
+
+- (NSString *)jsDialogTitleForFrame:(WKFrameInfo *)frame {
+  NSString *host=frame.request.URL.host;
+  return host.length?[NSString stringWithFormat:@"%@ says",host]:@"This page says";
+}
+- (BOOL)checkDialogAbuseForWebView:(WKWebView *)wv voidCompletion:(void(^)(void))voidDone
+    boolCompletion:(void(^)(BOOL))boolDone stringCompletion:(void(^)(NSString*))strDone {
+  BBTab *tab=[self tabForWebView:wv]; if (!tab) return NO;
+  if (tab.dialogsSuppressed) {
+    if (voidDone) voidDone();
+    else if (boolDone) boolDone(NO);
+    else if (strDone) strDone(nil);
+    return YES;
+  }
+  tab.dialogCount++;
+  return NO;
+}
+- (void)addSuppressCheckboxIfNeeded:(NSAlert *)alert webView:(WKWebView *)wv {
+  BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
+  if (tab.dialogCount < kDialogAbuseThreshold) return;
+  NSButton *cb=[NSButton checkboxWithTitle:@"Block additional dialogs from this page" target:nil action:nil];
+  alert.accessoryView=cb;
+}
+- (void)handleSuppressCheckbox:(NSAlert *)alert webView:(WKWebView *)wv {
+  if (![alert.accessoryView isKindOfClass:[NSButton class]]) return;
+  NSButton *cb=(NSButton *)alert.accessoryView;
+  if (cb.state==NSControlStateValueOn) {
+    BBTab *tab=[self tabForWebView:wv];
+    if (tab) tab.dialogsSuppressed=YES;
+  }
+}
+- (void)webView:(WKWebView *)wv runJavaScriptAlertPanelWithMessage:(NSString *)message
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler {
+  if ([self checkDialogAbuseForWebView:wv voidCompletion:completionHandler boolCompletion:nil stringCompletion:nil]) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[self jsDialogTitleForFrame:frame]; a.informativeText=message?:@"";
+  [a addButtonWithTitle:@"OK"];
+  [self addSuppressCheckboxIfNeeded:a webView:wv];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    [self handleSuppressCheckbox:a webView:wv];
+    completionHandler();
+  }];
+}
+- (void)webView:(WKWebView *)wv runJavaScriptConfirmPanelWithMessage:(NSString *)message
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL))completionHandler {
+  if ([self checkDialogAbuseForWebView:wv voidCompletion:nil boolCompletion:completionHandler stringCompletion:nil]) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[self jsDialogTitleForFrame:frame]; a.informativeText=message?:@"";
+  [a addButtonWithTitle:@"OK"]; [a addButtonWithTitle:@"Cancel"];
+  [self addSuppressCheckboxIfNeeded:a webView:wv];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    [self handleSuppressCheckbox:a webView:wv];
+    completionHandler(rc==NSAlertFirstButtonReturn);
+  }];
+}
+- (void)webView:(WKWebView *)wv runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt
+    defaultText:(NSString *)defaultText initiatedByFrame:(WKFrameInfo *)frame
+    completionHandler:(void (^)(NSString *))completionHandler {
+  if ([self checkDialogAbuseForWebView:wv voidCompletion:nil boolCompletion:nil stringCompletion:completionHandler]) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[self jsDialogTitleForFrame:frame]; a.informativeText=prompt?:@"";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  tf.stringValue=defaultText?:@"";
+  // accessoryView is the text field; suppress checkbox only applies when count < threshold
+  BBTab *tab=[self tabForWebView:wv];
+  if (tab && tab.dialogCount >= kDialogAbuseThreshold) {
+    NSStackView *sv=[NSStackView stackViewWithViews:@[tf,
+      [NSButton checkboxWithTitle:@"Block additional dialogs from this page" target:nil action:nil]]];
+    sv.orientation=NSUserInterfaceLayoutOrientationVertical; sv.alignment=NSLayoutAttributeLeading;
+    sv.spacing=6; a.accessoryView=sv;
+  } else {
+    a.accessoryView=tf;
+  }
+  [a addButtonWithTitle:@"OK"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if ([a.accessoryView isKindOfClass:[NSStackView class]]) {
+      NSStackView *sv=(NSStackView *)a.accessoryView;
+      for (NSView *v in sv.arrangedSubviews) {
+        if ([v isKindOfClass:[NSButton class]] && ((NSButton*)v).state==NSControlStateValueOn) {
+          if (tab) tab.dialogsSuppressed=YES;
+        }
+      }
+    }
+    completionHandler(rc==NSAlertFirstButtonReturn?tf.stringValue:nil);
+  }];
+}
+- (void)webView:(WKWebView *)wv runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSArray<NSURL *> *))completionHandler {
+  NSOpenPanel *p=[NSOpenPanel openPanel];
+  p.canChooseFiles=YES; p.canChooseDirectories=NO;
+  p.allowsMultipleSelection=parameters.allowsMultipleSelection;
+  [p beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    completionHandler(rc==NSModalResponseOK?p.URLs:nil);
+  }];
 }
 - (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)action didBecomeDownload:(WKDownload *)download {
   download.delegate=self;
@@ -5486,6 +5702,7 @@ static NSString *kFaviconJS=@"(function(){"
 
 - (void)webView:(WKWebView *)wv didStartProvisionalNavigation:(WKNavigation *)nav {
   BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
+  tab.dialogCount=0; tab.dialogsSuppressed=NO; // reset per-page dialog abuse state
   tab.isLoading=YES;
   if (wv==self.webView) {
     self.progressBar.doubleValue=0; self.progressBar.hidden=NO;
@@ -5536,7 +5753,47 @@ static NSString *kFaviconJS=@"(function(){"
   [self emitNav:@"navigation.committed" url:url reason:@"Navigation committed." private:tab.isPrivate];
   [self reloadTabBar];
 }
-- (void)webView:(WKWebView *)wv didFailNavigation:(WKNavigation *)nav withError:(NSError *)err {
+- (NSString *)errorPageHTMLFor:(NSError *)err url:(NSURL *)url {
+  NSString *title=@"Can't Connect to This Page";
+  NSString *desc=@"BearBrowser can't load the page.";
+  if ([err.domain isEqualToString:NSURLErrorDomain]) {
+    switch (err.code) {
+      case NSURLErrorNotConnectedToInternet:
+      case NSURLErrorNetworkConnectionLost:
+        title=@"No Internet Connection"; desc=@"Your device isn't connected to the internet. Check your network and try again."; break;
+      case NSURLErrorCannotFindHost:
+      case NSURLErrorDNSLookupFailed:
+        title=@"Can't Find the Server"; desc=[NSString stringWithFormat:@"BearBrowser can't find the server at <b>%@</b>. Check the address and try again.",url.host?:@"??"]; break;
+      case NSURLErrorTimedOut:
+        title=@"Connection Timed Out"; desc=@"The server is taking too long to respond."; break;
+      case NSURLErrorSecureConnectionFailed:
+      case NSURLErrorServerCertificateUntrusted:
+        title=@"Your Connection Is Not Private"; desc=@"Attackers might be trying to steal your information. BearBrowser blocked the connection."; break;
+      default: desc=[err.localizedDescription stringByReplacingOccurrencesOfString:@"&" withString:@"&amp;"]; break;
+    }
+  }
+  return [NSString stringWithFormat:
+    @"<!doctype html><html><head><meta charset='utf-8'>"
+    @"<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;"
+    @"display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f4;color:#1d1d1f}"
+    @".card{max-width:520px;padding:40px;text-align:center}.icon{font-size:56px;margin-bottom:20px}"
+    @"h1{font-size:22px;font-weight:600;margin-bottom:12px;color:#1d1d1f}p{font-size:15px;color:#6e6e73;"
+    @"line-height:1.5;margin-bottom:24px}button{padding:10px 24px;border:none;border-radius:8px;"
+    @"background:#1b6b45;color:#fff;font-size:15px;font-weight:500;cursor:pointer}"
+    @"button:hover{background:#145835}@media(prefers-color-scheme:dark){body{background:#1c1c1e;color:#f5f5f7}"
+    @"h1{color:#f5f5f7}.icon{filter:invert(.9)}}</style></head>"
+    @"<body><div class='card'><div class='icon'>🔌</div><h1>%@</h1><p>%@</p>"
+    @"<button onclick='location.reload()'>Try Again</button></div></body></html>",
+    title, desc];
+}
+- (void)showErrorPage:(NSError *)err inWebView:(WKWebView *)wv {
+  NSURL *url=wv.URL?:[NSURL URLWithString:@"about:blank"];
+  NSString *html=[self errorPageHTMLFor:err url:url];
+  [wv loadHTMLString:html baseURL:url];
+}
+- (void)webView:(WKWebView *)wv didFailProvisionalNavigation:(WKNavigation *)nav withError:(NSError *)err {
+  // Cancelled (e.g., user hit Stop or a redirect cancelled the provisional) — not an error.
+  if (err.code==NSURLErrorCancelled) return;
   BBTab *tab=[self tabForWebView:wv]; if(!tab) return; tab.isLoading=NO;
   if (wv==self.webView) {
     self.progressBar.hidden=YES;
@@ -5544,6 +5801,19 @@ static NSString *kFaviconJS=@"(function(){"
     ri=[ri imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:14 weight:NSFontWeightMedium]];
     [ri setTemplate:YES]; self.reloadButton.image=ri; self.reloadButton.toolTip=@"Reload";
   }
+  [self showErrorPage:err inWebView:wv];
+  [self reloadTabBar];
+}
+- (void)webView:(WKWebView *)wv didFailNavigation:(WKNavigation *)nav withError:(NSError *)err {
+  if (err.code==NSURLErrorCancelled) return;
+  BBTab *tab=[self tabForWebView:wv]; if(!tab) return; tab.isLoading=NO;
+  if (wv==self.webView) {
+    self.progressBar.hidden=YES;
+    NSImage *ri=[NSImage imageWithSystemSymbolName:@"arrow.clockwise" accessibilityDescription:@"Reload"];
+    ri=[ri imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:14 weight:NSFontWeightMedium]];
+    [ri setTemplate:YES]; self.reloadButton.image=ri; self.reloadButton.toolTip=@"Reload";
+  }
+  [self showErrorPage:err inWebView:wv];
   [self reloadTabBar];
 }
 - (void)webView:(WKWebView *)wv didReceiveServerRedirectForProvisionalNavigation:(WKNavigation *)nav {
@@ -5558,15 +5828,25 @@ static NSString *kFaviconJS=@"(function(){"
 - (void)download:(WKDownload *)download decideDestinationUsingResponse:(NSURLResponse *)response suggestedFilename:(NSString *)filename completionHandler:(void(^)(NSURL *))completionHandler {
   NSURL *dlDir=[NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"]];
   [[NSFileManager defaultManager] createDirectoryAtURL:dlDir withIntermediateDirectories:YES attributes:nil error:nil];
-  NSURL *dest=[dlDir URLByAppendingPathComponent:filename];
-  NSInteger n=0; NSString *base=[filename stringByDeletingPathExtension]; NSString *ext=filename.pathExtension;
+  // SANITIZE the server-supplied filename: take only the last path component and
+  // strip path separators so a malicious Content-Disposition (e.g. "../../foo")
+  // can never escape ~/Downloads (path traversal).
+  NSString *safe=filename.lastPathComponent;
+  safe=[safe stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+  safe=[safe stringByReplacingOccurrencesOfString:@":" withString:@"_"]; // HFS path separator
+  if (!safe.length || [safe isEqualToString:@"."] || [safe isEqualToString:@".."]) safe=@"download";
+  NSURL *dest=[dlDir URLByAppendingPathComponent:safe];
+  NSInteger n=0; NSString *base=[safe stringByDeletingPathExtension]; NSString *ext=safe.pathExtension;
   while ([[NSFileManager defaultManager] fileExistsAtPath:dest.path]) {
     n++;
     dest=[dlDir URLByAppendingPathComponent:ext.length?[NSString stringWithFormat:@"%@ (%ld).%@",base,(long)n,ext]:[NSString stringWithFormat:@"%@ (%ld)",base,(long)n]];
   }
+  // Belt-and-suspenders: never hand back a path outside the Downloads directory.
+  if (![dest.URLByStandardizingPath.path hasPrefix:dlDir.URLByStandardizingPath.path])
+    dest=[dlDir URLByAppendingPathComponent:@"download"];
   // Register in download panel
   BBDownloadItem *item=[BBDownloadItem new];
-  item.filename=filename; item.destURL=dest; item.download=download;
+  item.filename=dest.lastPathComponent; item.destURL=dest; item.download=download;
   item.state=BBDownloadStateActive; item.startedAt=[NSDate date];
   item.totalBytes=response.expectedContentLength>0?response.expectedContentLength:0;
   dispatch_async(dispatch_get_main_queue(),^{ [self.downloadPanel addItem:item]; });
