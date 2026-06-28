@@ -884,13 +884,22 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   NSInteger idx=self.items.count-1-btn.tag; // rows displayed newest-first
   if(idx<0||idx>=(NSInteger)self.items.count) return;
   BBDownloadItem *item=self.items[idx];
-  if (item.state==BBDownloadStateDone && item.destURL)
-    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[item.destURL]];
+  if (item.state==BBDownloadStateDone && item.destURL) {
+    // Offer Open + Show in Finder (Chrome's completed-download menu).
+    NSMenu *m=[[NSMenu alloc]init];
+    NSMenuItem *o=[m addItemWithTitle:@"Open" action:@selector(dlOpen:) keyEquivalent:@""];
+    o.target=self; o.representedObject=item.destURL;
+    NSMenuItem *r=[m addItemWithTitle:@"Show in Finder" action:@selector(dlReveal:) keyEquivalent:@""];
+    r.target=self; r.representedObject=item.destURL;
+    [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+  }
   else if (item.state==BBDownloadStateFailed)
     { item.state=BBDownloadStateActive; [self refresh]; }
   else if (item.download)
     [item.download cancel:^(NSData *rd){}];
 }
+- (void)dlOpen:(NSMenuItem *)s   { if([s.representedObject isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] openURL:s.representedObject]; }
+- (void)dlReveal:(NSMenuItem *)s { if([s.representedObject isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[s.representedObject]]; }
 - (void)show { self.hidden=NO; }
 - (void)hide { self.hidden=YES; }
 @end
@@ -2450,6 +2459,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) id               contextMenuMonitor;
 @property(strong) NSButton        *starButton;           // bookmark this page (address bar)
 @property(strong) NSTextField     *statusBar;            // Chrome-style hovered-link bubble (bottom-left)
+@property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
 @end
 
 // Retains a controller for every open browser window. Both NSApplication.delegate
@@ -2618,6 +2628,7 @@ static NSMutableArray *gBBWindowControllers;
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   [self buildMenu];
   self.recentlyClosed=[NSMutableArray array];
+  self.zoomByHost=[([[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBZoomByHost"]?:@{}) mutableCopy];
   // Compile content rules on a background queue; tabs added after compilation get rules applied.
   // Tabs opened immediately (below) get rules applied once compile finishes via the shared property.
   [BBContentBlocker loadRulesInto:[[WKWebViewConfiguration alloc]init] completion:^{
@@ -2699,9 +2710,12 @@ static NSMutableArray *gBBWindowControllers;
   self.securityButton.target=self; self.securityButton.action=@selector(showSecurityInfo:);
   [self updateSecurityIndicator:nil]; [self.toolbarBg addSubview:self.securityButton];
 
-  // Address bar
+  // Address bar — reserve room on the right for the bookmark star AND the three
+  // toolbar action buttons (network / read-aloud / bear panel) so none overlap.
   CGFloat rightR=48;
-  self.address=[[NSTextField alloc]initWithFrame:NSMakeRect(x,btnY+1,W-x-rightR-12,28)];
+  CGFloat rightGroupLeft=W-rightR-58;   // left edge of the action-button group (netBtn)
+  CGFloat starX=rightGroupLeft-30;      // star sits just left of that group
+  self.address=[[NSTextField alloc]initWithFrame:NSMakeRect(x,btnY+1,starX-x-6,28)];
   self.address.autoresizingMask=NSViewWidthSizable;
   self.address.bezelStyle=NSTextFieldRoundedBezel;
   self.address.placeholderString=@"Search or enter address";
@@ -2709,11 +2723,9 @@ static NSMutableArray *gBBWindowControllers;
   self.address.delegate=self; [self.address.cell setWraps:NO]; [self.address.cell setScrollable:YES];
   [self.toolbarBg addSubview:self.address];
 
-  // Bookmark star — overlaps the right edge of the address field (Chrome puts the
-  // star inside the omnibox). Click toggles a bookmark for the current page.
-  NSRect af=self.address.frame;
-  self.address.frame=NSMakeRect(af.origin.x,af.origin.y,af.size.width-26,af.size.height);
-  self.starButton=[[NSButton alloc]initWithFrame:NSMakeRect(NSMaxX(self.address.frame)-2,btnY+3,24,24)];
+  // Bookmark star at the right end of the omnibox (Chrome-style). Click toggles a
+  // bookmark for the current page. Placed clear of the action-button group.
+  self.starButton=[[NSButton alloc]initWithFrame:NSMakeRect(starX,btnY+3,24,24)];
   self.starButton.autoresizingMask=NSViewMinXMargin;
   self.starButton.bezelStyle=NSBezelStyleToolbar; self.starButton.bordered=NO;
   self.starButton.target=self; self.starButton.action=@selector(toggleBookmarkCurrent:);
@@ -4153,6 +4165,7 @@ static NSMutableArray *gBBWindowControllers;
   self.window.title=tab.title.length?tab.title:@"BearBrowser";
   [self updateSecurityIndicator:tab.webView.URL];
   [self updateStarButton];
+  [self applyZoomForCurrentTab];
   self.statusBar.hidden=YES;
 }
 
@@ -4268,6 +4281,51 @@ static NSMutableArray *gBBWindowControllers;
   NSURL *landing=[[NSBundle mainBundle] URLForResource:@"BearBrowser-start" withExtension:@"html"];
   if (landing) [wv loadFileURL:landing allowingReadAccessToURL:[landing URLByDeletingLastPathComponent]];
   else [wv loadHTMLString:@"<h1>BearBrowser</h1>" baseURL:nil];
+}
+- (BOOL)isStartPage:(NSURL *)url {
+  if (!url) return NO;
+  NSURL *landing=[[NSBundle mainBundle] URLForResource:@"BearBrowser-start" withExtension:@"html"];
+  return landing && [url.absoluteString isEqualToString:landing.absoluteString];
+}
+- (NSString *)htmlEscape:(NSString *)s {
+  s=[s stringByReplacingOccurrencesOfString:@"&" withString:@"&amp;"];
+  s=[s stringByReplacingOccurrencesOfString:@"<" withString:@"&lt;"];
+  s=[s stringByReplacingOccurrencesOfString:@">" withString:@"&gt;"];
+  s=[s stringByReplacingOccurrencesOfString:@"\"" withString:@"&quot;"];
+  return s;
+}
+// Top sites by visit frequency for the New Tab Page (non-private history only).
+- (NSArray<NSDictionary*> *)topSitesLimit:(NSInteger)n {
+  NSMutableDictionary<NSString*,NSMutableDictionary*> *byHost=[NSMutableDictionary dictionary];
+  for (BBHistoryEntry *e in [BBHistoryStore shared].entries) {
+    NSURL *u=[NSURL URLWithString:e.urlString]; NSString *host=u.host; if(!host.length) continue;
+    if([host hasPrefix:@"www."]) host=[host substringFromIndex:4];
+    NSMutableDictionary *d=byHost[host];
+    if(!d){ d=[@{@"count":@0} mutableCopy]; byHost[host]=d; }
+    d[@"count"]=@([d[@"count"] integerValue]+1);
+    d[@"url"]=e.urlString; d[@"host"]=host; if(e.title.length) d[@"title"]=e.title;
+  }
+  NSArray *sorted=[byHost.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary*a,NSDictionary*b){
+    return [b[@"count"] compare:a[@"count"]];
+  }];
+  return sorted.count>n?[sorted subarrayWithRange:NSMakeRange(0,n)]:sorted;
+}
+// Replace the start page's curated grid with the user's most-visited sites.
+- (void)injectTopSitesInto:(WKWebView *)wv {
+  NSArray *sites=[self topSitesLimit:8];
+  if (sites.count<4) return; // not enough history yet — keep the curated defaults
+  NSMutableString *html=[NSMutableString string];
+  for (NSDictionary *d in sites) {
+    NSString *host=d[@"host"]?:@""; NSString *url=d[@"url"]?:@"";
+    NSString *letter=host.length?[[host substringToIndex:1] uppercaseString]:@"•";
+    [html appendFormat:
+      @"<a class=\"shortcut\" href=\"%@\"><div class=\"shortcut-icon\">%@</div><span class=\"shortcut-label\">%@</span></a>",
+      [self htmlEscape:url],[self htmlEscape:letter],[self htmlEscape:host]];
+  }
+  NSString *js=[NSString stringWithFormat:
+    @"(function(){var g=document.querySelector('.grid'); if(g) g.innerHTML=%@;})();",
+    [self jsStringLiteral:html]];
+  [wv evaluateJavaScript:js completionHandler:nil];
 }
 
 - (BBTab *)tabForWebView:(WKWebView *)wv {
@@ -4690,9 +4748,34 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   if (url) [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
   [self.window makeFirstResponder:self.webView];
 }
-- (void)zoomIn:(id)s    { self.webView.pageZoom=MIN(5.0,self.webView.pageZoom+0.1); }
-- (void)zoomOut:(id)s   { self.webView.pageZoom=MAX(0.2,self.webView.pageZoom-0.1); }
-- (void)zoomReset:(id)s { self.webView.pageZoom=1.0; }
+- (void)zoomIn:(id)s    { [self setZoom:self.webView.pageZoom+0.1]; }
+- (void)zoomOut:(id)s   { [self setZoom:self.webView.pageZoom-0.1]; }
+- (void)zoomReset:(id)s { [self setZoom:1.0]; }
+- (NSString *)currentHost { return self.webView.URL.host?:@""; }
+// Set zoom for the active tab, remember it per-host, and flash the level.
+- (void)setZoom:(CGFloat)z {
+  z=MAX(0.25,MIN(5.0,round(z*100)/100.0));
+  self.webView.pageZoom=z;
+  NSString *h=self.currentHost;
+  if (h.length) {
+    if (fabs(z-1.0)<0.001) [self.zoomByHost removeObjectForKey:h];
+    else self.zoomByHost[h]=@(z);
+    [[NSUserDefaults standardUserDefaults] setObject:self.zoomByHost forKey:@"BBZoomByHost"];
+  }
+  [self flashZoom:z];
+}
+// Re-apply a remembered zoom when navigating to / switching to a page.
+- (void)applyZoomForCurrentTab {
+  NSString *h=self.currentHost;
+  CGFloat z=(h.length && self.zoomByHost[h]) ? self.zoomByHost[h].doubleValue : 1.0;
+  self.webView.pageZoom=z;
+}
+- (void)flashZoom:(CGFloat)z {
+  [self showStatus:[NSString stringWithFormat:@"Zoom %d%%",(int)lround(z*100)]];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(1.3*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    if ([self.statusBar.stringValue hasPrefix:@"Zoom "]) self.statusBar.hidden=YES;
+  });
+}
 
 - (void)printPage:(id)s {
   NSPrintOperation *op=[self.webView printOperationWithPrintInfo:[NSPrintInfo sharedPrintInfo]];
@@ -4814,8 +4897,27 @@ static NSString *kFaviconJS=@"(function(){"
   WKFindConfiguration *cfg=[[WKFindConfiguration alloc]init];
   cfg.backwards=back; cfg.wraps=YES; cfg.caseSensitive=NO;
   [self.webView findString:q withConfiguration:cfg completionHandler:^(WKFindResult *r){
-    self.findBar.resultLabel.stringValue=r.matchFound?@"":@"Not found";
-    self.findBar.resultLabel.textColor=r.matchFound?[NSColor secondaryLabelColor]:[NSColor systemRedColor];
+    if (!r.matchFound) {
+      self.findBar.resultLabel.stringValue=@"Not found";
+      self.findBar.resultLabel.textColor=[NSColor systemRedColor];
+      return;
+    }
+    self.findBar.resultLabel.textColor=[NSColor secondaryLabelColor];
+    [self updateFindCount:q];
+  }];
+}
+// WKFindResult exposes no match count, so count occurrences in the page text.
+// Approximate (visible text only; excludes inputs/shadow DOM) but Chrome-like.
+- (void)updateFindCount:(NSString *)q {
+  NSString *js=[NSString stringWithFormat:
+    @"(function(){try{var t=(document.body&&document.body.innerText)||'';"
+    @"var q=%@;if(!q)return 0;var n=0,i=0,ql=q.toLowerCase(),tl=t.toLowerCase();"
+    @"while((i=tl.indexOf(ql,i))!==-1){n++;i+=ql.length;}return n;}catch(e){return -1;}})();",
+    [self jsStringLiteral:q]];
+  [self.webView evaluateJavaScript:js completionHandler:^(id r,NSError *e){
+    NSInteger n=[r isKindOfClass:[NSNumber class]]?[r integerValue]:-1;
+    if (n<0) { self.findBar.resultLabel.stringValue=@""; return; }
+    self.findBar.resultLabel.stringValue=(n==1)?@"1 match":[NSString stringWithFormat:@"%ld matches",(long)n];
   }];
 }
 - (void)findNext:(id)s { [self doFind:NO]; }
@@ -5164,6 +5266,7 @@ static NSString *kFaviconJS=@"(function(){"
     self.window.title=tab.title;
     [self updateSecurityIndicator:wv.URL];
     [self updateStarButton];
+    [self applyZoomForCurrentTab];
   }
   // Record navigation to network monitor
   if(wv.URL.host.length && !tab.isPrivate)
@@ -5183,6 +5286,7 @@ static NSString *kFaviconJS=@"(function(){"
     if (trust) { CFRetain(trust); if(self.currentTrust) CFRelease(self.currentTrust); self.currentTrust=trust; }
     else        { if(self.currentTrust){ CFRelease(self.currentTrust); self.currentTrust=nil; } }
   }
+  if ([self isStartPage:wv.URL]) [self injectTopSitesInto:wv];
   BBEmitEvent(@"navigation.committed",@"allow",@"Navigation committed.",@{@"url":url});
   [self reloadTabBar];
 }
