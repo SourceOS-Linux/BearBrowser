@@ -2508,6 +2508,13 @@ static NSMutableArray *gBBWindowControllers;
 - (BBTab *)activeTab { return (self.activeTabIndex<(NSInteger)self.tabs.count)?self.tabs[self.activeTabIndex]:nil; }
 - (WKWebView *)webView { return self.activeTab.webView; }
 - (NSString *)currentURLString { return self.activeTab.webView.URL.absoluteString?:@"bearbrowser://start"; }
+// Emit a navigation provenance event, but never persist the URL for a private tab —
+// incognito must leave no on-disk trace of where you went. The event itself is still
+// recorded (the provenance model knows a governed navigation happened) but redacted.
+- (void)emitNav:(NSString *)type url:(NSString *)url reason:(NSString *)reason private:(BOOL)priv {
+  if (priv) BBEmitEvent(type,@"allow",reason,@{@"private":@YES});
+  else      BBEmitEvent(type,@"allow",reason,@{@"url":url?:@""});
+}
 
 // ── Menu ──────────────────────────────────────────────────────────────────────
 - (void)buildMenu {
@@ -4588,7 +4595,7 @@ static NSMutableArray *gBBWindowControllers;
   NSURL *u=[NSURL URLWithString:urlString]; if(!u) return;
   self.address.stringValue=urlString;
   [self.window makeFirstResponder:self.webView];
-  BBEmitEvent(@"navigation.requested",@"allow",@"Dropdown navigation.",@{@"url":urlString});
+  [self emitNav:@"navigation.requested" url:urlString reason:@"Dropdown navigation." private:self.activeTab.isPrivate];
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
 }
 
@@ -4837,6 +4844,8 @@ static NSMutableArray *gBBWindowControllers;
       [NSString stringWithFormat:@"Canary '%@' accessed on %@",trap,url],
       @{@"trap":trap,@"url":url,@"time":@([body[@"time"] doubleValue])});
   } else if ([msg.name isEqualToString:@"netmon"]) {
+    BBTab *src=[self tabForWebView:msg.webView];
+    if (src.isPrivate) return; // don't log private-tab connections to the network monitor
     NSDictionary *body=[msg.body isKindOfClass:[NSDictionary class]]?msg.body:@{};
     NSString *domain=body[@"domain"]?:@"";
     NSString *page=body[@"page"]?:@"";
@@ -5137,7 +5146,7 @@ static NSString *kFaviconJS=@"(function(){"
         url=[NSURL URLWithString:[BBDelegate searchURLForQuery:raw]];
       }
       if (url) {
-        BBEmitEvent(@"navigation.requested",@"allow",@"User navigation.",@{@"url":url.absoluteString});
+        [self emitNav:@"navigation.requested" url:url.absoluteString reason:@"User navigation." private:self.activeTab.isPrivate];
         [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
       }
       [self.window makeFirstResponder:self.webView]; return YES;
@@ -5197,6 +5206,11 @@ static NSString *kFaviconJS=@"(function(){"
   [newWV addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
 
   BBTab *tab=[[BBTab alloc]init];
+  // Inherit private-ness from the opener: window.open/target=_blank reuse the
+  // opener's configuration, so a popup from a private tab shares its ephemeral
+  // data store. Mark the tab private to match — otherwise its navigations would
+  // leak into history and session restore. (A non-persistent store == private.)
+  tab.isPrivate = !cfg.websiteDataStore.persistent;
   tab.webView=newWV;
   [self.tabs addObject:tab];
   if (action.request.URL) [tab.webView loadRequest:action.request];
@@ -5479,7 +5493,7 @@ static NSString *kFaviconJS=@"(function(){"
     else        { if(self.currentTrust){ CFRelease(self.currentTrust); self.currentTrust=nil; } }
   }
   if ([self isStartPage:wv.URL]) [self injectTopSitesInto:wv];
-  BBEmitEvent(@"navigation.committed",@"allow",@"Navigation committed.",@{@"url":url});
+  [self emitNav:@"navigation.committed" url:url reason:@"Navigation committed." private:tab.isPrivate];
   [self reloadTabBar];
 }
 - (void)webView:(WKWebView *)wv didFailNavigation:(WKNavigation *)nav withError:(NSError *)err {
