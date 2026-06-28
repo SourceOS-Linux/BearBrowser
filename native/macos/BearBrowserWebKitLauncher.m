@@ -298,7 +298,7 @@ static const CGFloat kDLPanelW  = 280.0;
 static const CGFloat kTabMaxW   = 220.0;
 static const CGFloat kTabMinW   = 80.0;
 static const CGFloat kTabHardMinW = 44.0; // favicon-only floor when many tabs are open
-static const CGFloat kTabCompactW = 110.0; // below this width a tab drops its title/close (favicon-only)
+static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its title/close (favicon-only)
 
 // ── BBTab ─────────────────────────────────────────────────────────────────────
 @interface BBTab : NSObject
@@ -432,6 +432,8 @@ static const CGFloat kTabCompactW = 110.0; // below this width a tab drops its t
 @property(strong) NSMutableArray<BBTabItemView *> *items;
 @property(assign) NSInteger activeIndex;
 @property(strong) NSButton *addTabButton;
+@property(strong) NSScrollView *tabScroll;   // horizontal scroller for overflow
+@property(strong) NSView *tabStrip;          // document view holding the tab items
 @property(weak)   id<BBTabItemDelegate> outerDelegate;
 - (void)reloadWithTabs:(NSArray<BBTab *> *)tabs activeIndex:(NSInteger)active;
 @end
@@ -444,6 +446,17 @@ static const CGFloat kTabCompactW = 110.0; // below this width a tab drops its t
   NSBox *sep=[[NSBox alloc]initWithFrame:NSMakeRect(0,0,f.size.width,1)];
   sep.autoresizingMask=NSViewWidthSizable; sep.boxType=NSBoxSeparator; [self addSubview:sep];
   _items=[NSMutableArray array]; _outerDelegate=d;
+  // Tab strip lives in a horizontal scroll view so a large number of tabs scroll
+  // (Chrome-style) instead of shrinking to unreadable slivers.
+  _tabScroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,1,f.size.width-40,f.size.height-2)];
+  _tabScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+  _tabScroll.drawsBackground=NO; _tabScroll.hasVerticalScroller=NO;
+  _tabScroll.hasHorizontalScroller=YES; _tabScroll.scrollerStyle=NSScrollerStyleOverlay;
+  _tabScroll.horizontalScrollElasticity=NSScrollElasticityAllowed;
+  _tabScroll.verticalScrollElasticity=NSScrollElasticityNone;
+  _tabStrip=[[NSView alloc]initWithFrame:NSMakeRect(0,0,f.size.width-40,f.size.height-2)];
+  _tabScroll.documentView=_tabStrip;
+  [self addSubview:_tabScroll];
   _addTabButton=[[NSButton alloc]initWithFrame:NSMakeRect(f.size.width-34,4,28,28)];
   _addTabButton.autoresizingMask=NSViewMinXMargin;
   NSImage *pi=[NSImage imageWithSystemSymbolName:@"plus" accessibilityDescription:@"New Tab"];
@@ -460,30 +473,31 @@ static const CGFloat kTabCompactW = 110.0; // below this width a tab drops its t
   // Pin the + button to the right edge — it must never be pushed off-screen by tabs.
   CGFloat addX=self.bounds.size.width-34;
   self.addTabButton.frame=NSMakeRect(addX,4,28,28);
-  NSInteger count=tabs.count; if (!count) return;
-  // Safari-style compress-to-fit: every tab stays visible by shrinking. Width is
-  // the available strip divided evenly, capped at kTabMaxW and floored at
-  // kTabHardMinW (favicon-only). This keeps the active tab — and all tabs —
-  // reachable no matter how many are open, instead of overflowing past the edge.
-  CGFloat avail=addX-4;                       // strip from left edge up to the + button
-  // Cap the width when there are few tabs; otherwise compress to fit. We do NOT
-  // clamp UP to a minimum here — that's what made tabs overflow off-screen once
-  // count*minWidth exceeded the bar. Tabs may shrink to slivers (kTabHardMinW is
-  // the comfortable target; below it they still compress so every tab stays
-  // visible and clickable, exactly like Safari).
-  CGFloat tabW=MIN(kTabMaxW,floor(avail/count));
-  if (tabW<8) tabW=8;                         // absolute floor for absurd counts
+  CGFloat clipW=addX-2, clipH=self.bounds.size.height-2;
+  self.tabScroll.frame=NSMakeRect(0,1,clipW,clipH);
+  NSInteger count=tabs.count;
+  if (!count) { self.tabStrip.frame=NSMakeRect(0,0,clipW,clipH); return; }
+  // Compress to fit down to a readable floor (kTabHardMinW). Below that we stop
+  // shrinking and let the strip overflow → the scroll view scrolls instead, and
+  // we bring the active tab into view. This is Chrome's behaviour for many tabs.
+  CGFloat tabW=MIN(kTabMaxW,MAX(kTabHardMinW,floor(clipW/count)));
+  CGFloat totalW=tabW*count;
+  CGFloat stripW=MAX(clipW,totalW);
+  self.tabStrip.frame=NSMakeRect(0,0,stripW,clipH);
+  BBTabItemView *activeItem=nil;
   for (NSInteger i=0;i<count;i++) {
     BBTab *tab=tabs[i];
     CGFloat x=floor(i*tabW);
-    CGFloat w=floor(tabW)-2;
-    // The last tab absorbs rounding remainder so the row ends flush at `avail`.
-    if (i==count-1) w=MAX(6, floor(avail)-x-2);
-    BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,1,w,kTabBarH-2) index:i delegate:self];
+    CGFloat w=(i==count-1)?MAX(kTabHardMinW-2,floor(totalW)-x-2):floor(tabW)-2;
+    BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,0,w,clipH) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
     [item setTabTitle:tab.title favicon:tab.favicon loading:tab.isLoading];
-    [self addSubview:item]; [self.items addObject:item];
+    [self.tabStrip addSubview:item]; [self.items addObject:item];
+    if (i==active) activeItem=item;
   }
+  // Scroll the active tab into view when the strip overflows.
+  if (activeItem && stripW>clipW)
+    [self.tabStrip scrollRectToVisible:NSInsetRect(activeItem.frame,-tabW,0)];
 }
 - (void)tabItemDidSelect:(NSInteger)i { [self.outerDelegate tabItemDidSelect:i]; }
 - (void)tabItemDidClose:(NSInteger)i  { [self.outerDelegate tabItemDidClose:i]; }
@@ -1448,6 +1462,7 @@ static NSString *kMapHTML(void) {
   _panel=[[NSPanel alloc]initWithContentRect:r
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable)
     backing:NSBackingStoreBuffered defer:NO];
+  _panel.releasedWhenClosed=NO; // ARC owns it; avoid the legacy close-time over-release
   _panel.title=@"BearBrowser Network Monitor";
   _panel.minSize=NSMakeSize(600,400);
   _panel.becomesKeyOnlyIfNeeded=YES;
@@ -1599,6 +1614,7 @@ static NSString *kMapHTML(void) {
   NSWindow *fw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,480,400)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
     backing:NSBackingStoreBuffered defer:NO];
+  fw.releasedWhenClosed=NO;
   fw.title=@"BearBrowser Firewall Rules";
   NSScrollView *sv=[[NSScrollView alloc]initWithFrame:fw.contentView.bounds];
   sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
@@ -1661,6 +1677,7 @@ static NSString *kMapHTML(void) {
   _capturePanel=[[NSPanel alloc]initWithContentRect:pr
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
     backing:NSBackingStoreBuffered defer:NO];
+  _capturePanel.releasedWhenClosed=NO;
   _capturePanel.title=@"Packet Capture";
   NSView *cpv=_capturePanel.contentView;
   NSScrollView *csvw=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,36,cpv.bounds.size.width,cpv.bounds.size.height-36)];
@@ -1812,6 +1829,7 @@ static NSString *kMapHTML(void) {
     styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskResizable|
               NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable
     backing:NSBackingStoreBuffered defer:NO];
+  _panel.releasedWhenClosed=NO;
   _panel.title=@"Security Monitor";
   _panel.minSize=NSMakeSize(600,340);
 
@@ -4111,6 +4129,7 @@ static NSMutableArray *gBBWindowControllers;
   NSWindow *hw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,680,500)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
     backing:NSBackingStoreBuffered defer:YES];
+  hw.releasedWhenClosed=NO;
   hw.title=@"History"; [hw center];
   NSView *cv=hw.contentView;
   NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,hw.contentView.bounds.size.height-44,656,28)];
