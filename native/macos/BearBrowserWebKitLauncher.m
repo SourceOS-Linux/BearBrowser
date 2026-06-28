@@ -316,6 +316,10 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @protocol BBTabItemDelegate <NSObject>
 - (void)tabItemDidSelect:(NSInteger)index;
 - (void)tabItemDidClose:(NSInteger)index;
+@optional
+- (void)tabItemDidMiddleClick:(NSInteger)index;       // middle-click closes (Chrome)
+- (NSMenu *)tabItemContextMenu:(NSInteger)index;      // right-click tab menu
+- (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to; // drag-to-reorder
 @end
 
 @interface BBTabItemView : NSView
@@ -414,7 +418,41 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   self.isHovered=NO;   [self setNeedsDisplay:YES];
   if (self.compact) { self.closeButton.hidden=YES; self.faviconView.hidden=NO; }
 }
-- (void)mouseDown:(NSEvent *)e    { [self.delegate tabItemDidSelect:self.index]; }
+- (void)mouseDown:(NSEvent *)e {
+  // Run a tracking loop on the live item FIRST (selecting up front would reload the
+  // bar and destroy this view mid-gesture). If the user drags past a threshold we
+  // live-reorder; otherwise it's a plain click and we select on mouse-up. This lets
+  // any tab — active or not — be dragged immediately, Chrome-style.
+  NSView *strip=self.superview;
+  NSInteger count=0; for (NSView *v in strip.subviews) if ([v isKindOfClass:[BBTabItemView class]]) count++;
+  BOOL canReorder=(strip && count>=2 && [self.delegate respondsToSelector:@selector(tabItemMovedFrom:to:)]);
+  CGFloat stride=self.frame.size.width+2;
+  NSPoint start=e.locationInWindow; CGFloat startX=self.frame.origin.x;
+  BOOL dragging=NO; NSInteger from=self.index, target=from;
+  while (1) {
+    NSEvent *ev=[self.window nextEventMatchingMask:NSEventMaskLeftMouseUp|NSEventMaskLeftMouseDragged];
+    if (!ev || ev.type==NSEventTypeLeftMouseUp) break;
+    if (!canReorder) continue;
+    CGFloat dx=ev.locationInWindow.x-start.x;
+    if (!dragging && fabs(dx)>5) { dragging=YES; [strip addSubview:self positioned:NSWindowAbove relativeTo:nil]; self.alphaValue=0.9; }
+    if (dragging) {
+      NSRect fr=self.frame; fr.origin.x=startX+dx; self.frame=fr;
+      target=(NSInteger)llround((fr.origin.x+fr.size.width/2)/stride);
+      if (target<0) target=0; if (target>count-1) target=count-1;
+    }
+  }
+  self.alphaValue=1.0;
+  if (dragging && target!=from) [self.delegate tabItemMovedFrom:from to:target];
+  else [self.delegate tabItemDidSelect:from]; // plain click selects (or snaps back)
+}
+- (void)otherMouseDown:(NSEvent *)e {
+  if (e.buttonNumber==2) [self.delegate tabItemDidMiddleClick:self.index]; // middle-click closes
+}
+- (void)rightMouseDown:(NSEvent *)e {
+  if (![self.delegate respondsToSelector:@selector(tabItemContextMenu:)]) return;
+  NSMenu *m=[self.delegate tabItemContextMenu:self.index];
+  if (m) [NSMenu popUpContextMenu:m withEvent:e forView:self];
+}
 - (void)closeTab:(id)s            { [self.delegate tabItemDidClose:self.index]; }
 @end
 
@@ -501,6 +539,15 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 }
 - (void)tabItemDidSelect:(NSInteger)i { [self.outerDelegate tabItemDidSelect:i]; }
 - (void)tabItemDidClose:(NSInteger)i  { [self.outerDelegate tabItemDidClose:i]; }
+- (void)tabItemDidMiddleClick:(NSInteger)i {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemDidMiddleClick:)]) [self.outerDelegate tabItemDidMiddleClick:i];
+}
+- (NSMenu *)tabItemContextMenu:(NSInteger)i {
+  return [self.outerDelegate respondsToSelector:@selector(tabItemContextMenu:)] ? [self.outerDelegate tabItemContextMenu:i] : nil;
+}
+- (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemMovedFrom:to:)]) [self.outerDelegate tabItemMovedFrom:from to:to];
+}
 @end
 
 // ── BBFindBar ─────────────────────────────────────────────────────────────────
@@ -559,6 +606,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 + (instancetype)shared;
 - (void)addTitle:(NSString *)t url:(NSString *)u;
 - (void)removeAtIndex:(NSInteger)i;
+- (void)removeURL:(NSString *)u;
 - (BOOL)isBookmarked:(NSString *)u;
 @end
 @implementation BBBookmarksStore
@@ -579,6 +627,10 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   [self.items addObject:b]; [self save];
 }
 - (void)removeAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)self.items.count){[self.items removeObjectAtIndex:i];[self save];} }
+- (void)removeURL:(NSString *)u {
+  for (NSInteger i=(NSInteger)self.items.count-1;i>=0;i--) if([self.items[i].urlString isEqualToString:u]){[self.items removeObjectAtIndex:i];}
+  [self save];
+}
 - (BOOL)isBookmarked:(NSString *)u { for(BBBookmark *b in self.items) if([b.urlString isEqualToString:u]) return YES; return NO; }
 - (void)save {
   NSMutableArray *arr=[NSMutableArray array];
@@ -2373,10 +2425,10 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @end
 
 // ── BBDelegate ────────────────────────────────────────────────────────────────
-@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate>
+@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate,NSMenuDelegate>
 @property(strong) NSWindow *window;
 @property(strong) NSMutableArray<BBTab *> *tabs;
-@property(strong) NSMutableArray<NSString *> *closedTabURLs;
+@property(strong) NSMutableArray<NSDictionary *> *recentlyClosed; // @{url,title}, newest last
 @property(assign) NSInteger activeTabIndex;
 @property(strong) NSView    *root;
 @property(strong) NSView *toolbarBg;
@@ -2396,6 +2448,8 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(assign) SecTrustRef      currentTrust;        // TLS trust for current page cert inspector
 @property(strong) id               addrDismissMonitor;   // local event monitor (must be removed to avoid firing after teardown)
 @property(strong) id               contextMenuMonitor;
+@property(strong) NSButton        *starButton;           // bookmark this page (address bar)
+@property(strong) NSTextField     *statusBar;            // Chrome-style hovered-link bubble (bottom-left)
 @end
 
 // Retains a controller for every open browser window. Both NSApplication.delegate
@@ -2503,6 +2557,11 @@ static NSMutableArray *gBBWindowControllers;
   mi(histM,@"Back",@selector(goBack:),@"[",Cmd);
   mi(histM,@"Forward",@selector(goForward:),@"]",Cmd);
   [histM addItem:[NSMenuItem separatorItem]];
+  mi(histM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",Cmd|Shift);
+  NSMenuItem *rcI=[histM addItemWithTitle:@"Recently Closed" action:nil keyEquivalent:@""];
+  NSMenu *rcM=[[NSMenu alloc]initWithTitle:@"Recently Closed"]; rcM.delegate=self; // populated on open
+  rcI.submenu=rcM;
+  [histM addItem:[NSMenuItem separatorItem]];
   mi(histM,@"Show Full History",@selector(showHistory:),@"y",Cmd);
   [histM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧⌫ is already bound on the app menu's Clear Browsing Data.
@@ -2518,6 +2577,7 @@ static NSMutableArray *gBBWindowControllers;
   // ── Tab ──
   NSMenu *tabM=submenu(@"Tab");
   mi(tabM,@"New Tab",@selector(newTab:),@"t",Cmd);
+  [tabM addItemWithTitle:@"Duplicate Tab" action:@selector(duplicateCurrentTab:) keyEquivalent:@""];
   [tabM addItem:[NSMenuItem separatorItem]];
   mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
   [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
@@ -2557,7 +2617,7 @@ static NSMutableArray *gBBWindowControllers;
   BBLog([NSString stringWithFormat:@"Agent token: %@",[BBAgentServer shared].tokenPath]);
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   [self buildMenu];
-  self.closedTabURLs=[NSMutableArray array];
+  self.recentlyClosed=[NSMutableArray array];
   // Compile content rules on a background queue; tabs added after compilation get rules applied.
   // Tabs opened immediately (below) get rules applied once compile finishes via the shared property.
   [BBContentBlocker loadRulesInto:[[WKWebViewConfiguration alloc]init] completion:^{
@@ -2649,6 +2709,16 @@ static NSMutableArray *gBBWindowControllers;
   self.address.delegate=self; [self.address.cell setWraps:NO]; [self.address.cell setScrollable:YES];
   [self.toolbarBg addSubview:self.address];
 
+  // Bookmark star — overlaps the right edge of the address field (Chrome puts the
+  // star inside the omnibox). Click toggles a bookmark for the current page.
+  NSRect af=self.address.frame;
+  self.address.frame=NSMakeRect(af.origin.x,af.origin.y,af.size.width-26,af.size.height);
+  self.starButton=[[NSButton alloc]initWithFrame:NSMakeRect(NSMaxX(self.address.frame)-2,btnY+3,24,24)];
+  self.starButton.autoresizingMask=NSViewMinXMargin;
+  self.starButton.bezelStyle=NSBezelStyleToolbar; self.starButton.bordered=NO;
+  self.starButton.target=self; self.starButton.action=@selector(toggleBookmarkCurrent:);
+  [self updateStarButton]; [self.toolbarBg addSubview:self.starButton];
+
   // Network monitor button
   NSButton *netBtn=[self navBtn:@"network" tip:@"Network Monitor (⇧⌘M)" sel:@selector(openNetworkMonitor:) x:W-rightR-58 y:btnY];
   netBtn.autoresizingMask=NSViewMinXMargin; [self.toolbarBg addSubview:netBtn];
@@ -2673,6 +2743,19 @@ static NSMutableArray *gBBWindowControllers;
   self.progressBar.indeterminate=NO; self.progressBar.minValue=0; self.progressBar.maxValue=1;
   self.progressBar.controlSize=NSControlSizeSmall; self.progressBar.hidden=YES;
   [self.root addSubview:self.progressBar];
+
+  // Hovered-link status bubble (bottom-left), exactly like Chrome. Hidden until a
+  // link is hovered; the page posts the href via the `hoverlink` message handler.
+  self.statusBar=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,420,20)];
+  self.statusBar.bordered=NO; self.statusBar.editable=NO; self.statusBar.selectable=NO;
+  self.statusBar.drawsBackground=YES;
+  self.statusBar.backgroundColor=[NSColor windowBackgroundColor];
+  self.statusBar.textColor=[NSColor secondaryLabelColor];
+  self.statusBar.font=[NSFont systemFontOfSize:11];
+  self.statusBar.lineBreakMode=NSLineBreakByTruncatingMiddle;
+  self.statusBar.cell.usesSingleLineMode=YES;
+  self.statusBar.hidden=YES; self.statusBar.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  [self.root addSubview:self.statusBar positioned:NSWindowAbove relativeTo:nil];
 
   // Find bar
   self.findBar=[[BBFindBar alloc]initWithFrame:NSMakeRect(0,0,W,kFindBarH)];
@@ -2787,6 +2870,35 @@ static NSMutableArray *gBBWindowControllers;
   self.securityButton.image=img; self.securityButton.imagePosition=NSImageOnly;
   self.securityButton.toolTip=tip.length?tip:@"Security info";
 }
+// ── Bookmark star (address bar) ───────────────────────────────────────────────
+- (void)updateStarButton {
+  if (!self.starButton) return;
+  NSString *url=self.webView.URL.absoluteString?:@"";
+  BOOL marked=url.length && [[BBBookmarksStore shared] isBookmarked:url];
+  NSImage *img=[NSImage imageWithSystemSymbolName:(marked?@"star.fill":@"star") accessibilityDescription:@"Bookmark"];
+  img=[img imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:13 weight:NSFontWeightMedium]];
+  if (marked) img=[img imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithHierarchicalColor:[NSColor systemYellowColor]]];
+  else [img setTemplate:YES];
+  self.starButton.image=img; self.starButton.imagePosition=NSImageOnly;
+  self.starButton.toolTip=marked?@"Remove bookmark":@"Bookmark this page";
+}
+- (void)toggleBookmarkCurrent:(id)s {
+  NSString *url=self.webView.URL.absoluteString;
+  if (!url.length||[url hasPrefix:@"bearbrowser://"]||[self isInternalURL:url]) { NSBeep(); return; }
+  if ([[BBBookmarksStore shared] isBookmarked:url]) [[BBBookmarksStore shared] removeURL:url];
+  else [[BBBookmarksStore shared] addTitle:(self.activeTab.title.length?self.activeTab.title:url) url:url];
+  [self updateStarButton]; [self reloadBookmarksBar];
+}
+// ── Hovered-link status bubble ────────────────────────────────────────────────
+- (void)showStatus:(NSString *)url {
+  if (!url.length) { self.statusBar.hidden=YES; return; }
+  self.statusBar.stringValue=url;
+  NSSize sz=[self.statusBar.cell cellSizeForBounds:NSMakeRect(0,0,self.root.bounds.size.width*0.7,20)];
+  CGFloat w=MIN(self.root.bounds.size.width*0.7,MAX(80,sz.width+16));
+  self.statusBar.frame=NSMakeRect(0,0,w,20);
+  self.statusBar.hidden=NO;
+  [self.root addSubview:self.statusBar positioned:NSWindowAbove relativeTo:nil];
+}
 - (void)showSecurityInfo:(id)s {
   NSURL *url=self.webView.URL;
   NSString *host=url.host?:@"";
@@ -2884,6 +2996,18 @@ static NSMutableArray *gBBWindowControllers;
     @"})();";
   [config.userContentController addUserScript:[[WKUserScript alloc]
     initWithSource:histHook injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+  // Hovered-link bubble (Chrome's bottom-left status), posted to `hoverlink`.
+  [config.userContentController addScriptMessageHandler:self name:@"hoverlink"];
+  NSString *hoverHook=
+    @"(function(){'use strict';"
+    @"function send(u){try{window.webkit.messageHandlers.hoverlink.postMessage(u||'');}catch(e){}}"
+    @"document.addEventListener('mouseover',function(e){var n=e.target;"
+    @"while(n&&n.tagName!=='A')n=n.parentElement;if(n&&n.href)send(n.href);},true);"
+    @"document.addEventListener('mouseout',function(e){var n=e.target;"
+    @"while(n&&n.tagName!=='A')n=n.parentElement;if(n)send('');},true);"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:hoverHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO]];
   // ── Fingerprinting shield (injected before any page script runs) ──────────
   // Cross-referenced against Mozilla Bugzilla RFP bugs and Firefox test suite:
   //   Bug 418986  (FIXED)  — screen / CSS media query resolution
@@ -4026,6 +4150,8 @@ static NSMutableArray *gBBWindowControllers;
   self.forwardButton.enabled=tab.webView.canGoForward;
   self.window.title=tab.title.length?tab.title:@"BearBrowser";
   [self updateSecurityIndicator:tab.webView.URL];
+  [self updateStarButton];
+  self.statusBar.hidden=YES;
 }
 
 - (void)reloadTabBar { [self.tabBarView reloadWithTabs:self.tabs activeIndex:self.activeTabIndex]; }
@@ -4040,17 +4166,100 @@ static NSMutableArray *gBBWindowControllers;
 }
 
 - (void)tabItemDidSelect:(NSInteger)i { if(i!=self.activeTabIndex){[self activateTab:i];[self reloadTabBar];} }
-- (void)tabItemDidClose:(NSInteger)i  {
-  NSString *closingURL=self.tabs[i].webView.URL.absoluteString;
-  if (closingURL.length) [self.closedTabURLs addObject:closingURL];
-  [self.tabs[i].webView removeObserver:self forKeyPath:@"estimatedProgress"];
-  [self.tabs[i].webView removeObserver:self forKeyPath:@"title"];
-  [self.tabs[i].webView removeFromSuperview];
+
+// Tears a tab out of the model without touching the active selection. Callers fix
+// up activeTabIndex + reactivate afterward (lets us close several at once cheaply).
+- (void)teardownTabAtIndex:(NSInteger)i {
+  if (i<0||i>=(NSInteger)self.tabs.count) return;
+  BBTab *t=self.tabs[i];
+  NSString *u=t.webView.URL.absoluteString;
+  if (u.length && ![self isInternalURL:u] && !t.isPrivate) [self pushRecentlyClosed:u title:t.title];
+  [t.webView removeObserver:self forKeyPath:@"estimatedProgress"];
+  [t.webView removeObserver:self forKeyPath:@"title"];
+  [t.webView removeFromSuperview];
   [self.tabs removeObjectAtIndex:i];
+}
+- (void)tabItemDidClose:(NSInteger)i  {
+  [self teardownTabAtIndex:i];
   if (!self.tabs.count) { [self.window performClose:nil]; return; }
   NSInteger newActive=MIN(self.activeTabIndex,(NSInteger)self.tabs.count-1);
   self.activeTabIndex=newActive;
   [self activateTab:newActive]; [self reloadTabBar];
+}
+- (void)tabItemDidMiddleClick:(NSInteger)i { [self tabItemDidClose:i]; }
+
+// Drag-to-reorder: move the tab and keep the same tab active.
+- (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to {
+  NSInteger n=self.tabs.count;
+  if (from<0||from>=n||to<0||to>=n||from==to) { [self reloadTabBar]; return; }
+  BBTab *t=self.tabs[from];
+  [self.tabs removeObjectAtIndex:from];
+  [self.tabs insertObject:t atIndex:to];
+  NSInteger act=self.activeTabIndex;
+  if (act==from) act=to;
+  else if (from<act && to>=act) act--;
+  else if (from>act && to<=act) act++;
+  self.activeTabIndex=act;
+  [self reloadTabBar];
+}
+
+// Right-click tab menu (Chrome's set).
+- (NSMenu *)tabItemContextMenu:(NSInteger)i {
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  void(^add)(NSString*,SEL,BOOL)=^(NSString*title,SEL sel,BOOL enabled){
+    NSMenuItem *it=[m addItemWithTitle:title action:sel keyEquivalent:@""];
+    it.target=self; it.tag=i; it.enabled=enabled;
+  };
+  add(@"New Tab to the Right",@selector(ctxNewTabRight:),YES);
+  add(@"Duplicate Tab",@selector(ctxDuplicateTab:),YES);
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"Reload Tab",@selector(ctxReloadTab:),YES);
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"Close Tab",@selector(ctxCloseTab:),YES);
+  add(@"Close Other Tabs",@selector(ctxCloseOthers:),self.tabs.count>1);
+  add(@"Close Tabs to the Right",@selector(ctxCloseRight:),i<(NSInteger)self.tabs.count-1);
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"Reopen Closed Tab",@selector(reopenClosedTab:),self.recentlyClosed.count>0);
+  return m;
+}
+- (void)ctxNewTabRight:(id)s   { [self insertTabAt:[(NSMenuItem*)s tag]+1 private:self.activeTab.isPrivate url:nil]; }
+- (void)ctxDuplicateTab:(id)s  {
+  NSInteger i=[(NSMenuItem*)s tag];
+  [self insertTabAt:i+1 private:self.tabs[i].isPrivate url:self.tabs[i].webView.URL.absoluteString];
+}
+- (void)ctxReloadTab:(id)s     { NSInteger i=[(NSMenuItem*)s tag]; if(i<(NSInteger)self.tabs.count)[self.tabs[i].webView reload]; }
+- (void)ctxCloseTab:(id)s      { [self tabItemDidClose:[(NSMenuItem*)s tag]]; }
+- (void)ctxCloseOthers:(id)s {
+  BBTab *keep=self.tabs[[(NSMenuItem*)s tag]];
+  for (NSInteger j=(NSInteger)self.tabs.count-1;j>=0;j--) if (self.tabs[j]!=keep) [self teardownTabAtIndex:j];
+  self.activeTabIndex=0; [self activateTab:0]; [self reloadTabBar];
+}
+- (void)ctxCloseRight:(id)s {
+  NSInteger from=[(NSMenuItem*)s tag];
+  for (NSInteger j=(NSInteger)self.tabs.count-1;j>from;j--) [self teardownTabAtIndex:j];
+  if (self.activeTabIndex>from) self.activeTabIndex=from;
+  [self activateTab:self.activeTabIndex]; [self reloadTabBar];
+}
+- (void)duplicateCurrentTab:(id)s {
+  [self insertTabAt:self.activeTabIndex+1 private:self.activeTab.isPrivate url:self.webView.URL.absoluteString];
+}
+
+// Insert a new tab at a specific position (used by New Tab to Right / Duplicate).
+- (void)insertTabAt:(NSInteger)idx private:(BOOL)priv url:(NSString *)url {
+  if (idx<0) idx=0; if (idx>(NSInteger)self.tabs.count) idx=self.tabs.count;
+  BBTab *tab=[[BBTab alloc]init]; tab.isPrivate=priv;
+  tab.webView=[self makeWebViewPrivate:priv];
+  [self.tabs insertObject:tab atIndex:idx];
+  self.activeTabIndex=idx;
+  [self activateTab:idx];
+  NSURL *u=url.length?[NSURL URLWithString:url]:nil;
+  if (u) [tab.webView loadRequest:[NSURLRequest requestWithURL:u]]; else [self loadStartPage:tab.webView];
+  [self reloadTabBar];
+}
+- (void)pushRecentlyClosed:(NSString *)url title:(NSString *)title {
+  if (!url.length) return;
+  [self.recentlyClosed addObject:@{@"url":url,@"title":title?:url}];
+  if (self.recentlyClosed.count>25) [self.recentlyClosed removeObjectAtIndex:0];
 }
 
 - (void)loadStartPage:(WKWebView *)wv {
@@ -4316,10 +4525,32 @@ static NSMutableArray *gBBWindowControllers;
 }
 - (void)closeCurrentTab:(id)s     { [self tabItemDidClose:self.activeTabIndex]; }
 - (void)reopenClosedTab:(id)s     {
-  if (!self.closedTabURLs.count) return;
-  NSString *url=[self.closedTabURLs lastObject]; [self.closedTabURLs removeLastObject];
-  [self addTabPrivate:NO];
-  [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url]]];
+  if (!self.recentlyClosed.count) return;
+  NSDictionary *e=[self.recentlyClosed lastObject]; [self.recentlyClosed removeLastObject];
+  [self insertTabAt:self.activeTabIndex+1 private:NO url:e[@"url"]];
+}
+// Reopen a specific entry chosen from the History ▸ Recently Closed submenu.
+- (void)reopenSpecificClosed:(NSMenuItem *)s {
+  NSInteger idx=s.tag; if (idx<0||idx>=(NSInteger)self.recentlyClosed.count) return;
+  NSDictionary *e=self.recentlyClosed[idx];
+  [self.recentlyClosed removeObjectAtIndex:idx];
+  [self insertTabAt:self.activeTabIndex+1 private:NO url:e[@"url"]];
+}
+// Populate History ▸ Recently Closed when it opens (newest first).
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+  if (![menu.title isEqualToString:@"Recently Closed"]) return;
+  [menu removeAllItems];
+  if (!self.recentlyClosed.count) {
+    [menu addItemWithTitle:@"No Recently Closed Tabs" action:nil keyEquivalent:@""].enabled=NO;
+    return;
+  }
+  for (NSInteger k=(NSInteger)self.recentlyClosed.count-1;k>=0;k--) {
+    NSDictionary *e=self.recentlyClosed[k];
+    NSString *t=e[@"title"]; if(!t.length) t=e[@"url"];
+    if (t.length>60) t=[[t substringToIndex:57] stringByAppendingString:@"…"];
+    NSMenuItem *it=[menu addItemWithTitle:t action:@selector(reopenSpecificClosed:) keyEquivalent:@""];
+    it.target=self; it.tag=k; it.toolTip=e[@"url"];
+  }
 }
 - (void)nextTab:(id)s { NSInteger next=(self.activeTabIndex+1)%self.tabs.count; [self tabItemDidSelect:next]; }
 - (void)prevTab:(id)s { NSInteger prev=(self.activeTabIndex-1+self.tabs.count)%self.tabs.count; [self tabItemDidSelect:prev]; }
@@ -4412,6 +4643,10 @@ static NSMutableArray *gBBWindowControllers;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
       [[BBHistoryStore shared] recordTitle:wv.title?:@"" url:url];
     });
+  } else if ([msg.name isEqualToString:@"hoverlink"]) {
+    if (msg.webView!=self.webView) return;
+    NSString *url=[msg.body isKindOfClass:[NSString class]]?msg.body:@"";
+    dispatch_async(dispatch_get_main_queue(),^{ [self showStatus:url]; });
   }
 }
 static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOOL blocked){
@@ -4806,43 +5041,81 @@ static NSString *kFaviconJS=@"(function(){"
   [[NSPasteboard generalPasteboard] clearContents];
   [[NSPasteboard generalPasteboard] setString:u forType:NSPasteboardTypeString];
 }
-// Install a right-click monitor so we can show our own context menu on the webview
+- (void)contextOpenLinkNewWindow:(NSMenuItem *)item {
+  NSURL *url=item.representedObject; if (!url) return;
+  [self openURLInNewWindow:url];
+}
+- (void)openURLInNewWindow:(NSURL *)url {
+  BBDelegate *w=[[BBDelegate alloc]init]; // retained by gBBWindowControllers in launch
+  [w applicationDidFinishLaunching:[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+  if (url) [w.webView loadRequest:[NSURLRequest requestWithURL:url]];
+}
+- (void)contextCopySelection:(NSMenuItem *)item {
+  NSString *t=item.representedObject; if(!t.length) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:t forType:NSPasteboardTypeString];
+}
+- (void)contextSearchSelection:(NSMenuItem *)item {
+  NSString *t=item.representedObject; if(!t.length) return;
+  NSURL *u=[NSURL URLWithString:[BBDelegate searchURLForQuery:t]]; if(!u) return;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+// Install a right-click monitor so we can show our own Chrome-style context menu.
 - (void)installContextMenuMonitor {
   __weak BBDelegate *weak=self;
   self.contextMenuMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent *e){
     BBDelegate *s=weak; if (!s||e.window!=s.window) return e;
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if (!NSPointInRect(pt,s.webView.bounds)) return e;
-    // Ask the page for the link URL at this point, then show menu
+    // Probe the page at the click point for a link, an image, and any selection.
     NSString *js=[NSString stringWithFormat:
-      @"(function(){var el=document.elementFromPoint(%f,%f);"
-      @"while(el){if(el.tagName==='A'&&el.href)return el.href;el=el.parentElement;}"
-      @"return '';})();", pt.x, s.webView.bounds.size.height-pt.y];
+      @"(function(){var el=document.elementFromPoint(%f,%f);var link='',img='',n=el;"
+      @"while(n){if(n.tagName==='A'&&n.href){link=n.href;break;}n=n.parentElement;}"
+      @"n=el;while(n){if(n.tagName==='IMG'&&n.src){img=n.src;break;}n=n.parentElement;}"
+      @"var sel=(window.getSelection?String(window.getSelection()):'')||'';"
+      @"return {link:link,image:img,sel:sel};})();", pt.x, s.webView.bounds.size.height-pt.y];
     [s.webView evaluateJavaScript:js completionHandler:^(id result,NSError *err){
       dispatch_async(dispatch_get_main_queue(),^{
-        NSString *href=[result isKindOfClass:[NSString class]]?result:@"";
+        NSDictionary *r=[result isKindOfClass:[NSDictionary class]]?result:@{};
+        NSString *href=[r[@"link"] isKindOfClass:[NSString class]]?r[@"link"]:@"";
+        NSString *imgSrc=[r[@"image"] isKindOfClass:[NSString class]]?r[@"image"]:@"";
+        NSString *sel=[r[@"sel"] isKindOfClass:[NSString class]]?r[@"sel"]:@"";
+        sel=[sel stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         NSURL *linkURL=href.length?[NSURL URLWithString:href]:nil;
+        NSURL *imgURL=imgSrc.length?[NSURL URLWithString:imgSrc]:nil;
         NSMenu *menu=[[NSMenu alloc]initWithTitle:@""];
-        if (linkURL) {
-          NSMenuItem *ot=[[NSMenuItem alloc]initWithTitle:@"Open Link in New Tab" action:@selector(contextOpenLinkNewTab:) keyEquivalent:@""];
-          ot.target=s; ot.representedObject=linkURL; [menu addItem:ot];
-          NSMenuItem *cl=[[NSMenuItem alloc]initWithTitle:@"Copy Link" action:@selector(contextCopyLink:) keyEquivalent:@""];
-          cl.target=s; cl.representedObject=linkURL; [menu addItem:cl];
+        NSMenuItem*(^add)(NSString*,SEL,id)=^NSMenuItem*(NSString*t,SEL a,id rep){
+          NSMenuItem *it=[[NSMenuItem alloc]initWithTitle:t action:a keyEquivalent:@""];
+          it.target=s; it.representedObject=rep; [menu addItem:it]; return it;
+        };
+        if (sel.length) {
+          add(@"Copy",@selector(contextCopySelection:),sel);
+          NSString *shown=sel.length>24?[[sel substringToIndex:24] stringByAppendingString:@"…"]:sel;
+          add([NSString stringWithFormat:@"Search for “%@”",shown],@selector(contextSearchSelection:),sel);
           [menu addItem:[NSMenuItem separatorItem]];
         }
-        NSMenuItem *back=[[NSMenuItem alloc]initWithTitle:@"Back" action:@selector(goBack:) keyEquivalent:@""];
-        back.target=s; back.enabled=s.webView.canGoBack; [menu addItem:back];
-        NSMenuItem *fwd=[[NSMenuItem alloc]initWithTitle:@"Forward" action:@selector(goForward:) keyEquivalent:@""];
-        fwd.target=s; fwd.enabled=s.webView.canGoForward; [menu addItem:fwd];
-        NSMenuItem *rl=[[NSMenuItem alloc]initWithTitle:@"Reload" action:@selector(reloadOrStop:) keyEquivalent:@""];
-        rl.target=s; [menu addItem:rl];
+        if (linkURL) {
+          add(@"Open Link in New Tab",@selector(contextOpenLinkNewTab:),linkURL);
+          add(@"Open Link in New Window",@selector(contextOpenLinkNewWindow:),linkURL);
+          add(@"Copy Link Address",@selector(contextCopyLink:),linkURL);
+          [menu addItem:[NSMenuItem separatorItem]];
+        }
+        if (imgURL) {
+          add(@"Open Image in New Tab",@selector(contextOpenLinkNewTab:),imgURL);
+          add(@"Copy Image Address",@selector(contextCopyLink:),imgURL);
+          [menu addItem:[NSMenuItem separatorItem]];
+        }
+        NSMenuItem *back=add(@"Back",@selector(goBack:),nil); back.enabled=s.webView.canGoBack;
+        NSMenuItem *fwd=add(@"Forward",@selector(goForward:),nil); fwd.enabled=s.webView.canGoForward;
+        add(@"Reload",@selector(reloadOrStop:),nil);
         [menu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *cu=[[NSMenuItem alloc]initWithTitle:@"Copy Page URL" action:@selector(contextCopyPageURL:) keyEquivalent:@""];
-        cu.target=s; [menu addItem:cu];
-        NSMenuItem *src=[[NSMenuItem alloc]initWithTitle:@"View Page Source" action:@selector(viewSource:) keyEquivalent:@""];
-        src.target=s; [menu addItem:src];
-        NSMenuItem *ins=[[NSMenuItem alloc]initWithTitle:@"Inspect Element" action:@selector(openDevTools:) keyEquivalent:@""];
-        ins.target=s; [menu addItem:ins];
+        add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
+        add(@"Save Page As…",@selector(savePage:),nil);
+        add(@"Print…",@selector(printPage:),nil);
+        [menu addItem:[NSMenuItem separatorItem]];
+        add(@"View Page Source",@selector(viewSource:),nil);
+        add(@"Inspect Element",@selector(openDevTools:),nil);
         [menu popUpMenuPositioningItem:nil atLocation:e.locationInWindow inView:nil];
       });
     }];
@@ -4877,6 +5150,7 @@ static NSString *kFaviconJS=@"(function(){"
     self.backButton.enabled=wv.canGoBack; self.forwardButton.enabled=wv.canGoForward;
     self.window.title=tab.title;
     [self updateSecurityIndicator:wv.URL];
+    [self updateStarButton];
   }
   // Record navigation to network monitor
   if(wv.URL.host.length && !tab.isPrivate)
