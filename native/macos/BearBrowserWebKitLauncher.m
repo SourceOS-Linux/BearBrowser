@@ -466,14 +466,19 @@ static const CGFloat kTabCompactW = 110.0; // below this width a tab drops its t
   // kTabHardMinW (favicon-only). This keeps the active tab — and all tabs —
   // reachable no matter how many are open, instead of overflowing past the edge.
   CGFloat avail=addX-4;                       // strip from left edge up to the + button
-  CGFloat tabW=floor(avail/count);
-  tabW=MIN(kTabMaxW,MAX(kTabHardMinW,tabW));
+  // Cap the width when there are few tabs; otherwise compress to fit. We do NOT
+  // clamp UP to a minimum here — that's what made tabs overflow off-screen once
+  // count*minWidth exceeded the bar. Tabs may shrink to slivers (kTabHardMinW is
+  // the comfortable target; below it they still compress so every tab stays
+  // visible and clickable, exactly like Safari).
+  CGFloat tabW=MIN(kTabMaxW,floor(avail/count));
+  if (tabW<8) tabW=8;                         // absolute floor for absurd counts
   for (NSInteger i=0;i<count;i++) {
     BBTab *tab=tabs[i];
     CGFloat x=floor(i*tabW);
     CGFloat w=floor(tabW)-2;
     // The last tab absorbs rounding remainder so the row ends flush at `avail`.
-    if (i==count-1) w=MAX(kTabHardMinW-2, floor(avail)-x-2);
+    if (i==count-1) w=MAX(6, floor(avail)-x-2);
     BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,1,w,kTabBarH-2) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
     [item setTabTitle:tab.title favicon:tab.favicon loading:tab.isLoading];
@@ -2375,6 +2380,12 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) id               contextMenuMonitor;
 @end
 
+// Retains a controller for every open browser window. Both NSApplication.delegate
+// and NSWindow.delegate are weak, so without an explicit owner a window opened via
+// newWindow: would have its controller deallocated the moment the method returns
+// (weak delegates go nil → the window's tabs/nav/address bar become inert).
+static NSMutableArray *gBBWindowControllers;
+
 @implementation BBDelegate
 
 - (BBTab *)activeTab { return (self.activeTabIndex<(NSInteger)self.tabs.count)?self.tabs[self.activeTabIndex]:nil; }
@@ -2476,13 +2487,15 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [histM addItem:[NSMenuItem separatorItem]];
   mi(histM,@"Show Full History",@selector(showHistory:),@"y",Cmd);
   [histM addItem:[NSMenuItem separatorItem]];
-  mi(histM,@"Clear Browsing Data…",@selector(clearHistory:),@"\b",Cmd|Shift);
+  // No key equivalent here — ⌘⇧⌫ is already bound on the app menu's Clear Browsing Data.
+  [histM addItemWithTitle:@"Clear Browsing Data…" action:@selector(clearHistory:) keyEquivalent:@""];
 
   // ── Bookmarks ──
   NSMenu *bmM=submenu(@"Bookmarks");
   mi(bmM,@"Bookmark This Tab…",@selector(addBookmark:),@"d",Cmd);
   [bmM addItem:[NSMenuItem separatorItem]];
-  mi(bmM,@"Show Bookmarks Bar",@selector(toggleBookmarksBar:),@"b",Cmd|Shift);
+  // No key equivalent here — ⌘⇧B is already bound on View ▸ Always Show Bookmarks Bar.
+  [bmM addItemWithTitle:@"Show Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
 
   // ── Tab ──
   NSMenu *tabM=submenu(@"Tab");
@@ -2517,6 +2530,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 // ── App launch ────────────────────────────────────────────────────────────────
 - (void)applicationDidFinishLaunching:(NSNotification *)n {
   BBLog(@"BearBrowser start");
+  static dispatch_once_t controllersOnce;
+  dispatch_once(&controllersOnce,^{ gBBWindowControllers=[NSMutableArray array]; });
+  [gBBWindowControllers addObject:self];  // keep this controller alive for its window's lifetime
   BBEmitEvent(@"app.launch",@"allow",@"Native shell launched.",@{@"bundleId":@"dev.sourceos.BearBrowser"});
   [[BBAgentServer shared] startWithDelegate:self];
   BBLog([NSString stringWithFormat:@"Agent socket: %@",[BBAgentServer shared].socketPath]);
@@ -2837,6 +2853,19 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [config.userContentController addScriptMessageHandler:self name:@"honeypot"];
   [config.userContentController addScriptMessageHandler:self name:@"netmon"];
   [config.userContentController addScriptMessageHandler:self name:@"secmon"];
+  [config.userContentController addScriptMessageHandler:self name:@"historynav"];
+  // Record SPA route changes (pushState/replaceState/popstate) into history — these
+  // never trigger a full navigation, so didFinishNavigation alone would miss them.
+  NSString *histHook=
+    @"(function(){'use strict';"
+    @"function bb(){try{window.webkit.messageHandlers.historynav.postMessage(location.href);}catch(e){}}"
+    @"var p=history.pushState,r=history.replaceState;"
+    @"history.pushState=function(){var v=p.apply(this,arguments);bb();return v;};"
+    @"history.replaceState=function(){var v=r.apply(this,arguments);bb();return v;};"
+    @"window.addEventListener('popstate',bb);"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:histHook injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
   // ── Fingerprinting shield (injected before any page script runs) ──────────
   // Cross-referenced against Mozilla Bugzilla RFP bugs and Firefox test suite:
   //   Bug 418986  (FIXED)  — screen / CSS media query resolution
@@ -4032,6 +4061,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   // Tear down local event monitors so they stop firing against torn-down state.
   if (self.addrDismissMonitor) { [NSEvent removeMonitor:self.addrDismissMonitor]; self.addrDismissMonitor=nil; }
   if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
+  // Release this window's controller. Deferred so we never dealloc self midway
+  // through this very method (the removal can drop the last strong reference).
+  dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
 }
 - (void)readAloud:(id)s           { [[BBVoice shared] readPage:self.webView]; }
 
@@ -4347,6 +4379,20 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
         [NSString stringWithFormat:@"[%@] %@: %.200@",page,type,detail],
         @{@"type":type,@"page":page});
     [[BBSecurityPanel shared] pushEvent:[BBSecurityMonitor.shared snapshot].lastObject];
+  } else if ([msg.name isEqualToString:@"historynav"]) {
+    // SPA route changes (pushState/replaceState/popstate) never fire
+    // didFinishNavigation, so record them here so in-app navigation on sites like
+    // Gmail/YouTube actually lands in history. The title KVO patches the title.
+    WKWebView *wv=msg.webView; if (wv!=self.webView) return;
+    BBTab *tab=[self tabForWebView:wv]; if (!tab||tab.isPrivate) return;
+    NSString *url=[msg.body isKindOfClass:[NSString class]]?msg.body:(wv.URL.absoluteString?:@"");
+    if (!url.length) return;
+    dispatch_async(dispatch_get_main_queue(),^{
+      if (wv==self.webView) self.address.stringValue=[self isInternalURL:url]?@"":url;
+    });
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+      [[BBHistoryStore shared] recordTitle:wv.title?:@"" url:url];
+    });
   }
 }
 static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOOL blocked){
