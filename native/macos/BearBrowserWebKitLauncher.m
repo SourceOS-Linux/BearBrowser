@@ -297,6 +297,8 @@ static const CGFloat kBMBarH    = 30.0;
 static const CGFloat kDLPanelW  = 280.0;
 static const CGFloat kTabMaxW   = 220.0;
 static const CGFloat kTabMinW   = 80.0;
+static const CGFloat kTabHardMinW = 44.0; // favicon-only floor when many tabs are open
+static const CGFloat kTabCompactW = 110.0; // below this width a tab drops its title/close (favicon-only)
 
 // ── BBTab ─────────────────────────────────────────────────────────────────────
 @interface BBTab : NSObject
@@ -321,6 +323,7 @@ static const CGFloat kTabMinW   = 80.0;
 @property(nonatomic,assign) BOOL isActive;
 @property(nonatomic,assign) BOOL isHovered;
 @property(nonatomic,assign) BOOL isPrivate;
+@property(assign) BOOL compact; // favicon-only mode for very narrow tabs
 @property(strong) NSImageView *faviconView;
 @property(strong) NSTextField *titleLabel;
 @property(strong) NSButton    *closeButton;
@@ -331,22 +334,26 @@ static const CGFloat kTabMinW   = 80.0;
 @implementation BBTabItemView
 - (instancetype)initWithFrame:(NSRect)f index:(NSInteger)idx delegate:(id<BBTabItemDelegate>)d {
   self=[super initWithFrame:f]; _index=idx; _delegate=d;
+  _compact=(f.size.width < kTabCompactW);
   [self addTrackingArea:[[NSTrackingArea alloc]initWithRect:self.bounds
     options:NSTrackingMouseEnteredAndExited|NSTrackingActiveInKeyWindow|NSTrackingInVisibleRect
     owner:self userInfo:nil]];
-  // Favicon (16×16)
-  _faviconView=[[NSImageView alloc]initWithFrame:NSMakeRect(8,10,16,16)];
+  // Favicon (16×16). Centered in compact mode, left-aligned otherwise.
+  CGFloat favX=_compact?floor((f.size.width-16)/2):8;
+  _faviconView=[[NSImageView alloc]initWithFrame:NSMakeRect(favX,10,16,16)];
   _faviconView.imageScaling=NSImageScaleProportionallyUpOrDown;
+  if (_compact) _faviconView.autoresizingMask=NSViewMinXMargin|NSViewMaxXMargin;
   [self addSubview:_faviconView];
-  // Title
-  _titleLabel=[[NSTextField alloc]initWithFrame:NSMakeRect(28,8,f.size.width-54,20)];
+  // Title — hidden in compact mode.
+  _titleLabel=[[NSTextField alloc]initWithFrame:NSMakeRect(28,8,MAX(0,f.size.width-54),20)];
   _titleLabel.autoresizingMask=NSViewWidthSizable;
   _titleLabel.bordered=NO; _titleLabel.editable=NO; _titleLabel.selectable=NO;
   _titleLabel.backgroundColor=[NSColor clearColor];
   _titleLabel.font=[NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
   _titleLabel.lineBreakMode=NSLineBreakByTruncatingTail;
+  _titleLabel.hidden=_compact;
   [self addSubview:_titleLabel];
-  // Close button
+  // Close button — hidden in compact mode unless active/hovered (toggled below).
   _closeButton=[[NSButton alloc]initWithFrame:NSMakeRect(f.size.width-26,9,18,18)];
   _closeButton.autoresizingMask=NSViewMinXMargin;
   _closeButton.bezelStyle=NSBezelStyleCircular; _closeButton.bordered=NO;
@@ -354,11 +361,14 @@ static const CGFloat kTabMinW   = 80.0;
   xi=[xi imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:8 weight:NSFontWeightMedium]];
   [xi setTemplate:YES]; _closeButton.image=xi; _closeButton.imagePosition=NSImageOnly;
   _closeButton.target=self; _closeButton.action=@selector(closeTab:); _closeButton.toolTip=@"Close Tab";
+  _closeButton.hidden=_compact; // shown on hover in compact mode
   [self addSubview:_closeButton];
+  self.toolTip=@""; // set in setTabTitle so narrow/compact tabs still reveal their title
   return self;
 }
 - (void)setTabTitle:(NSString *)title favicon:(NSImage *)favicon loading:(BOOL)loading {
   self.titleLabel.stringValue=title.length?title:@"New Tab";
+  self.toolTip=title.length?title:@"New Tab"; // reveals full title on narrow/compact tabs
   self.titleLabel.textColor=self.isActive?[NSColor labelColor]:[NSColor secondaryLabelColor];
   if (loading) {
     NSImage *spinner=[NSImage imageWithSystemSymbolName:@"arrow.2.circlepath" accessibilityDescription:@"Loading"];
@@ -395,8 +405,15 @@ static const CGFloat kTabMinW   = 80.0;
     [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,1,1) xRadius:7 yRadius:7] fill];
   }
 }
-- (void)mouseEntered:(NSEvent *)e { self.isHovered=YES;  [self setNeedsDisplay:YES]; }
-- (void)mouseExited:(NSEvent *)e  { self.isHovered=NO;   [self setNeedsDisplay:YES]; }
+- (void)mouseEntered:(NSEvent *)e {
+  self.isHovered=YES;  [self setNeedsDisplay:YES];
+  // In compact mode reveal the close button (over the favicon) on hover.
+  if (self.compact) { self.closeButton.hidden=NO; self.faviconView.hidden=YES; }
+}
+- (void)mouseExited:(NSEvent *)e  {
+  self.isHovered=NO;   [self setNeedsDisplay:YES];
+  if (self.compact) { self.closeButton.hidden=YES; self.faviconView.hidden=NO; }
+}
 - (void)mouseDown:(NSEvent *)e    { [self.delegate tabItemDidSelect:self.index]; }
 - (void)closeTab:(id)s            { [self.delegate tabItemDidClose:self.index]; }
 @end
@@ -440,17 +457,28 @@ static const CGFloat kTabMinW   = 80.0;
   for (BBTabItemView *v in self.items) [v removeFromSuperview];
   [self.items removeAllObjects];
   self.activeIndex=active;
+  // Pin the + button to the right edge — it must never be pushed off-screen by tabs.
+  CGFloat addX=self.bounds.size.width-34;
+  self.addTabButton.frame=NSMakeRect(addX,4,28,28);
   NSInteger count=tabs.count; if (!count) return;
-  CGFloat avail=self.bounds.size.width-40;
-  CGFloat tabW=MIN(kTabMaxW,MAX(kTabMinW,floor(avail/count)));
+  // Safari-style compress-to-fit: every tab stays visible by shrinking. Width is
+  // the available strip divided evenly, capped at kTabMaxW and floored at
+  // kTabHardMinW (favicon-only). This keeps the active tab — and all tabs —
+  // reachable no matter how many are open, instead of overflowing past the edge.
+  CGFloat avail=addX-4;                       // strip from left edge up to the + button
+  CGFloat tabW=floor(avail/count);
+  tabW=MIN(kTabMaxW,MAX(kTabHardMinW,tabW));
   for (NSInteger i=0;i<count;i++) {
     BBTab *tab=tabs[i];
-    BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(i*tabW,1,tabW-2,kTabBarH-2) index:i delegate:self];
+    CGFloat x=floor(i*tabW);
+    CGFloat w=floor(tabW)-2;
+    // The last tab absorbs rounding remainder so the row ends flush at `avail`.
+    if (i==count-1) w=MAX(kTabHardMinW-2, floor(avail)-x-2);
+    BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,1,w,kTabBarH-2) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
     [item setTabTitle:tab.title favicon:tab.favicon loading:tab.isLoading];
     [self addSubview:item]; [self.items addObject:item];
   }
-  self.addTabButton.frame=NSMakeRect(count*tabW+4,4,28,28);
 }
 - (void)tabItemDidSelect:(NSInteger)i { [self.outerDelegate tabItemDidSelect:i]; }
 - (void)tabItemDidClose:(NSInteger)i  { [self.outerDelegate tabItemDidClose:i]; }
@@ -554,6 +582,8 @@ static const CGFloat kTabMinW   = 80.0;
 @property(strong) NSMutableArray<BBHistoryEntry *> *entries; // newest-last, capped 20k
 + (instancetype)shared;
 - (void)recordTitle:(NSString *)t url:(NSString *)u;
+- (void)updateTitle:(NSString *)t forURL:(NSString *)u;
+- (void)clearAll;
 - (NSArray<BBHistoryEntry *> *)search:(NSString *)q limit:(NSInteger)n;
 @end
 @implementation BBHistoryStore
@@ -573,13 +603,41 @@ static const CGFloat kTabMinW   = 80.0;
   }
   return self;
 }
-- (void)recordTitle:(NSString *)t url:(NSString *)u {
-  if (!u.length||[u hasPrefix:@"bearbrowser://"]) return;
-  BBHistoryEntry *e=[BBHistoryEntry new]; e.title=t?:@""; e.urlString=u; e.visitedAt=[NSDate date];
-  [self.entries addObject:e]; if(self.entries.count>20000) [self.entries removeObjectAtIndex:0];
+- (void)persist:(BBHistoryEntry *)e {
   NSString *dir=[BBSupportDir() stringByAppendingPathComponent:@"history"];
   BBAppendLine([dir stringByAppendingPathComponent:@"history.jsonl"],
-    BBJSON(@{@"url":u,@"title":t?:@"",@"t":@(e.visitedAt.timeIntervalSince1970)}));
+    BBJSON(@{@"url":e.urlString,@"title":e.title?:@"",@"t":@(e.visitedAt.timeIntervalSince1970)}));
+}
+- (void)recordTitle:(NSString *)t url:(NSString *)u {
+  if (!u.length||[u hasPrefix:@"bearbrowser://"]) return;
+  // Collapse a reload / immediate re-visit of the same URL into the existing
+  // entry instead of stacking duplicate consecutive rows.
+  BBHistoryEntry *last=self.entries.lastObject;
+  if (last && [last.urlString isEqualToString:u]) {
+    if (t.length) last.title=t;
+    last.visitedAt=[NSDate date];
+    [self persist:last];
+    return;
+  }
+  BBHistoryEntry *e=[BBHistoryEntry new]; e.title=t?:@""; e.urlString=u; e.visitedAt=[NSDate date];
+  [self.entries addObject:e]; if(self.entries.count>20000) [self.entries removeObjectAtIndex:0];
+  [self persist:e];
+}
+// The page title usually arrives (via title KVO) AFTER didFinishNavigation already
+// recorded the visit with an empty/placeholder title. Patch the latest matching entry.
+- (void)updateTitle:(NSString *)t forURL:(NSString *)u {
+  if (!t.length||!u.length||[u hasPrefix:@"bearbrowser://"]) return;
+  for (NSInteger i=self.entries.count-1;i>=0;i--) {
+    BBHistoryEntry *e=self.entries[i];
+    if (![e.urlString isEqualToString:u]) continue;
+    if ([e.title isEqualToString:t]) return;   // already current
+    e.title=t; [self persist:e]; return;
+  }
+}
+- (void)clearAll {
+  [self.entries removeAllObjects];
+  NSString *path=[[BBSupportDir() stringByAppendingPathComponent:@"history"] stringByAppendingPathComponent:@"history.jsonl"];
+  [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
 }
 - (NSArray<BBHistoryEntry *> *)search:(NSString *)q limit:(NSInteger)n {
   if(!q.length) return @[];
@@ -2313,6 +2371,8 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(assign) BOOL               bookmarksBarVisible;
 @property(strong) NSCache           *dnsBlockCache;   // Quad9 NXDOMAIN results
 @property(assign) SecTrustRef      currentTrust;        // TLS trust for current page cert inspector
+@property(strong) id               addrDismissMonitor;   // local event monitor (must be removed to avoid firing after teardown)
+@property(strong) id               contextMenuMonitor;
 @end
 
 @implementation BBDelegate
@@ -2323,97 +2383,135 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 
 // ── Menu ──────────────────────────────────────────────────────────────────────
 - (void)buildMenu {
+  // Menu bar laid out to mirror Google Chrome on macOS:
+  // Chrome · File · Edit · View · History · Bookmarks · Tab · Window · Help
   NSMenu *bar=[[NSMenu alloc]init]; [NSApp setMainMenu:bar];
   void(^mi)(NSMenu*,NSString*,SEL,NSString*,NSUInteger)=^(NSMenu *m,NSString *t,SEL a,NSString *k,NSUInteger mod){
     NSMenuItem *i=[m addItemWithTitle:t action:a keyEquivalent:k]; if(mod) i.keyEquivalentModifierMask=mod;
   };
-  // BearBrowser
-  NSMenuItem *appI=[[NSMenuItem alloc]init]; [bar addItem:appI];
-  NSMenu *appM=[[NSMenu alloc]initWithTitle:@"BearBrowser"]; appI.submenu=appM;
+  NSMenu*(^submenu)(NSString*)=^NSMenu*(NSString *title){
+    NSMenuItem *it=[[NSMenuItem alloc]init]; [bar addItem:it];
+    NSMenu *m=[[NSMenu alloc]initWithTitle:title]; it.submenu=m; return m;
+  };
+  NSUInteger Cmd=NSEventModifierFlagCommand, Shift=NSEventModifierFlagShift,
+             Opt=NSEventModifierFlagOption, Ctrl=NSEventModifierFlagControl;
+
+  // ── Chrome (app menu) ──
+  NSMenu *appM=submenu(@"BearBrowser");
   [appM addItemWithTitle:@"About BearBrowser" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
   [appM addItem:[NSMenuItem separatorItem]];
-  mi(appM,@"Search Engine…",@selector(openSearchPreferences:),@",",NSEventModifierFlagCommand);
+  mi(appM,@"Settings…",@selector(openSearchPreferences:),@",",Cmd);
   [appM addItem:[NSMenuItem separatorItem]];
-  mi(appM,@"Hide BearBrowser",@selector(hide:),@"h",NSEventModifierFlagCommand);
-  [appM addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"].keyEquivalentModifierMask=NSEventModifierFlagCommand|NSEventModifierFlagOption;
+  mi(appM,@"Clear Browsing Data…",@selector(clearHistory:),@"\b",Cmd|Shift); // ⌘⇧⌫
+  [appM addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *svc=[appM addItemWithTitle:@"Services" action:nil keyEquivalent:@""];
+  NSMenu *svcM=[[NSMenu alloc]initWithTitle:@"Services"]; svc.submenu=svcM; [NSApp setServicesMenu:svcM];
+  [appM addItem:[NSMenuItem separatorItem]];
+  mi(appM,@"Hide BearBrowser",@selector(hide:),@"h",Cmd);
+  [appM addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"].keyEquivalentModifierMask=Cmd|Opt;
   [appM addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
   [appM addItem:[NSMenuItem separatorItem]];
-  mi(appM,@"Quit BearBrowser",@selector(terminate:),@"q",NSEventModifierFlagCommand);
-  // File
-  NSMenuItem *fileI=[[NSMenuItem alloc]init]; [bar addItem:fileI];
-  NSMenu *fileM=[[NSMenu alloc]initWithTitle:@"File"]; fileI.submenu=fileM;
-  mi(fileM,@"New Tab",@selector(newTab:),@"t",NSEventModifierFlagCommand);
-  mi(fileM,@"New Private Tab",@selector(newPrivateTab:),@"t",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  mi(fileM,@"New Window",@selector(newWindow:),@"n",NSEventModifierFlagCommand);
+  mi(appM,@"Quit BearBrowser",@selector(terminate:),@"q",Cmd);
+
+  // ── File ──
+  NSMenu *fileM=submenu(@"File");
+  mi(fileM,@"New Tab",@selector(newTab:),@"t",Cmd);
+  mi(fileM,@"New Window",@selector(newWindow:),@"n",Cmd);
+  mi(fileM,@"New Incognito Window",@selector(newPrivateTab:),@"n",Cmd|Shift);
+  mi(fileM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",Cmd|Shift);
   [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Open File…",@selector(openFile:),@"o",NSEventModifierFlagCommand);
+  mi(fileM,@"Open File…",@selector(openFile:),@"o",Cmd);
+  mi(fileM,@"Open Location…",@selector(focusAddressBar:),@"l",Cmd);
   [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Add Bookmark…",@selector(addBookmark:),@"d",NSEventModifierFlagCommand);
-  mi(fileM,@"Show Bookmarks Bar",@selector(toggleBookmarksBar:),@"b",NSEventModifierFlagCommand|NSEventModifierFlagShift);
+  mi(fileM,@"Close Window",@selector(performClose:),@"w",Cmd|Shift);
+  mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
+  mi(fileM,@"Save Page As…",@selector(savePage:),@"s",Cmd);
   [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",NSEventModifierFlagCommand);
-  mi(fileM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",NSEventModifierFlagCommand|NSEventModifierFlagShift|NSEventModifierFlagOption);
-  [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Save Page As…",@selector(savePage:),@"s",NSEventModifierFlagCommand);
-  mi(fileM,@"Print…",@selector(printPage:),@"p",NSEventModifierFlagCommand);
-  // Edit
-  NSMenuItem *editI=[[NSMenuItem alloc]init]; [bar addItem:editI];
-  NSMenu *editM=[[NSMenu alloc]initWithTitle:@"Edit"]; editI.submenu=editM;
-  mi(editM,@"Undo",@selector(undo:),@"z",NSEventModifierFlagCommand);
-  [editM addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"z"].keyEquivalentModifierMask=NSEventModifierFlagCommand|NSEventModifierFlagShift;
+  mi(fileM,@"Print…",@selector(printPage:),@"p",Cmd);
+
+  // ── Edit ──
+  NSMenu *editM=submenu(@"Edit");
+  mi(editM,@"Undo",@selector(undo:),@"z",Cmd);
+  [editM addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"z"].keyEquivalentModifierMask=Cmd|Shift;
   [editM addItem:[NSMenuItem separatorItem]];
-  mi(editM,@"Cut",@selector(cut:),@"x",NSEventModifierFlagCommand);
-  mi(editM,@"Copy",@selector(copy:),@"c",NSEventModifierFlagCommand);
-  mi(editM,@"Paste",@selector(paste:),@"v",NSEventModifierFlagCommand);
-  mi(editM,@"Paste and Go",@selector(pasteAndGo:),@"v",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  mi(editM,@"Select All",@selector(selectAll:),@"a",NSEventModifierFlagCommand);
+  mi(editM,@"Cut",@selector(cut:),@"x",Cmd);
+  mi(editM,@"Copy",@selector(copy:),@"c",Cmd);
+  mi(editM,@"Paste",@selector(paste:),@"v",Cmd);
+  mi(editM,@"Paste and Go",@selector(pasteAndGo:),@"v",Cmd|Shift);
+  mi(editM,@"Select All",@selector(selectAll:),@"a",Cmd);
   [editM addItem:[NSMenuItem separatorItem]];
-  mi(editM,@"Find on Page…",@selector(toggleFind:),@"f",NSEventModifierFlagCommand);
-  // View
-  NSMenuItem *viewI=[[NSMenuItem alloc]init]; [bar addItem:viewI];
-  NSMenu *viewM=[[NSMenu alloc]initWithTitle:@"View"]; viewI.submenu=viewM;
-  mi(viewM,@"Reload Page",@selector(reloadOrStop:),@"r",NSEventModifierFlagCommand);
-  mi(viewM,@"Hard Reload (Skip Cache)",@selector(hardReload:),@"r",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  mi(viewM,@"Focus Address Bar",@selector(focusAddressBar:),@"l",NSEventModifierFlagCommand);
+  NSMenuItem *findI=[editM addItemWithTitle:@"Find" action:nil keyEquivalent:@""];
+  NSMenu *findM=[[NSMenu alloc]initWithTitle:@"Find"]; findI.submenu=findM;
+  mi(findM,@"Find…",@selector(toggleFind:),@"f",Cmd);
+  mi(findM,@"Find Next",@selector(findNext:),@"g",Cmd);
+  mi(findM,@"Find Previous",@selector(findPrev:),@"g",Cmd|Shift);
+
+  // ── View ──
+  NSMenu *viewM=submenu(@"View");
+  mi(viewM,@"Always Show Bookmarks Bar",@selector(toggleBookmarksBar:),@"b",Cmd|Shift);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Zoom In",@selector(zoomIn:),@"+",NSEventModifierFlagCommand);
-  mi(viewM,@"Zoom Out",@selector(zoomOut:),@"-",NSEventModifierFlagCommand);
-  mi(viewM,@"Actual Size",@selector(zoomReset:),@"0",NSEventModifierFlagCommand);
+  mi(viewM,@"Reload This Page",@selector(reloadOrStop:),@"r",Cmd);
+  mi(viewM,@"Force Reload This Page",@selector(hardReload:),@"r",Cmd|Shift);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"View Page Source",@selector(viewSource:),@"u",NSEventModifierFlagCommand);
-  mi(viewM,@"Developer Tools",@selector(openDevTools:),@"i",NSEventModifierFlagCommand|NSEventModifierFlagOption);
+  mi(viewM,@"Actual Size",@selector(zoomReset:),@"0",Cmd);
+  mi(viewM,@"Zoom In",@selector(zoomIn:),@"+",Cmd);
+  mi(viewM,@"Zoom Out",@selector(zoomOut:),@"-",Cmd);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Enter Full Screen",@selector(toggleFullScreen:),@"f",NSEventModifierFlagCommand|NSEventModifierFlagControl);
+  mi(viewM,@"Enter Full Screen",@selector(toggleFullScreen:),@"f",Cmd|Ctrl);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"History",@selector(showHistory:),@"y",NSEventModifierFlagCommand);
-  mi(viewM,@"Downloads",@selector(toggleDownloadPanel:),@"j",NSEventModifierFlagCommand);
+  mi(viewM,@"Downloads",@selector(toggleDownloadPanel:),@"j",Cmd|Shift);
+  mi(viewM,@"Read Aloud",@selector(readAloud:),@"r",Cmd|Opt);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Network Monitor",@selector(openNetworkMonitor:),@"m",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Read Aloud",@selector(readAloud:),@"r",NSEventModifierFlagCommand|NSEventModifierFlagOption);
-  // History
-  NSMenuItem *histI=[[NSMenuItem alloc]init]; [bar addItem:histI];
-  NSMenu *histM=[[NSMenu alloc]initWithTitle:@"History"]; histI.submenu=histM;
-  mi(histM,@"Back",@selector(goBack:),@"[",NSEventModifierFlagCommand);
-  mi(histM,@"Forward",@selector(goForward:),@"]",NSEventModifierFlagCommand);
-  // Window
-  NSMenuItem *winI=[[NSMenuItem alloc]init]; [bar addItem:winI];
-  NSMenu *winM=[[NSMenu alloc]initWithTitle:@"Window"]; winI.submenu=winM;
-  [NSApp setWindowsMenu:winM];
-  mi(winM,@"Minimize",@selector(performMiniaturize:),@"m",NSEventModifierFlagCommand);
-  [winM addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
-  [winM addItem:[NSMenuItem separatorItem]];
-  mi(winM,@"Next Tab",@selector(nextTab:),@"\t",NSEventModifierFlagControl);
-  [winM addItemWithTitle:@"Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=NSEventModifierFlagControl|NSEventModifierFlagShift;
-  [winM addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *devI=[viewM addItemWithTitle:@"Developer" action:nil keyEquivalent:@""];
+  NSMenu *devM=[[NSMenu alloc]initWithTitle:@"Developer"]; devI.submenu=devM;
+  mi(devM,@"View Source",@selector(viewSource:),@"u",Cmd|Opt);
+  mi(devM,@"Developer Tools",@selector(openDevTools:),@"i",Cmd|Opt);
+  mi(devM,@"Network Monitor",@selector(openNetworkMonitor:),@"m",Cmd|Shift);
+
+  // ── History ──
+  NSMenu *histM=submenu(@"History");
+  mi(histM,@"Home",@selector(goHome:),@"h",Cmd|Shift);
+  mi(histM,@"Back",@selector(goBack:),@"[",Cmd);
+  mi(histM,@"Forward",@selector(goForward:),@"]",Cmd);
+  [histM addItem:[NSMenuItem separatorItem]];
+  mi(histM,@"Show Full History",@selector(showHistory:),@"y",Cmd);
+  [histM addItem:[NSMenuItem separatorItem]];
+  mi(histM,@"Clear Browsing Data…",@selector(clearHistory:),@"\b",Cmd|Shift);
+
+  // ── Bookmarks ──
+  NSMenu *bmM=submenu(@"Bookmarks");
+  mi(bmM,@"Bookmark This Tab…",@selector(addBookmark:),@"d",Cmd);
+  [bmM addItem:[NSMenuItem separatorItem]];
+  mi(bmM,@"Show Bookmarks Bar",@selector(toggleBookmarksBar:),@"b",Cmd|Shift);
+
+  // ── Tab ──
+  NSMenu *tabM=submenu(@"Tab");
+  mi(tabM,@"New Tab",@selector(newTab:),@"t",Cmd);
+  [tabM addItem:[NSMenuItem separatorItem]];
+  mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
+  [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
+  [tabM addItem:[NSMenuItem separatorItem]];
   for (NSInteger i=1;i<=9;i++) {
-    NSMenuItem *ti=[winM addItemWithTitle:[NSString stringWithFormat:@"Tab %ld",(long)i]
+    NSMenuItem *ti=[tabM addItemWithTitle:[NSString stringWithFormat:@"Tab %ld",(long)i]
                                    action:@selector(switchToTabByMenuItem:)
                             keyEquivalent:[NSString stringWithFormat:@"%ld",(long)i]];
-    ti.keyEquivalentModifierMask=NSEventModifierFlagCommand; ti.tag=i-1;
+    ti.keyEquivalentModifierMask=Cmd; ti.tag=i-1;
   }
+  [tabM addItem:[NSMenuItem separatorItem]];
+  mi(tabM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
+
+  // ── Window ──
+  NSMenu *winM=submenu(@"Window");
+  [NSApp setWindowsMenu:winM];
+  mi(winM,@"Minimize",@selector(performMiniaturize:),@"m",Cmd);
+  [winM addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
   [winM addItem:[NSMenuItem separatorItem]];
   [winM addItemWithTitle:@"Bring All to Front" action:@selector(arrangeInFront:) keyEquivalent:@""];
+
+  // ── Help ──
+  NSMenu *helpM=submenu(@"Help");
+  [NSApp setHelpMenu:helpM];
+  [helpM addItemWithTitle:@"BearBrowser Help" action:@selector(openBearHelp:) keyEquivalent:@""];
 }
 
 // ── App launch ────────────────────────────────────────────────────────────────
@@ -2460,6 +2558,11 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|
                NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskFullSizeContentView)
     backing:NSBackingStoreBuffered defer:NO];
+  // CRITICAL: NSWindow defaults releasedWhenClosed=YES. With a `strong` property
+  // ARC already owns the window, so closing it would over-release → self.window
+  // becomes a dangling pointer → EXC_BAD_ACCESS in objc_retain the next time any
+  // retained event-monitor block touches it. Opt out of the legacy release.
+  self.window.releasedWhenClosed=NO;
   self.window.title=@"BearBrowser";
   self.window.titlebarAppearsTransparent=YES;
   self.window.titleVisibility=NSWindowTitleHidden;
@@ -2588,9 +2691,13 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     [self.address selectText:nil];
   });
   // Dismiss the address dropdown when the user clicks outside it or the address field.
-  [NSEvent addLocalMonitorForEventsMatchingMask:
+  // Keep the token so we can remove it on close — a leaked monitor keeps firing
+  // (and retaining self) after teardown.
+  __weak BBDelegate *weakSelf=self;
+  self.addrDismissMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:
     NSEventMaskLeftMouseDown|NSEventMaskRightMouseDown|NSEventMaskKeyDown
     handler:^NSEvent*(NSEvent *e){
+    BBDelegate *self=weakSelf; if (!self) return e;
     if (e.type==NSEventTypeLeftMouseDown && e.window==self.window) {
       NSView *overlay=self.addressDropdown.overlay;
       NSPoint pt=[self.root convertPoint:e.locationInWindow fromView:nil];
@@ -3839,7 +3946,12 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     self.progressBar.hidden=(p>=0.99||p<=0.0);
   } else if ([path isEqualToString:@"title"]) {
     BBTab *tab=[self tabForWebView:wv];
-    if (tab&&wv.title.length) { tab.title=wv.title; [self reloadTabBar]; self.window.title=wv.title; }
+    if (tab&&wv.title.length) {
+      tab.title=wv.title; [self reloadTabBar]; self.window.title=wv.title;
+      // Patch the history entry recorded at didFinishNavigation (its title was
+      // usually empty/placeholder because the title hadn't loaded yet).
+      if (!tab.isPrivate) [[BBHistoryStore shared] updateTitle:wv.title forURL:wv.URL.absoluteString];
+    }
   }
 }
 
@@ -3917,6 +4029,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     if (u.length && ![self isInternalURL:u]) [urls addObject:u];
   }
   [[NSUserDefaults standardUserDefaults] setObject:urls forKey:@"BBSessionURLs"];
+  // Tear down local event monitors so they stop firing against torn-down state.
+  if (self.addrDismissMonitor) { [NSEvent removeMonitor:self.addrDismissMonitor]; self.addrDismissMonitor=nil; }
+  if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
 }
 - (void)readAloud:(id)s           { [[BBVoice shared] readPage:self.webView]; }
 
@@ -3977,8 +4092,14 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   NSTableColumn *c3=[[NSTableColumn alloc]initWithIdentifier:@"when"];  c3.title=@"When";  c3.width=100;
   [tv addTableColumn:c1]; [tv addTableColumn:c2]; [tv addTableColumn:c3];
   sv.documentView=tv; [cv addSubview:sv];
-  // Use a simple block-based datasource via associated objects
-  NSMutableArray<BBHistoryEntry *> *shown=[[BBHistoryStore shared].entries.reverseObjectEnumerator.allObjects mutableCopy];
+  // Newest-first, deduplicated by URL (keep the most recent visit per site) so the
+  // list reads like Chrome's history rather than a raw per-visit log full of repeats.
+  NSMutableArray<BBHistoryEntry *> *shown=[NSMutableArray array];
+  NSMutableSet<NSString *> *seen=[NSMutableSet set];
+  for (BBHistoryEntry *e in [BBHistoryStore shared].entries.reverseObjectEnumerator) {
+    if (!e.urlString.length || [seen containsObject:e.urlString]) continue;
+    [seen addObject:e.urlString]; [shown addObject:e];
+  }
   __block NSMutableArray<BBHistoryEntry *> *filtered=[shown mutableCopy];
   // Simple datasource object
   BBHistoryPanelDS *ds=[[BBHistoryPanelDS alloc]initWithEntries:filtered tableView:tv searchField:sf window:hw webView:self.webView];
@@ -3987,6 +4108,18 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [tv reloadData];
   [self.window beginSheet:hw completionHandler:nil];
 }
+
+- (void)clearHistory:(id)s {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Clear Browsing History?";
+  a.informativeText=@"This removes all entries from your BearBrowser history. This cannot be undone.";
+  [a addButtonWithTitle:@"Clear History"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc==NSAlertFirstButtonReturn) [[BBHistoryStore shared] clearAll];
+  }];
+}
+- (void)goHome:(id)s { [self loadStartPage:self.webView]; }
+- (void)openBearHelp:(id)s { [self addTabPrivate:NO]; [self loadStartPage:self.webView]; }
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
 - (void)toggleDownloadPanel:(id)s {
@@ -4611,7 +4744,7 @@ static NSString *kFaviconJS=@"(function(){"
 // Install a right-click monitor so we can show our own context menu on the webview
 - (void)installContextMenuMonitor {
   __weak BBDelegate *weak=self;
-  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent *e){
+  self.contextMenuMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent *e){
     BBDelegate *s=weak; if (!s||e.window!=s.window) return e;
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if (!NSPointInRect(pt,s.webView.bounds)) return e;
