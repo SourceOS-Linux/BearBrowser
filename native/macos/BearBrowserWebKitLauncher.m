@@ -904,6 +904,38 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 - (void)hide { self.hidden=YES; }
 @end
 
+// ── BBSearch ──────────────────────────────────────────────────────────────────
+// Search-engine registry. Declared here (before the address dropdown) so the
+// dropdown can route suggestions to the chosen engine. BBDelegate exposes thin
+// wrappers (searchEngines / searchEngineName / searchURLForQuery:) over this.
+@interface BBSearch : NSObject
++ (NSArray<NSDictionary*> *)engines;
++ (NSString *)engineName;
++ (NSString *)urlForQuery:(NSString *)q;
+@end
+@implementation BBSearch
++ (NSArray<NSDictionary*> *)engines {
+  return @[
+    @{@"name":@"DuckDuckGo",  @"id":@"ddg",    @"url":@"https://duckduckgo.com/?q=%@"},
+    @{@"name":@"Kagi",        @"id":@"kagi",   @"url":@"https://kagi.com/search?q=%@"},
+    @{@"name":@"Brave",       @"id":@"brave",  @"url":@"https://search.brave.com/search?q=%@"},
+    @{@"name":@"Startpage",   @"id":@"start",  @"url":@"https://www.startpage.com/search?q=%@"},
+  ];
+}
++ (NSString *)engineName {
+  NSString *eid=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
+  for (NSDictionary *e in [self engines]) if ([e[@"id"] isEqualToString:eid]) return e[@"name"];
+  return @"DuckDuckGo";
+}
++ (NSString *)urlForQuery:(NSString *)q {
+  NSString *eid=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
+  NSString *enc=[q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  for (NSDictionary *e in [self engines])
+    if ([e[@"id"] isEqualToString:eid]) return [NSString stringWithFormat:e[@"url"],enc];
+  return [NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",enc];
+}
+@end
+
 // ── BBAddressDropdown ─────────────────────────────────────────────────────────
 @interface BBAddressSuggestion : NSObject
 @property(copy) NSString *title, *urlString, *badge; // badge: "Bookmark", "History", "Search"
@@ -922,6 +954,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @property(strong) NSMutableArray<BBAddressSuggestion *> *suggestions;
 @property(weak)   id<BBAddressDropdownDelegate> delegate;
 @property(strong) NSTimer *ddgTimer;
+@property(assign) BOOL remoteSuggestEnabled; // set per-keystroke by the owner (off in private / when disabled)
 - (void)updateForQuery:(NSString *)q belowField:(NSTextField *)field inWindow:(NSWindow *)win;
 - (void)hide;
 - (BOOL)selectNext;
@@ -967,11 +1000,10 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
     s.urlString=e.urlString; s.badge=@"↺"; [_suggestions addObject:s];
     if(_suggestions.count>=9) break;
   }
-  // Search row always last
+  // Search row always last — routed to the user's chosen search engine.
   BBAddressSuggestion *search=[BBAddressSuggestion new];
-  search.title=[NSString stringWithFormat:@"Search DuckDuckGo: %@",q];
-  NSString *eq=[q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-  search.urlString=[NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",eq];
+  search.title=[NSString stringWithFormat:@"Search %@: %@",[BBSearch engineName],q];
+  search.urlString=[BBSearch urlForQuery:q];
   search.badge=@"⌕"; [_suggestions addObject:search];
   [_table reloadData]; [_table deselectAll:nil];
   // Position overlay in contentView coordinates below the address field
@@ -983,11 +1015,16 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
                             fieldInContent.origin.y-h,
                             fieldInContent.size.width, h);
   _overlay.hidden=NO;
-  // DDG autocomplete after 250ms debounce
-  [_ddgTimer invalidate]; NSString *qc=q;
-  _ddgTimer=[NSTimer scheduledTimerWithTimeInterval:0.25 repeats:NO block:^(NSTimer *t){
-    [self fetchDDGSuggestions:qc];
-  }];
+  // Remote search-suggestions (privacy-sensitive: sends keystrokes to the suggest
+  // endpoint). Only when enabled by the owner — off in private tabs or if the user
+  // disabled it in Settings.
+  [_ddgTimer invalidate];
+  if (self.remoteSuggestEnabled) {
+    NSString *qc=q;
+    _ddgTimer=[NSTimer scheduledTimerWithTimeInterval:0.25 repeats:NO block:^(NSTimer *t){
+      [self fetchDDGSuggestions:qc];
+    }];
+  }
 }
 - (void)fetchDDGSuggestions:(NSString *)q {
   NSString *eq=[q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
@@ -1005,8 +1042,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
       for (NSString *term in terms) {
         if(![term isKindOfClass:[NSString class]]||!term.length) continue;
         BBAddressSuggestion *s=[BBAddressSuggestion new]; s.title=term; s.badge=@"⌕";
-        NSString *teq=[term stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-        s.urlString=[NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",teq];
+        s.urlString=[BBSearch urlForQuery:term]; // route to the chosen engine
         if(ins<(NSInteger)self.suggestions.count) [self.suggestions insertObject:s atIndex:ins++];
         if(self.suggestions.count>=12) break;
       }
@@ -2664,7 +2700,12 @@ static NSMutableArray *gBBWindowControllers;
 - (void)applicationDidFinishLaunching:(NSNotification *)n {
   BBLog(@"BearBrowser start");
   static dispatch_once_t controllersOnce;
-  dispatch_once(&controllersOnce,^{ gBBWindowControllers=[NSMutableArray array]; });
+  dispatch_once(&controllersOnce,^{
+    gBBWindowControllers=[NSMutableArray array];
+    // Search suggestions default ON (DuckDuckGo's privacy-respecting endpoint); the
+    // user can disable in Settings, and they're always off in private tabs.
+    [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"BBSearchSuggestions":@YES}];
+  });
   [gBBWindowControllers addObject:self];  // keep this controller alive for its window's lifetime
   BBEmitEvent(@"app.launch",@"allow",@"Native shell launched.",@{@"bundleId":@"dev.sourceos.BearBrowser"});
   [[BBAgentServer shared] startWithDelegate:self];
@@ -4202,6 +4243,7 @@ static NSMutableArray *gBBWindowControllers;
 }
 
 - (void)activateTab:(NSInteger)index {
+  if (index<0||index>=(NSInteger)self.tabs.count) return; // bounds guard
   for (BBTab *t in self.tabs) { [t.webView removeFromSuperview]; t.webView.hidden=YES; }
   self.activeTabIndex=index;
   BBTab *tab=self.tabs[index];
@@ -4287,15 +4329,17 @@ static NSMutableArray *gBBWindowControllers;
   add(@"Reopen Closed Tab",@selector(reopenClosedTab:),self.recentlyClosed.count>0);
   return m;
 }
-- (void)ctxNewTabRight:(id)s   { [self insertTabAt:[(NSMenuItem*)s tag]+1 private:self.activeTab.isPrivate url:nil]; }
+- (BOOL)validTabIndex:(NSInteger)i { return i>=0 && i<(NSInteger)self.tabs.count; }
+- (void)ctxNewTabRight:(id)s   { NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return; [self insertTabAt:i+1 private:self.tabs[i].isPrivate url:nil]; }
 - (void)ctxDuplicateTab:(id)s  {
-  NSInteger i=[(NSMenuItem*)s tag];
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return;
   [self insertTabAt:i+1 private:self.tabs[i].isPrivate url:self.tabs[i].webView.URL.absoluteString];
 }
-- (void)ctxReloadTab:(id)s     { NSInteger i=[(NSMenuItem*)s tag]; if(i<(NSInteger)self.tabs.count)[self.tabs[i].webView reload]; }
-- (void)ctxCloseTab:(id)s      { [self tabItemDidClose:[(NSMenuItem*)s tag]]; }
+- (void)ctxReloadTab:(id)s     { NSInteger i=[(NSMenuItem*)s tag]; if([self validTabIndex:i])[self.tabs[i].webView reload]; }
+- (void)ctxCloseTab:(id)s      { NSInteger i=[(NSMenuItem*)s tag]; if([self validTabIndex:i])[self tabItemDidClose:i]; }
 - (void)ctxCloseOthers:(id)s {
-  BBTab *keep=self.tabs[[(NSMenuItem*)s tag]];
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return;
+  BBTab *keep=self.tabs[i];
   for (NSInteger j=(NSInteger)self.tabs.count-1;j>=0;j--) if (self.tabs[j]!=keep) [self teardownTabAtIndex:j];
   self.activeTabIndex=0; [self activateTab:0]; [self reloadTabBar];
 }
@@ -4626,23 +4670,11 @@ static NSMutableArray *gBBWindowControllers;
 }
 
 // ── Search engine preference ──────────────────────────────────────────────────
-+ (NSArray<NSDictionary*> *)searchEngines {
-  return @[
-    @{@"name":@"DuckDuckGo",  @"id":@"ddg",    @"url":@"https://duckduckgo.com/?q=%@"},
-    @{@"name":@"Kagi",        @"id":@"kagi",   @"url":@"https://kagi.com/search?q=%@"},
-    @{@"name":@"Brave",       @"id":@"brave",  @"url":@"https://search.brave.com/search?q=%@"},
-    @{@"name":@"Startpage",   @"id":@"start",  @"url":@"https://www.startpage.com/search?q=%@"},
-  ];
-}
-+ (NSString *)searchURLForQuery:(NSString *)q {
-  NSString *eid=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
-  for (NSDictionary *e in [self searchEngines]) {
-    if ([e[@"id"] isEqualToString:eid])
-      return [NSString stringWithFormat:e[@"url"], [q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-  }
-  return [NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",
-          [q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-}
+// Thin wrappers over BBSearch (the single source of truth, declared earlier so the
+// address dropdown can reach it too).
++ (NSArray<NSDictionary*> *)searchEngines { return [BBSearch engines]; }
++ (NSString *)searchEngineName { return [BBSearch engineName]; }
++ (NSString *)searchURLForQuery:(NSString *)q { return [BBSearch urlForQuery:q]; }
 - (void)openNetworkMonitor:(id)s { [[BBNetworkMapPanel shared] showOrFocus]; }
 
 - (void)settingsAccept:(id)s { [NSApp stopModalWithCode:NSModalResponseOK]; }
@@ -4674,6 +4706,9 @@ static NSMutableArray *gBBWindowControllers;
   NSButton *bmBar=[NSButton checkboxWithTitle:@"Show bookmarks bar" target:nil action:nil];
   bmBar.frame=NSMakeRect(192,y,260,20); bmBar.state=[ud boolForKey:@"BBShowBookmarksBar"]?NSControlStateValueOn:NSControlStateValueOff;
   [cv addSubview:bmBar]; y-=28;
+  NSButton *sug=[NSButton checkboxWithTitle:@"Search suggestions (sends typing to the engine)" target:nil action:nil];
+  sug.frame=NSMakeRect(192,y,280,20); sug.state=[ud boolForKey:@"BBSearchSuggestions"]?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:sug]; y-=28;
   NSButton *clr=[NSButton checkboxWithTitle:@"Clear history when quitting" target:nil action:nil];
   clr.frame=NSMakeRect(192,y,260,20); clr.state=[ud boolForKey:@"BBClearOnQuit"]?NSControlStateValueOn:NSControlStateValueOff;
   [cv addSubview:clr];
@@ -4691,6 +4726,7 @@ static NSMutableArray *gBBWindowControllers;
   NSString *hp=[home.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
   if (hp.length) [ud setObject:hp forKey:@"BBHomepage"]; else [ud removeObjectForKey:@"BBHomepage"];
   [ud setBool:(bmBar.state==NSControlStateValueOn) forKey:@"BBShowBookmarksBar"];
+  [ud setBool:(sug.state==NSControlStateValueOn) forKey:@"BBSearchSuggestions"];
   [ud setBool:(clr.state==NSControlStateValueOn) forKey:@"BBClearOnQuit"];
   // Apply the bookmarks-bar choice immediately.
   self.bookmarksBarVisible=(bmBar.state==NSControlStateValueOn);
@@ -4789,8 +4825,8 @@ static NSMutableArray *gBBWindowControllers;
     it.target=self; it.tag=k; it.toolTip=e[@"url"];
   }
 }
-- (void)nextTab:(id)s { NSInteger next=(self.activeTabIndex+1)%self.tabs.count; [self tabItemDidSelect:next]; }
-- (void)prevTab:(id)s { NSInteger prev=(self.activeTabIndex-1+self.tabs.count)%self.tabs.count; [self tabItemDidSelect:prev]; }
+- (void)nextTab:(id)s { NSInteger n=self.tabs.count; if(n<2)return; [self tabItemDidSelect:(self.activeTabIndex+1)%n]; }
+- (void)prevTab:(id)s { NSInteger n=self.tabs.count; if(n<2)return; [self tabItemDidSelect:(self.activeTabIndex-1+n)%n]; }
 - (void)switchToTabByMenuItem:(NSMenuItem *)item {
   NSInteger idx=item.tag;
   if (idx>=0&&idx<(NSInteger)self.tabs.count) [self tabItemDidSelect:idx];
@@ -5112,6 +5148,10 @@ static NSString *kFaviconJS=@"(function(){"
 - (void)controlTextDidChange:(NSNotification *)n {
   if (n.object!=self.address) return;
   NSString *q=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+  // Remote suggestions only when enabled in Settings AND not in a private tab — never
+  // send incognito keystrokes to the suggest endpoint.
+  self.addressDropdown.remoteSuggestEnabled =
+    [[NSUserDefaults standardUserDefaults] boolForKey:@"BBSearchSuggestions"] && !self.activeTab.isPrivate;
   if (q.length) [self.addressDropdown updateForQuery:q belowField:self.address inWindow:self.window];
   else [self.addressDropdown hide];
 }
