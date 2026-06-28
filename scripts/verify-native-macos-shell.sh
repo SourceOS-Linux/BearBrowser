@@ -11,8 +11,10 @@ test -f "$source"
 test -f "$landing"
 
 grep -q 'BBEmitEvent(@"app.launch"' "$source"
-grep -q 'BBEmitEvent(@"navigation.requested"' "$source"
-grep -q 'BBEmitEvent(@"navigation.committed"' "$source"
+# navigation.* provenance is emitted via the privacy-aware emitNav: wrapper (which
+# redacts the URL for private tabs) or directly via BBEmitEvent. Accept either.
+grep -qE 'BBEmitEvent\(@"navigation.requested"|emitNav:@"navigation.requested"' "$source"
+grep -qE 'BBEmitEvent\(@"navigation.committed"|emitNav:@"navigation.committed"' "$source"
 grep -q 'BBEmitEvent(@"memory.candidate_created"' "$source"
 # automation.observed is emitted from a static C-context helper, so it uses the
 # BBEmitEventStatic variant (not the BBEmitEvent macro). Accept either.
