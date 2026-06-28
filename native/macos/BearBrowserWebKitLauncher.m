@@ -4102,6 +4102,8 @@ static NSMutableArray *gBBWindowControllers;
   wv.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   wv.navigationDelegate=self; wv.UIDelegate=self;
   wv.allowsBackForwardNavigationGestures=YES; wv.allowsLinkPreview=YES;
+  // Required for Web Inspector / "Inspect Element" to open on macOS 13.3+ (defaults NO).
+  if (@available(macOS 13.3, *)) wv.inspectable=YES;
   // PiP enabled on macOS via configuration (allowsPictureInPictureMediaPlayback is iOS-only)
   [wv addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:(__bridge void *)wv];
   [wv addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:(__bridge void *)wv];
@@ -4720,18 +4722,28 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   }];
 }
 - (void)openDevTools:(id)s {
-  // Use _inspector private API: get the WKInspector and call show: on it.
-  // developerExtrasEnabled must be YES (set in baseConfig) for this to work.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+  // Open the Web Inspector via the private _WKInspector. Requires inspectable=YES
+  // (set on every webview) and developerExtrasEnabled (set in baseConfig).
+  // NOTE: _WKInspector's selector is `show` (no colon) — the old `show:` silently
+  // no-op'd, which is why Dev Tools never opened.
   SEL getInspector=NSSelectorFromString(@"_inspector");
-  if([self.webView respondsToSelector:getInspector]){
-    id inspector=((id(*)(id,SEL))objc_msgSend)(self.webView,getInspector);
-    SEL show=NSSelectorFromString(@"show:");
-    if([inspector respondsToSelector:show])
-      ((void(*)(id,SEL,id))objc_msgSend)(inspector,show,nil);
+  if(![self.webView respondsToSelector:getInspector]) {
+    [self showDevToolsUnavailable]; return;
   }
-#pragma clang diagnostic pop
+  id inspector=((id(*)(id,SEL))objc_msgSend)(self.webView,getInspector);
+  SEL show=NSSelectorFromString(@"show");
+  if(inspector && [inspector respondsToSelector:show]) {
+    ((void(*)(id,SEL))objc_msgSend)(inspector,show);
+  } else {
+    [self showDevToolsUnavailable];
+  }
+}
+- (void)showDevToolsUnavailable {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Developer Tools unavailable";
+  a.informativeText=@"The Web Inspector could not be opened on this WebKit build. Right-click ▸ Inspect Element also requires it.";
+  [a addButtonWithTitle:@"OK"];
+  [a beginSheetModalForWindow:self.window completionHandler:nil];
 }
 - (void)openFile:(id)s {
   NSOpenPanel *p=[NSOpenPanel openPanel];
@@ -4908,6 +4920,7 @@ static NSString *kFaviconJS=@"(function(){"
   newWV.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   newWV.navigationDelegate=self; newWV.UIDelegate=self;
   newWV.allowsBackForwardNavigationGestures=YES; newWV.allowsLinkPreview=YES;
+  if (@available(macOS 13.3, *)) newWV.inspectable=YES;
   [newWV addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
   [newWV addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
 
