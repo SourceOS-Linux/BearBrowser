@@ -1116,6 +1116,38 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 }
 @end
 
+// ── BBBookmarksPanelDS ────────────────────────────────────────────────────────
+// Datasource/delegate for the Bookmark Manager table. Reads the shared store live.
+@interface BBBookmarksPanelDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@property(strong) NSTableView *tv;
+@property(weak)   NSWindow    *win;
+@property(weak)   WKWebView   *webView;
+@end
+@implementation BBBookmarksPanelDS
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return [BBBookmarksStore shared].items.count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  NSTextField *f=[tv makeViewWithIdentifier:col.identifier owner:self];
+  if (!f) { f=[[NSTextField alloc]init]; f.identifier=col.identifier; f.bordered=NO; f.editable=NO; f.selectable=NO; f.backgroundColor=[NSColor clearColor]; f.lineBreakMode=NSLineBreakByTruncatingTail; }
+  NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
+  if (row<0||row>=(NSInteger)items.count) { f.stringValue=@""; return f; }
+  BBBookmark *b=items[row];
+  f.stringValue=[col.identifier isEqualToString:@"title"]?(b.title.length?b.title:b.urlString):b.urlString;
+  return f;
+}
+- (void)openSelected {
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
+  if (row<0||row>=(NSInteger)items.count) return;
+  NSURL *u=[NSURL URLWithString:items[row].urlString]; if(!u) return;
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  [self.win close];
+}
+- (void)removeSelected {
+  NSInteger row=self.tv.selectedRow;
+  [[BBBookmarksStore shared] removeAtIndex:row];
+  [self.tv reloadData];
+}
+@end
+
 // ── BBConnectionRecord ────────────────────────────────────────────────────────
 typedef NS_ENUM(NSInteger,BBConnCategory){
   BBConnCategoryFirstParty=0,BBConnCategoryTracker,BBConnCategoryAnalytics,
@@ -2579,6 +2611,8 @@ static NSMutableArray *gBBWindowControllers;
 
   // ── Bookmarks ──
   NSMenu *bmM=submenu(@"Bookmarks");
+  mi(bmM,@"Bookmark Manager",@selector(openBookmarkManager:),@"b",Cmd|Opt);
+  [bmM addItem:[NSMenuItem separatorItem]];
   mi(bmM,@"Bookmark This Tab…",@selector(addBookmark:),@"d",Cmd);
   [bmM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧B is already bound on View ▸ Always Show Bookmarks Bar.
@@ -2811,6 +2845,11 @@ static NSMutableArray *gBBWindowControllers;
     }
   }
   if (!restored) [self addTabPrivate:NO];
+  // Restore the bookmarks-bar preference (after the first tab exists so layout is valid).
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:@"BBShowBookmarksBar"]) {
+    self.bookmarksBarVisible=YES; self.bookmarksBar.hidden=NO;
+    [self reloadBookmarksBar]; [self resizeWebViewForCurrentTab];
+  }
   [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
   BBLog([NSString stringWithFormat:@"window frame=%@ root=%@ toolbar=%@",
     NSStringFromRect(self.window.frame), NSStringFromRect(self.root.bounds), NSStringFromRect(self.toolbarBg.frame)]);
@@ -4335,6 +4374,9 @@ static NSMutableArray *gBBWindowControllers;
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
+- (void)applicationWillTerminate:(NSNotification *)n {
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:@"BBClearOnQuit"]) [[BBHistoryStore shared] clearAll];
+}
 - (void)windowWillClose:(NSNotification *)n {
   [[NSUserDefaults standardUserDefaults] setObject:NSStringFromRect(self.window.frame) forKey:@"BBWindowFrame"];
   // Persist non-private tab URLs for session restore
@@ -4371,6 +4413,8 @@ static NSMutableArray *gBBWindowControllers;
 - (void)toggleBookmarksBar:(id)s {
   self.bookmarksBarVisible=!self.bookmarksBarVisible;
   self.bookmarksBar.hidden=!self.bookmarksBarVisible;
+  [[NSUserDefaults standardUserDefaults] setBool:self.bookmarksBarVisible forKey:@"BBShowBookmarksBar"];
+  if (self.bookmarksBarVisible) [self reloadBookmarksBar];
   [self resizeWebViewForCurrentTab];
 }
 - (void)reloadBookmarksBar {
@@ -4438,8 +4482,47 @@ static NSMutableArray *gBBWindowControllers;
     if (rc==NSAlertFirstButtonReturn) [[BBHistoryStore shared] clearAll];
   }];
 }
-- (void)goHome:(id)s { [self loadStartPage:self.webView]; }
+- (void)goHome:(id)s {
+  NSString *hp=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBHomepage"];
+  if (hp.length) {
+    if (!([hp hasPrefix:@"http://"]||[hp hasPrefix:@"https://"]||[hp hasPrefix:@"file://"]))
+      hp=[@"https://" stringByAppendingString:hp];
+    NSURL *u=[NSURL URLWithString:hp];
+    if (u) { [self.webView loadRequest:[NSURLRequest requestWithURL:u]]; return; }
+  }
+  [self loadStartPage:self.webView];
+}
 - (void)openBearHelp:(id)s { [self addTabPrivate:NO]; [self loadStartPage:self.webView]; }
+- (void)openBookmarkManager:(id)s {
+  CGFloat W=640,Hh=460;
+  NSWindow *bw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  bw.releasedWhenClosed=NO; bw.title=@"Bookmarks"; [bw center];
+  NSView *cv=bw.contentView;
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-48)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=30;
+  NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"title"]; c1.title=@"Title"; c1.width=250;
+  NSTableColumn *c2=[[NSTableColumn alloc]initWithIdentifier:@"url"];   c2.title=@"URL";   c2.width=360;
+  [tv addTableColumn:c1]; [tv addTableColumn:c2];
+  sv.documentView=tv; [cv addSubview:sv];
+  BBBookmarksPanelDS *ds=[[BBBookmarksPanelDS alloc]init];
+  ds.tv=tv; ds.win=bw; ds.webView=self.webView;
+  tv.dataSource=ds; tv.delegate=ds; tv.target=ds; tv.doubleAction=@selector(openSelected);
+  objc_setAssociatedObject(bw,@"bmds",ds,OBJC_ASSOCIATION_RETAIN);
+  [tv reloadData];
+  NSButton *open=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,90,30)];
+  open.title=@"Open"; open.bezelStyle=NSBezelStyleRounded; open.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  open.target=ds; open.action=@selector(openSelected); [cv addSubview:open];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(108,10,90,30)];
+  rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=bw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:bw completionHandler:nil];
+}
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
 - (void)toggleDownloadPanel:(id)s {
@@ -4503,23 +4586,58 @@ static NSMutableArray *gBBWindowControllers;
 }
 - (void)openNetworkMonitor:(id)s { [[BBNetworkMapPanel shared] showOrFocus]; }
 
+- (void)settingsAccept:(id)s { [NSApp stopModalWithCode:NSModalResponseOK]; }
+- (void)settingsCancel:(id)s { [NSApp stopModalWithCode:NSModalResponseCancel]; }
 - (void)openSearchPreferences:(id)s {
-  NSAlert *a=[[NSAlert alloc]init];
-  a.messageText=@"Default Search Engine";
-  NSPopUpButton *pop=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(0,0,240,26) pullsDown:NO];
-  NSString *cur=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  CGFloat W=470,Hh=300;
+  NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
+  sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
+  NSView *cv=sw.contentView;
+  NSTextField*(^label)(NSString*,CGFloat)=^NSTextField*(NSString*t,CGFloat yy){
+    NSTextField *l=[NSTextField labelWithString:t]; l.frame=NSMakeRect(16,yy,168,20);
+    l.alignment=NSTextAlignmentRight; [cv addSubview:l]; return l;
+  };
+  CGFloat y=Hh-58;
+  label(@"Default search engine:",y);
+  NSPopUpButton *pop=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(192,y-3,260,26) pullsDown:NO];
+  NSString *cur=[ud stringForKey:@"BBSearchEngine"]?:@"ddg";
   for (NSDictionary *e in [BBDelegate searchEngines]) {
-    [pop addItemWithTitle:e[@"name"]];
-    pop.lastItem.representedObject=e[@"id"];
+    [pop addItemWithTitle:e[@"name"]]; pop.lastItem.representedObject=e[@"id"];
     if ([e[@"id"] isEqualToString:cur]) [pop selectItem:pop.lastItem];
   }
-  a.accessoryView=pop;
-  [a addButtonWithTitle:@"Save"]; [a addButtonWithTitle:@"Cancel"];
-  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse r){
-    if (r!=NSAlertFirstButtonReturn) return;
-    NSString *eid=pop.selectedItem.representedObject;
-    if (eid) [[NSUserDefaults standardUserDefaults] setObject:eid forKey:@"BBSearchEngine"];
-  }];
+  [cv addSubview:pop]; y-=46;
+  label(@"Homepage:",y);
+  NSTextField *home=[[NSTextField alloc]initWithFrame:NSMakeRect(192,y-2,260,24)];
+  home.stringValue=[ud stringForKey:@"BBHomepage"]?:@""; home.placeholderString=@"Leave blank for the start page";
+  [cv addSubview:home]; y-=44;
+  NSButton *bmBar=[NSButton checkboxWithTitle:@"Show bookmarks bar" target:nil action:nil];
+  bmBar.frame=NSMakeRect(192,y,260,20); bmBar.state=[ud boolForKey:@"BBShowBookmarksBar"]?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:bmBar]; y-=28;
+  NSButton *clr=[NSButton checkboxWithTitle:@"Clear history when quitting" target:nil action:nil];
+  clr.frame=NSMakeRect(192,y,260,20); clr.state=[ud boolForKey:@"BBClearOnQuit"]?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:clr];
+  NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
+  save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
+  save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
+  NSButton *cancel=[[NSButton alloc]initWithFrame:NSMakeRect(W-196,16,88,32)];
+  cancel.title=@"Cancel"; cancel.bezelStyle=NSBezelStyleRounded; cancel.keyEquivalent=@"\033";
+  cancel.target=self; cancel.action=@selector(settingsCancel:); [cv addSubview:cancel];
+
+  NSModalResponse rc=[NSApp runModalForWindow:sw];
+  [sw orderOut:nil];
+  if (rc!=NSModalResponseOK) return;
+  NSString *eid=pop.selectedItem.representedObject; if(eid)[ud setObject:eid forKey:@"BBSearchEngine"];
+  NSString *hp=[home.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (hp.length) [ud setObject:hp forKey:@"BBHomepage"]; else [ud removeObjectForKey:@"BBHomepage"];
+  [ud setBool:(bmBar.state==NSControlStateValueOn) forKey:@"BBShowBookmarksBar"];
+  [ud setBool:(clr.state==NSControlStateValueOn) forKey:@"BBClearOnQuit"];
+  // Apply the bookmarks-bar choice immediately.
+  self.bookmarksBarVisible=(bmBar.state==NSControlStateValueOn);
+  self.bookmarksBar.hidden=!self.bookmarksBarVisible;
+  if (self.bookmarksBarVisible) [self reloadBookmarksBar];
+  [self resizeWebViewForCurrentTab];
 }
 
 // ── Quad9 DNS-based safe browsing ────────────────────────────────────────────
