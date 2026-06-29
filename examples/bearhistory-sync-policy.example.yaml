@@ -1,0 +1,42 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BearHistorySyncPolicy
+metadata:
+  name: default-bearhistory-policy
+spec:
+  defaultMode: localOnly
+  profiles:
+    humanSecure:
+      mode: singleDevice
+      syncWindowSeconds: 86400
+      payloadCapBytes: 524288
+      idleDelayMs: 5000
+      saveDebounceMs: 1500
+      fetchThrottleMs: 30000
+      shutdownTimeoutMs: 2500
+      exportToOpsHistory: false
+      secretMaterialPolicy: denyExport
+    agentRuntime:
+      mode: opsExportOnly
+      syncWindowSeconds: 14400
+      payloadCapBytes: 262144
+      idleDelayMs: 1000
+      saveDebounceMs: 500
+      fetchThrottleMs: 10000
+      shutdownTimeoutMs: 1500
+      exportToOpsHistory: true
+      secretMaterialPolicy: denyExport
+  deletionPriority:
+    enabled: true
+    maxPropagationDelayMs: 1000
+    requiresAcknowledgement: true
+    includeRedactions: true
+    includeTombstones: true
+  opsHistoryBridge:
+    enabled: true
+    authority: PolicyFabric
+    exportHumanProfileByDefault: false
+    exportAgentRuntimeByDefault: true
+    requiredRefs:
+      - policyDecisionId
+      - evidenceRef
+      - workspaceId

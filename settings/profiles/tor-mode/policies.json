@@ -1,0 +1,39 @@
+{
+  "policies": {
+    "Proxy": {
+      "Mode": "manual",
+      "SOCKSProxy": "127.0.0.1:9050",
+      "SOCKSVersion": 5,
+      "UseProxyForDNS": true,
+      "Locked": true
+    },
+    "DNSOverHTTPS": {
+      "Enabled": false,
+      "Locked": true
+    },
+    "EnableTrackingProtection": {
+      "Value": true,
+      "Fingerprinting": true,
+      "Cryptomining": true,
+      "EmailTracking": true,
+      "Locked": true
+    },
+    "EncryptedMediaExtensions": {
+      "Enabled": false,
+      "Locked": true
+    },
+    "Certificates": {
+      "ImportEnterpriseRoots": false
+    },
+    "DisableTelemetry": true,
+    "DisableFirefoxStudies": true,
+    "DisableFirefoxAccounts": true,
+    "DisablePocket": true,
+    "DisableAppUpdate": false,
+    "OfferToSaveLogins": false,
+    "PasswordManagerEnabled": false,
+    "HttpsOnlyMode": "force_enabled",
+    "NetworkPrediction": false,
+    "DisableSystemAddonUpdate": true
+  }
+}

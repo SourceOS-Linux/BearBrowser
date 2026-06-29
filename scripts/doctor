@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+patterns='BearBrowser|bearbrowser|LibreWolf.*Bear|playwright.*bear|stagehand.*bear'
+
+echo "BearBrowser doctor"
+echo "component: BearBrowser"
+echo "trust_surface: TRUST_SURFACE.yaml"
+
+echo
+echo "commands:"
+for cmd in bearbrowser bearbrowser-update bearbrowser-doctor bearbrowser-verify-upstream bearbrowser-automation-surfaces; do
+  if command -v "$cmd" >/dev/null 2>&1; then
+    echo "  $cmd: $(command -v "$cmd")"
+  else
+    echo "  $cmd: missing"
+  fi
+done
+
+echo
+echo "product diagnostics:"
+if command -v bearbrowser-doctor >/dev/null 2>&1; then
+  bearbrowser-doctor || true
+else
+  echo "  bearbrowser-doctor unavailable"
+fi
+
+echo
+echo "processes:"
+pgrep -af "$patterns" || echo "  none"
+
+echo
+echo "launch services:"
+if command -v launchctl >/dev/null 2>&1; then
+  launchctl list 2>/dev/null | grep -Ei "$patterns" || echo "  no launchctl entries"
+fi
+find "$HOME/Library/LaunchAgents" /Library/LaunchAgents /Library/LaunchDaemons -type f 2>/dev/null | grep -Ei 'bearbrowser|BearBrowser' || echo "  no launchd plist files"
+
+echo
+echo "listeners:"
+if command -v lsof >/dev/null 2>&1; then
+  lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -Ei "$patterns" || echo "  no BearBrowser listeners"
+else
+  echo "  lsof unavailable"
+fi
+
+echo
+echo "state paths:"
+for p in "$HOME/.local/state/bearbrowser" "$HOME/.config/bearbrowser" "$HOME/.cache/bearbrowser" "$HOME/Library/Application Support/BearBrowser" "$HOME/Library/Caches/BearBrowser" "$HOME/Library/Logs/BearBrowser"; do
+  if [ -e "$p" ]; then
+    echo "  exists: $p"
+  else
+    echo "  missing: $p"
+  fi
+done

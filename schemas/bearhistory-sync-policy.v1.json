@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/bearhistory-sync-policy.v1.json",
+  "title": "BearHistory Sync Policy v1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "sourceos.dev/v1alpha1" },
+    "kind": { "const": "BearHistorySyncPolicy" },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "spec": {
+      "type": "object",
+      "required": ["defaultMode", "profiles", "deletionPriority", "opsHistoryBridge"],
+      "properties": {
+        "defaultMode": { "type": "string", "enum": ["disabled", "localOnly", "singleDevice", "multiDevice", "opsExportOnly"] },
+        "profiles": {
+          "type": "object",
+          "required": ["humanSecure", "agentRuntime"],
+          "properties": {
+            "humanSecure": { "$ref": "#/$defs/profilePolicy" },
+            "agentRuntime": { "$ref": "#/$defs/profilePolicy" }
+          }
+        },
+        "deletionPriority": {
+          "type": "object",
+          "required": ["enabled", "maxPropagationDelayMs", "requiresAcknowledgement"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "maxPropagationDelayMs": { "type": "integer", "minimum": 0 },
+            "requiresAcknowledgement": { "type": "boolean" },
+            "includeRedactions": { "type": "boolean" },
+            "includeTombstones": { "type": "boolean" }
+          }
+        },
+        "opsHistoryBridge": {
+          "type": "object",
+          "required": ["enabled", "authority", "exportHumanProfileByDefault"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "authority": { "const": "PolicyFabric" },
+            "exportHumanProfileByDefault": { "const": false },
+            "exportAgentRuntimeByDefault": { "type": "boolean" },
+            "requiredRefs": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "profilePolicy": {
+      "type": "object",
+      "required": ["mode", "syncWindowSeconds", "payloadCapBytes", "idleDelayMs", "saveDebounceMs", "fetchThrottleMs", "shutdownTimeoutMs", "exportToOpsHistory"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["disabled", "localOnly", "singleDevice", "multiDevice", "opsExportOnly"] },
+        "syncWindowSeconds": { "type": "integer", "minimum": 0 },
+        "payloadCapBytes": { "type": "integer", "minimum": 0 },
+        "idleDelayMs": { "type": "integer", "minimum": 0 },
+        "saveDebounceMs": { "type": "integer", "minimum": 0 },
+        "fetchThrottleMs": { "type": "integer", "minimum": 0 },
+        "shutdownTimeoutMs": { "type": "integer", "minimum": 0 },
+        "exportToOpsHistory": { "type": "boolean" },
+        "secretMaterialPolicy": { "type": "string", "enum": ["denyExport"] }
+      }
+    }
+  }
+}

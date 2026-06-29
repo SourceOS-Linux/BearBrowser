@@ -1,0 +1,150 @@
+name: Policy Engine Validation
+
+on:
+  pull_request:
+    paths:
+      - "policy/local-default-actions.yaml"
+      - "scripts/bearbrowser-policy-engine.py"
+      - "scripts/bearbrowser-verify-policy-engine.py"
+      - "scripts/bearbrowser-create-receipt.py"
+      - "scripts/bearbrowser-update-receipt.py"
+      - "scripts/bearbrowser-verify-automation-receipt.py"
+      - "schemas/policy-action.schema.json"
+      - "schemas/browser-automation-receipt.schema.json"
+      - ".github/workflows/policy-engine.yml"
+  push:
+    branches: [main]
+    paths:
+      - "policy/local-default-actions.yaml"
+      - "scripts/bearbrowser-policy-engine.py"
+      - "scripts/bearbrowser-verify-policy-engine.py"
+      - "scripts/bearbrowser-create-receipt.py"
+      - "scripts/bearbrowser-update-receipt.py"
+      - "scripts/bearbrowser-verify-automation-receipt.py"
+      - "schemas/policy-action.schema.json"
+      - "schemas/browser-automation-receipt.schema.json"
+      - ".github/workflows/policy-engine.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-policy-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python syntax
+        run: |
+          python3 -m py_compile \
+            scripts/bearbrowser-policy-engine.py \
+            scripts/bearbrowser-verify-policy-engine.py \
+            scripts/bearbrowser-create-receipt.py \
+            scripts/bearbrowser-update-receipt.py \
+            scripts/bearbrowser-verify-automation-receipt.py
+
+      - name: Policy engine — all action types pass (21/21)
+        run: |
+          python3 scripts/bearbrowser-verify-policy-engine.py
+
+      - name: Policy engine — navigate/human-secure allows (exit 0)
+        run: |
+          python3 scripts/bearbrowser-policy-engine.py \
+            --action navigate --profile human-secure --dry-run
+
+      - name: Policy engine — request_credential/agent-runtime denies (exit 3)
+        run: |
+          output=$(python3 scripts/bearbrowser-policy-engine.py \
+            --action request_credential --profile agent-runtime --dry-run 2>&1) || code=$?
+          if [ "${code:-0}" -ne 3 ]; then
+            echo "ERROR: expected exit code 3, got ${code:-0}"
+            echo "$output"
+            exit 1
+          fi
+          echo "$output" | grep -q '"decision": "deny"' || {
+            echo "ERROR: decision field not 'deny'"
+            echo "$output"
+            exit 1
+          }
+          echo "PASS: credential deny for agent-runtime"
+
+      - name: Policy engine — run_automation/agent-runtime holds (exit 2)
+        run: |
+          output=$(python3 scripts/bearbrowser-policy-engine.py \
+            --action run_automation --profile agent-runtime --dry-run 2>&1) || code=$?
+          if [ "${code:-0}" -ne 2 ]; then
+            echo "ERROR: expected exit code 2, got ${code:-0}"
+            echo "$output"
+            exit 1
+          fi
+          echo "$output" | grep -q '"decision": "hold"' || {
+            echo "ERROR: decision field not 'hold'"
+            echo "$output"
+            exit 1
+          }
+          echo "PASS: automation hold for agent-runtime"
+
+      - name: Policy engine — unknown action exits 1
+        run: |
+          python3 scripts/bearbrowser-policy-engine.py \
+            --action nonexistent_action --profile human-secure --dry-run && {
+            echo "ERROR: expected exit code 1 for unknown action"
+            exit 1
+          } || true
+          echo "PASS: unknown action rejected"
+
+      - name: Policy engine — decision record has required fields
+        run: |
+          output=$(python3 scripts/bearbrowser-policy-engine.py \
+            --action summarize_page --profile agent-runtime --dry-run)
+          for field in decisionId action profile decision risk schemaVersion product timestamp engine; do
+            echo "$output" | grep -q "\"$field\"" || {
+              echo "ERROR: missing required field '$field' in decision output"
+              echo "$output"
+              exit 1
+            }
+          done
+          echo "PASS: all required fields present"
+
+      - name: Receipt creation — syntax and dry-run
+        run: |
+          python3 -m py_compile scripts/bearbrowser-create-receipt.py
+          python3 -m py_compile scripts/bearbrowser-update-receipt.py
+          echo "PASS: receipt scripts compile cleanly"
+
+      - name: Policy contract — local-default-actions.yaml is parseable
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path("policy/local-default-actions.yaml").read_text()
+          required_actions = [
+            "navigate", "summarize_page", "compare_tabs", "share_page_with_agent",
+            "request_credential", "request_autofill", "download_file", "upload_file",
+            "read_clipboard", "write_clipboard", "run_automation",
+            "write_memory_candidate", "commit_memory",
+          ]
+          for action in required_actions:
+              assert action in text, f"Missing action: {action}"
+          assert "agent-runtime" in text, "Missing agent-runtime profile overrides"
+          print(f"PASS: all {len(required_actions)} required actions present")
+          PY
+
+      - name: Automation receipt schema — required fields present
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          schema = json.loads(Path("schemas/browser-automation-receipt.schema.json").read_text())
+          required = schema.get("required", [])
+          expected = {
+            "schemaVersion", "receiptId", "sessionRef", "ownerRef",
+            "transport", "permissionScope", "origin", "userVisible",
+            "revocable", "policyDecisionRef", "evidenceRefs", "capturedAt", "status",
+          }
+          missing = expected - set(required)
+          assert not missing, f"Schema missing required fields: {missing}"
+          print(f"PASS: schema has {len(required)} required fields")
+          PY

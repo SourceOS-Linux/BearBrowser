@@ -1,0 +1,124 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/browser-automation-receipt.schema.json",
+  "title": "BrowserAutomationReceipt v1",
+  "description": "Governs every automation transport started in BearBrowser. A receipt must exist before any automation session runs and must be updated on revocation or termination.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "receiptId",
+    "sessionRef",
+    "ownerRef",
+    "transport",
+    "permissionScope",
+    "origin",
+    "userVisible",
+    "revocable",
+    "policyDecisionRef",
+    "evidenceRefs",
+    "capturedAt",
+    "status"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "bearbrowser.browser_automation_receipt.v1"
+    },
+    "receiptId": {
+      "type": "string",
+      "description": "Stable receipt URN: urn:srcos:receipt:browser-automation:<local-id>",
+      "pattern": "^urn:srcos:receipt:browser-automation:[a-zA-Z0-9_-]+$"
+    },
+    "sessionRef": {
+      "type": "string",
+      "description": "Reference to the active BearBrowser session.",
+      "minLength": 1
+    },
+    "ownerRef": {
+      "type": "string",
+      "description": "Reference to the agent, plugin, or workspace that owns this session.",
+      "minLength": 1
+    },
+    "transport": {
+      "type": "string",
+      "description": "Active automation transport.",
+      "enum": ["native_pipe", "cdp", "webdriver", "extension", "accessibility"]
+    },
+    "permissionScope": {
+      "type": "array",
+      "description": "Explicit set of permissions granted for this session.",
+      "items": {
+        "type": "string",
+        "enum": [
+          "read_dom",
+          "click",
+          "type",
+          "download",
+          "upload",
+          "inspect_network",
+          "inspect_cookies",
+          "use_credentials"
+        ]
+      },
+      "minItems": 0,
+      "uniqueItems": true
+    },
+    "origin": {
+      "type": "string",
+      "description": "Where the automation session originates from.",
+      "enum": ["local", "remote", "workspace"]
+    },
+    "userVisible": {
+      "type": "boolean",
+      "description": "The session must be visible to the user at all times.",
+      "const": true
+    },
+    "revocable": {
+      "type": "boolean",
+      "description": "The session must be revocable by the user.",
+      "const": true
+    },
+    "policyDecisionRef": {
+      "type": "string",
+      "description": "Reference to the PolicyFabric decision that admitted this session.",
+      "minLength": 1
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "description": "References to provenance evidence artifacts supporting this receipt.",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp when the receipt was first created."
+    },
+    "status": {
+      "type": "string",
+      "description": "Terminal or non-terminal state of the automation session.",
+      "enum": ["active", "revoked", "ended", "denied", "orphaned"]
+    },
+    "revokedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp when the session was revoked. Present only when status is revoked."
+    },
+    "tabScope": {
+      "type": "array",
+      "description": "Tab/window/page identifiers controlled by this session.",
+      "items": { "type": "string" }
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Human-readable label for the owning agent/plugin/workspace shown in the session UI."
+    }
+  },
+  "if": {
+    "properties": { "status": { "const": "revoked" } },
+    "required": ["status"]
+  },
+  "then": {
+    "required": ["revokedAt"]
+  }
+}

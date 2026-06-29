@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/memory-candidate.schema.json",
+  "title": "BearBrowser Memory Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "memoryId",
+    "timestamp",
+    "product",
+    "state",
+    "actor",
+    "source",
+    "classification",
+    "text",
+    "policy"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "bearbrowser.memory_candidate.v1" },
+    "memoryId": { "type": "string", "minLength": 12 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "product": { "type": "string", "const": "BearBrowser" },
+    "state": { "type": "string", "enum": ["candidate", "committed", "rejected"] },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["human", "agent", "system", "automation"] },
+        "id": { "type": "string" },
+        "displayName": { "type": "string" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["page", "tab", "note", "automation", "system"] },
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payloadClass", "secretLikeDetected", "persistentWriteRequiresApproval"],
+      "properties": {
+        "payloadClass": { "type": "string", "enum": ["public", "metadata", "sensitive-metadata", "secret-blocked"] },
+        "secretLikeDetected": { "type": "boolean" },
+        "persistentWriteRequiresApproval": { "type": "boolean", "const": true }
+      }
+    },
+    "text": { "type": "string" },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "decisionId", "mode", "reason"],
+      "properties": {
+        "decision": { "type": "string", "enum": ["hold", "allow", "deny"] },
+        "decisionId": { "type": "string" },
+        "mode": { "type": "string", "enum": ["local-default", "manual", "policyfabric"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "resolvesMemoryId": { "type": "string" }
+  }
+}

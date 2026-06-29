@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/bearhistory-event.v1.json",
+  "title": "BearHistory Event v1",
+  "type": "object",
+  "required": [
+    "eventId",
+    "eventType",
+    "eventVersion",
+    "timestamp",
+    "profileMode",
+    "policy"
+  ],
+  "properties": {
+    "eventId": { "type": "string", "minLength": 1 },
+    "eventType": {
+      "type": "string",
+      "enum": [
+        "bearhistory.navigation",
+        "bearhistory.tabGraph",
+        "bearhistory.session",
+        "bearhistory.downloadMetadata",
+        "bearhistory.captureMetadata",
+        "bearhistory.automationAction",
+        "bearhistory.policyDecisionRef",
+        "bearhistory.credentialBoundary",
+        "bearhistory.redaction",
+        "bearhistory.tombstone",
+        "bearhistory.artifactRef"
+      ]
+    },
+    "eventVersion": { "const": "v1" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "profileMode": { "type": "string", "enum": ["human-secure", "agent-runtime"] },
+    "sessionId": { "type": "string" },
+    "agentId": { "type": "string" },
+    "workspaceId": { "type": "string" },
+    "url": { "type": "string" },
+    "origin": { "type": "string" },
+    "artifactRef": {
+      "type": "object",
+      "properties": {
+        "artifactId": { "type": "string" },
+        "artifactType": { "type": "string" },
+        "sha256": { "type": "string" },
+        "governedMount": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "required": ["authority", "decision"],
+      "properties": {
+        "authority": { "const": "PolicyFabric" },
+        "policyDecisionId": { "type": "string" },
+        "decision": { "type": "string", "enum": ["allow", "deny", "redact", "tombstone", "localOnly"] },
+        "reason": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "redaction": {
+      "type": "object",
+      "properties": {
+        "redacted": { "type": "boolean" },
+        "scope": { "type": "string" },
+        "tombstoneOf": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "opsExport": {
+      "type": "object",
+      "properties": {
+        "eligible": { "type": "boolean" },
+        "exported": { "type": "boolean" },
+        "opsEventId": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

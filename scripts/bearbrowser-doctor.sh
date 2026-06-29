@@ -39,6 +39,30 @@ else
   missing=1
 fi
 
+printf '\nBranding surface\n'
+if command -v brew >/dev/null 2>&1; then
+  if brew list --cask librewolf >/dev/null 2>&1; then
+    printf 'branding-warning: upstream librewolf cask is installed; uninstall it when validating BearBrowser product surface\n'
+    printf 'suggested: brew uninstall --cask librewolf\n'
+  else
+    printf 'ok: upstream librewolf cask not installed\n'
+  fi
+  if brew list --formula librewolf >/dev/null 2>&1; then
+    printf 'branding-warning: upstream librewolf formula is installed; uninstall it when validating BearBrowser product surface\n'
+    printf 'suggested: brew uninstall --formula librewolf\n'
+  else
+    printf 'ok: upstream librewolf formula not installed\n'
+  fi
+fi
+
+printf '\nSourceOS control plane\n'
+if python3 "$repo_root/scripts/verify-sourceos-control-plane.py"; then
+  printf 'ok: SourceOS control-plane manifests verified\n'
+else
+  printf 'error: SourceOS control-plane manifest verification failed\n' >&2
+  missing=1
+fi
+
 printf '\nAutomation surfaces\n'
 for cmd in node npx playwright carbonyl browsh elinks lynx w3m links; do
   if command -v "$cmd" >/dev/null 2>&1; then

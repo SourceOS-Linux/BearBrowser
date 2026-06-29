@@ -17,6 +17,8 @@ spec:
       - policy-pending
       - starting
       - running
+      - credential-pending
+      - credential-denied
       - blocked
       - artifact-created
       - ending
@@ -31,6 +33,8 @@ spec:
     - automationSurface
     - currentUrl
     - policyStatus
+    - credentialBrokerStatus
+    - credentialBoundaryState
     - artifactCount
     - lastEventAt
   workspaceEvents:
@@ -42,12 +46,34 @@ spec:
     - browser.capture.created
     - browser.policy.violation
     - browser.credential.boundary
+    - browser.credential.requested
+    - browser.credential.granted
+    - browser.credential.denied
+    - browser.credential.cleared
   userActions:
     - openSessionDetails
     - viewArtifacts
     - viewPolicyDecision
+    - viewCredentialBoundarySummary
     - requestSessionEnd
     - exportProvenanceSummary
+    - exportRedactedDiagnostics
+  workspaceOperations:
+    operationContract: agentplane/workspace-operation-plane.yaml
+    operationTypes:
+      - browser.session.start
+      - browser.capture.create
+      - browser.download.create
+      - browser.upload.create
+      - browser.automation.run
+      - browser.diagnostics.export_redacted
+    operationEvents:
+      - start
+      - progress
+      - failure
+      - retry
+      - cancel
+      - complete
   redaction:
     hideCredentials: true
     hideCookieValues: true

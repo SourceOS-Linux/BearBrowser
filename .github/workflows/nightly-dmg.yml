@@ -1,0 +1,126 @@
+name: BearBrowser Nightly DMG
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'settings/**'
+      - 'scripts/bearbrowser-patches.py'
+      - 'branding/**'
+
+jobs:
+  nightly-dmg:
+    name: Build and package (macOS)
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    env:
+      MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
+      VERSION: 150.0.1
+      RELEASE: 1
+      PROFILE: human-secure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Mozilla toolchain
+        uses: actions/cache@v4
+        with:
+          path: .mozbuild
+          key: mozbuild-${{ env.VERSION }}-macos15-v1
+          restore-keys: mozbuild-${{ env.VERSION }}-macos15-
+
+      - name: Cache Firefox source tarball
+        uses: actions/cache@v4
+        with:
+          path: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/firefox-${{ env.VERSION }}.source.tar.xz
+          key: ff-tarball-${{ env.VERSION }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ env.VERSION }}-macos15-v1
+
+      - name: Set up workspace from LibreWolf mirror
+        run: |
+          bash scripts/apply-sourceos-overlays.sh \
+            --profile ${{ env.PROFILE }} \
+            --ref latest \
+            --workspace-root build/workspaces
+
+      - name: Fetch Firefox source tarball
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source
+        run: make fetch
+
+      - name: Apply BearBrowser patches
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source
+        run: make dir
+
+      - name: Bootstrap Gecko build environment
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
+        run: |
+          MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild \
+            ./mach --no-interactive bootstrap --application-choice=browser
+
+      - name: Build BearBrowser
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
+        run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach build
+
+      - name: Package BearBrowser.app
+        run: |
+          bash scripts/bearbrowser-package-source-build.sh \
+            --workspace build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }} \
+            --profile ${{ env.PROFILE }} \
+            --out-dir build/nightly \
+            --version ${{ env.VERSION }} \
+            --skip-verify
+
+      - name: Create DMG
+        id: dmg
+        run: |
+          DATE=$(date +%Y%m%d)
+          DMG="BearBrowser-${{ env.VERSION }}-${DATE}-dev.dmg"
+          hdiutil create \
+            -volname "BearBrowser" \
+            -srcfolder "build/nightly/BearBrowser.app" \
+            -ov -format UDZO \
+            "build/nightly/${DMG}"
+          echo "name=${DMG}" >> $GITHUB_OUTPUT
+          echo "path=build/nightly/${DMG}" >> $GITHUB_OUTPUT
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dmg.outputs.name }}
+          path: ${{ steps.dmg.outputs.path }}
+          retention-days: 30
+
+      - name: Publish nightly release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          TAG="nightly-${DATE}"
+          # Replace any same-day release rather than fail on duplicate tag
+          gh release delete "$TAG" --yes 2>/dev/null || true
+          NOTES="$(printf '%s\n' \
+            'Automated nightly build from `main`.' \
+            '' \
+            '**Not notarized — developer use only.**' \
+            'To open: right-click BearBrowser.app → Open (bypasses Gatekeeper).' \
+            '' \
+            "Commit: \`${{ github.sha }}\`" \
+            "Firefox base: ${{ env.VERSION }}")"
+          gh release create "$TAG" \
+            "${{ steps.dmg.outputs.path }}" \
+            --title "BearBrowser Nightly ${DATE}" \
+            --notes "$NOTES" \
+            --prerelease

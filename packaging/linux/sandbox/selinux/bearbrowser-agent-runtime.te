@@ -1,0 +1,21 @@
+policy_module(bearbrowser_agent_runtime, 0.1.0)
+
+require {
+  type user_home_t;
+  type user_tmp_t;
+  class file { read write create getattr open unlink append map };
+  class dir { read write search add_name remove_name getattr };
+  class tcp_socket { create connect read write getattr };
+}
+
+type bearbrowser_agent_t;
+type bearbrowser_agent_exec_t;
+init_daemon_domain(bearbrowser_agent_t, bearbrowser_agent_exec_t)
+
+# Scaffold only. Distribution-specific policy should be generated from runtime traces.
+allow bearbrowser_agent_t user_tmp_t:dir { read write search add_name remove_name getattr };
+allow bearbrowser_agent_t user_tmp_t:file { read write create getattr open unlink append map };
+allow bearbrowser_agent_t self:tcp_socket { create connect read write getattr };
+
+dontaudit bearbrowser_agent_t user_home_t:file { read write create unlink append map };
+dontaudit bearbrowser_agent_t user_home_t:dir { write add_name remove_name };

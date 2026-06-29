@@ -1,0 +1,29 @@
+# BearBrowser agent-runtime AppArmor profile scaffold.
+# This is intentionally conservative and must be tuned per distribution package.
+
+#include <tunables/global>
+
+profile bearbrowser-agent-runtime flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  /usr/bin/bearbrowser r,
+  /usr/lib/bearbrowser/** r,
+  /usr/lib/bearbrowser/bearbrowser ix,
+
+  owner @{HOME}/.config/bearbrowser-agent-runtime/** rwk,
+  owner @{HOME}/.cache/bearbrowser-agent-runtime/** rwk,
+  owner @{HOME}/Downloads/** rw,
+
+  deny @{HOME}/.ssh/** rwklx,
+  deny @{HOME}/.aws/** rwklx,
+  deny @{HOME}/.azure/** rwklx,
+  deny @{HOME}/.kube/** rwklx,
+  deny /var/run/docker.sock rw,
+  deny /var/run/podman/podman.sock rw,
+
+  network inet stream,
+  network inet6 stream,
+
+  # PolicyFabric integration should narrow this further at runtime.
+}

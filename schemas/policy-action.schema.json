@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/policy-action.schema.json",
+  "title": "BearBrowser Policy Action",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "actionId", "timestamp", "actionType", "requestedBy", "target", "risk", "decision"],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "bearbrowser.policy_action.v1" },
+    "actionId": { "type": "string", "minLength": 12 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "actionType": {
+      "type": "string",
+      "enum": [
+        "navigate",
+        "share_page_with_agent",
+        "summarize_page",
+        "compare_tabs",
+        "request_credential",
+        "request_autofill",
+        "download_file",
+        "upload_file",
+        "read_clipboard",
+        "write_clipboard",
+        "run_automation",
+        "write_memory_candidate",
+        "commit_memory"
+      ]
+    },
+    "requestedBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["human", "agent", "system", "automation"] },
+        "id": { "type": "string" },
+        "displayName": { "type": "string" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["url", "tab", "page", "credential", "file", "clipboard", "memory", "automation"] },
+        "url": { "type": "string" },
+        "label": { "type": "string" }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "requiresUserApproval"],
+      "properties": {
+        "level": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "requiresUserApproval": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "decisionId", "mode"],
+      "properties": {
+        "state": { "type": "string", "enum": ["allow", "deny", "hold", "observe", "not_evaluated"] },
+        "decisionId": { "type": "string" },
+        "mode": { "type": "string", "enum": ["local-default", "policyfabric", "manual", "not_evaluated"] },
+        "reason": { "type": "string" }
+      }
+    }
+  }
+}

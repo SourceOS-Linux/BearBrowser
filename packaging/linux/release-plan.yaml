@@ -1,0 +1,42 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: LinuxReleasePlan
+metadata:
+  name: bearbrowser-linux
+  labels:
+    sourceos.dev/product: BearBrowser
+spec:
+  product: BearBrowser
+  appId: dev.sourceos.BearBrowser
+  primaryPlatform: linux
+  profiles:
+    - human-secure
+    - agent-runtime
+  artifactFamilies:
+    humanSecure:
+      - nix
+      - flatpak
+      - appimage
+      - deb
+      - rpm
+      - tarball
+    agentRuntime:
+      - nix
+      - oci
+      - tarball
+  desktopIntegration:
+    desktopEntry: packaging/linux/dev.sourceos.BearBrowser.desktop
+    appStream: packaging/linux/dev.sourceos.BearBrowser.metainfo.xml
+    icon: branding/bearbrowser.svg
+  sandbox:
+    apparmor: packaging/linux/sandbox/apparmor/bearbrowser-agent-runtime
+    seccomp: packaging/linux/sandbox/seccomp/bearbrowser-agent-runtime.json
+    selinux: packaging/linux/sandbox/selinux/bearbrowser-agent-runtime.te
+  gates:
+    - productBrandingVerified
+    - desktopMetadataValid
+    - appStreamMetadataValid
+    - iconPresent
+    - upstreamProductBrandingAbsent
+    - humanAndAgentProfilesSeparate
+    - releaseMetadataPresent
+    - lane13BinaryBuildComplete

@@ -1,0 +1,34 @@
+app-id: dev.sourceos.BearBrowser
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: bearbrowser
+finish-args:
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --filesystem=xdg-download:rw
+modules:
+  - name: bearbrowser-placeholder
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 bearbrowser-placeholder /app/bin/bearbrowser
+      - install -Dm644 dev.sourceos.BearBrowser.desktop /app/share/applications/dev.sourceos.BearBrowser.desktop
+      - install -Dm644 dev.sourceos.BearBrowser.metainfo.xml /app/share/metainfo/dev.sourceos.BearBrowser.metainfo.xml
+      - install -Dm644 dev.sourceos.BearBrowser.svg /app/share/icons/hicolor/scalable/apps/dev.sourceos.BearBrowser.svg
+    sources:
+      - type: script
+        dest-filename: bearbrowser-placeholder
+        commands:
+          - echo "BearBrowser Flatpak placeholder. Full browser binary depends on Lane 13."
+          - exit 64
+      - type: file
+        path: ../dev.sourceos.BearBrowser.desktop
+      - type: file
+        path: ../dev.sourceos.BearBrowser.metainfo.xml
+      - type: file
+        path: ../../branding/bearbrowser.svg
+        dest-filename: dev.sourceos.BearBrowser.svg

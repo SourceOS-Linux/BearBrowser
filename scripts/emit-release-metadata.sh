@@ -4,6 +4,8 @@ set -euo pipefail
 profile="agent-runtime"
 upstream_ref="unknown"
 out="build/release-metadata/bearbrowser-release-metadata.json"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
 
 usage() {
   cat <<'USAGE'
@@ -49,12 +51,15 @@ esac
 
 mkdir -p "$(dirname "$out")"
 
-revision="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-patch_hash="$(find patches -type f -name '*.patch' -print0 2>/dev/null | sort -z | xargs -0 cat 2>/dev/null | shasum -a 256 | awk '{print $1}')"
-policy_hash="$(shasum -a 256 policy/bearbrowser-contract.yaml | awk '{print $1}')"
+revision="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || echo unknown)"
+patch_hash="none"
+if [ -d "$repo_root/patches" ] && find "$repo_root/patches" -type f -name '*.patch' | grep -q .; then
+  patch_hash="$(find "$repo_root/patches" -type f -name '*.patch' -print0 | sort -z | xargs -0 cat | shasum -a 256 | awk '{print $1}')"
+fi
+policy_hash="$(shasum -a 256 "$repo_root/policy/bearbrowser-contract.yaml" | awk '{print $1}')"
 mount_hash="none"
-if [ -f mounts/agent-browser-mounts.yaml ]; then
-  mount_hash="$(shasum -a 256 mounts/agent-browser-mounts.yaml | awk '{print $1}')"
+if [ -f "$repo_root/mounts/agent-browser-mounts.yaml" ]; then
+  mount_hash="$(shasum -a 256 "$repo_root/mounts/agent-browser-mounts.yaml" | awk '{print $1}')"
 fi
 
 target_system="$(uname -s)-$(uname -m)"

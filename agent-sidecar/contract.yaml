@@ -1,0 +1,127 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BearBrowserAgentSidecarContract
+metadata:
+  name: bearbrowser-agent-sidecar-contract
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/surface: agent-sidecar
+spec:
+  principle: Agents observe and propose; PolicyFabric and the user grant authority.
+  defaultMode: observe
+  memoryDefault: candidateOnly
+  credentialDefault: denyForAgentRuntime
+  tabSharingDefault: explicitSelectionOnly
+  surfaces:
+    - id: current-page-summary
+      mode: summarize
+      reads:
+        - current-page-visible-text
+        - page-title
+        - canonical-url
+      writes: []
+      policyAction: summarize_page
+      provenanceEvents:
+        - automation.observed
+      defaultDecision: observe
+    - id: selected-tab-compare
+      mode: compare-tabs
+      reads:
+        - selected-tab-visible-text
+        - selected-tab-title
+        - selected-tab-url
+      writes: []
+      policyAction: compare_tabs
+      provenanceEvents:
+        - page.shared_with_agent
+        - automation.observed
+      defaultDecision: hold
+      requiresUserApproval: true
+    - id: action-proposal
+      mode: act-with-approval
+      reads:
+        - current-page-visible-text
+        - target-element-metadata
+      writes:
+        - proposed-click
+        - proposed-form-fill
+        - proposed-navigation
+      policyAction: run_automation
+      provenanceEvents:
+        - automation.action_requested
+        - automation.action_approved
+        - automation.action_denied
+      defaultDecision: hold
+      requiresUserApproval: true
+    - id: memory-candidate
+      mode: memory-preview
+      reads:
+        - user-approved-page-excerpt
+        - user-note
+      writes:
+        - memory-candidate
+      policyAction: write_memory_candidate
+      provenanceEvents:
+        - memory.candidate_created
+        - memory.committed
+        - memory.rejected
+      defaultDecision: hold
+      requiresUserApproval: true
+    - id: credential-boundary
+      mode: credential-guard
+      reads:
+        - credential-request-metadata
+      writes: []
+      policyAction: request_credential
+      provenanceEvents:
+        - credential.requested
+        - credential.granted
+        - credential.denied
+      defaultDecision: deny
+      appliesToProfiles:
+        - agent-runtime
+  modes:
+    observe:
+      description: Agent can inspect approved page metadata or visible text without mutation.
+      mutationAllowed: false
+      requiresUserApproval: false
+    summarize:
+      description: Agent summarizes the current approved page context.
+      mutationAllowed: false
+      requiresUserApproval: false
+    compare-tabs:
+      description: Agent compares explicitly selected tabs.
+      mutationAllowed: false
+      requiresUserApproval: true
+    act-with-approval:
+      description: Agent proposes mutations; user or PolicyFabric approval is required before execution.
+      mutationAllowed: true
+      requiresUserApproval: true
+    memory-preview:
+      description: Agent proposes memory candidates; persistent writes require approval.
+      mutationAllowed: true
+      requiresUserApproval: true
+    credential-guard:
+      description: Agent sees only credential request metadata and never receives secret values by default.
+      mutationAllowed: false
+      requiresUserApproval: true
+  redaction:
+    logSecretValues: false
+    logCredentialValues: false
+    logPaymentValues: false
+    logCookieValues: false
+    allowedPayloadClasses:
+      - public
+      - metadata
+      - sensitive-metadata
+      - secret-blocked
+  integration:
+    policyFabric:
+      requiredForMutation: true
+      requiredForCredentialAccess: true
+      requiredForCrossTabSharing: true
+    agentPlane:
+      capabilityRegistrationRequired: true
+      sessionIdentityRequired: true
+    provenance:
+      eventSchema: schemas/provenance-event.schema.json
+      actionSchema: schemas/policy-action.schema.json

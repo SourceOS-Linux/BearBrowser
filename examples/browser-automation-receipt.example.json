@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "bearbrowser.browser_automation_receipt.v1",
+  "receiptId": "urn:srcos:receipt:browser-automation:local-smoke-001",
+  "sessionRef": "bb-session-example",
+  "ownerRef": "agent-example",
+  "transport": "cdp",
+  "permissionScope": ["read_dom", "click", "type"],
+  "origin": "local",
+  "userVisible": true,
+  "revocable": true,
+  "policyDecisionRef": "policy-decision-example",
+  "evidenceRefs": [
+    "artifact://bearbrowser/capture/example",
+    "evt-provenance-example-001"
+  ],
+  "capturedAt": "2026-05-06T18:00:00Z",
+  "status": "active",
+  "tabScope": ["tab-1"],
+  "displayName": "Example Agent (local smoke)"
+}
