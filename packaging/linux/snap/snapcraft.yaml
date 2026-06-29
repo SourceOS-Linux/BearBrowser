@@ -3,7 +3,7 @@ base: core22
 version: '0.1.0'
 summary: Gecko-first privacy browser with 101 fingerprinting protections
 description: |
-  BearBrowser is built on Firefox/LibreWolf ESR with a 101-surface
+  BearBrowser is built on Firefox ESR with a 101-surface
   fingerprinting shield. No telemetry, no cloud sync, anti-tracking built in.
 grade: stable
 confinement: strict
