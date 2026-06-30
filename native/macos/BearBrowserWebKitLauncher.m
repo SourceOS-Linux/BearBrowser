@@ -339,6 +339,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(nonatomic,assign) BOOL isPrivate;
 @property(assign) BOOL compact; // favicon-only mode for very narrow tabs
 @property(strong) NSImageView *faviconView;
+@property(strong) NSProgressIndicator *loadingSpinner;
 @property(strong) NSTextField *titleLabel;
 @property(strong) NSButton    *closeButton;
 @property(weak)   id<BBTabItemDelegate> delegate;
@@ -358,6 +359,12 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   _faviconView.imageScaling=NSImageScaleProportionallyUpOrDown;
   if (_compact) _faviconView.autoresizingMask=NSViewMinXMargin|NSViewMaxXMargin;
   [self addSubview:_faviconView];
+  // Animated loading spinner (overlaps favicon, hidden when not loading).
+  _loadingSpinner=[[NSProgressIndicator alloc]initWithFrame:NSMakeRect(favX,10,16,16)];
+  _loadingSpinner.style=NSProgressIndicatorStyleSpinning;
+  _loadingSpinner.controlSize=NSControlSizeMini; _loadingSpinner.hidden=YES;
+  if (_compact) _loadingSpinner.autoresizingMask=NSViewMinXMargin|NSViewMaxXMargin;
+  [self addSubview:_loadingSpinner];
   // Title — hidden in compact mode.
   _titleLabel=[[NSTextField alloc]initWithFrame:NSMakeRect(28,8,MAX(0,f.size.width-54),20)];
   _titleLabel.autoresizingMask=NSViewWidthSizable;
@@ -384,18 +391,24 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   self.titleLabel.stringValue=title.length?title:@"New Tab";
   self.toolTip=title.length?title:@"New Tab"; // reveals full title on narrow/compact tabs
   self.titleLabel.textColor=self.isActive?[NSColor labelColor]:[NSColor secondaryLabelColor];
-  if (loading) {
-    NSImage *spinner=[NSImage imageWithSystemSymbolName:@"arrow.2.circlepath" accessibilityDescription:@"Loading"];
-    self.faviconView.image=spinner;
-  } else if (favicon) {
-    self.faviconView.image=favicon;
+  if (loading && !self.isPrivate) {
+    // Animated NSProgressIndicator beats the static SF symbol
+    self.faviconView.hidden=YES;
+    self.loadingSpinner.hidden=NO;
+    [self.loadingSpinner startAnimation:nil];
   } else {
-    NSImage *globe=[NSImage imageWithSystemSymbolName:@"globe" accessibilityDescription:@"Page"];
-    [globe setTemplate:YES]; self.faviconView.image=globe;
-  }
-  if (self.isPrivate) {
-    NSImage *priv=[NSImage imageWithSystemSymbolName:@"eyeglasses" accessibilityDescription:@"Private"];
-    [priv setTemplate:YES]; self.faviconView.image=priv;
+    [self.loadingSpinner stopAnimation:nil];
+    self.loadingSpinner.hidden=YES;
+    self.faviconView.hidden=NO;
+    if (self.isPrivate) {
+      NSImage *priv=[NSImage imageWithSystemSymbolName:@"eyeglasses" accessibilityDescription:@"Private"];
+      [priv setTemplate:YES]; self.faviconView.image=priv;
+    } else if (favicon) {
+      self.faviconView.image=favicon;
+    } else {
+      NSImage *globe=[NSImage imageWithSystemSymbolName:@"globe" accessibilityDescription:@"Page"];
+      [globe setTemplate:YES]; self.faviconView.image=globe;
+    }
   }
 }
 - (void)setIsActive:(BOOL)active {
