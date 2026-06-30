@@ -688,6 +688,127 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @implementation BBBookmark
 @end
 
+// ── BBPasswordStore ───────────────────────────────────────────────────────────
+// Keychain-backed login save/fill. One Keychain item per (host, username) pair,
+// kSecClass=GenericPassword, service="BearBrowser-login:<host>", account=<username>,
+// data=<password UTF-8>. macOS Keychain handles encryption-at-rest + user gating
+// (login keychain unlocks automatically; if Touch ID/passcode is required on this
+// Mac, the system prompts on first access per session — we never see the password
+// outside the moment we fill it into a page form).
+@interface BBPasswordEntry : NSObject
+@property(copy) NSString *host, *username, *password;
+@end
+@implementation BBPasswordEntry
+@end
+@interface BBPasswordStore : NSObject
++ (instancetype)shared;
+- (NSString *)serviceForHost:(NSString *)host;
+- (BOOL)saveHost:(NSString *)host username:(NSString *)user password:(NSString *)pass;
+- (NSArray<BBPasswordEntry *> *)entriesForHost:(NSString *)host;
+- (BOOL)removeHost:(NSString *)host username:(NSString *)user;
+- (NSArray<BBPasswordEntry *> *)allEntries;  // for Settings → Saved Passwords
+@end
+@implementation BBPasswordStore
++ (instancetype)shared { static BBPasswordStore *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (NSString *)serviceForHost:(NSString *)host {
+  NSString *h=host.lowercaseString?:@"";
+  if ([h hasPrefix:@"www."]) h=[h substringFromIndex:4];
+  return [@"BearBrowser-login:" stringByAppendingString:h];
+}
+- (BOOL)saveHost:(NSString *)host username:(NSString *)user password:(NSString *)pass {
+  if (!host.length||!user.length||!pass.length) return NO;
+  NSString *svc=[self serviceForHost:host];
+  NSData *pwData=[pass dataUsingEncoding:NSUTF8StringEncoding];
+  // Delete any existing item for (svc, user) so we can update-by-recreate.
+  NSDictionary *del=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                      (__bridge id)kSecAttrService:svc,
+                      (__bridge id)kSecAttrAccount:user};
+  SecItemDelete((__bridge CFDictionaryRef)del);
+  NSDictionary *add=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                      (__bridge id)kSecAttrService:svc,
+                      (__bridge id)kSecAttrAccount:user,
+                      (__bridge id)kSecValueData:pwData,
+                      (__bridge id)kSecAttrLabel:[NSString stringWithFormat:@"BearBrowser — %@",host]};
+  OSStatus rc=SecItemAdd((__bridge CFDictionaryRef)add,NULL);
+  return rc==errSecSuccess;
+}
+- (NSArray<BBPasswordEntry *> *)entriesForHost:(NSString *)host {
+  if (!host.length) return @[];
+  NSString *svc=[self serviceForHost:host];
+  NSDictionary *q=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                    (__bridge id)kSecAttrService:svc,
+                    (__bridge id)kSecMatchLimit:(__bridge id)kSecMatchLimitAll,
+                    (__bridge id)kSecReturnAttributes:@YES,
+                    (__bridge id)kSecReturnData:@YES};
+  CFTypeRef result=NULL;
+  OSStatus rc=SecItemCopyMatching((__bridge CFDictionaryRef)q,&result);
+  if (rc!=errSecSuccess||!result) return @[];
+  NSArray *items=(__bridge_transfer NSArray *)result;
+  NSMutableArray *out=[NSMutableArray array];
+  for (NSDictionary *d in items) {
+    BBPasswordEntry *e=[BBPasswordEntry new];
+    e.host=host;
+    e.username=d[(__bridge id)kSecAttrAccount]?:@"";
+    NSData *pwData=d[(__bridge id)kSecValueData];
+    e.password=pwData?[[NSString alloc]initWithData:pwData encoding:NSUTF8StringEncoding]:@"";
+    if (e.username.length && e.password.length) [out addObject:e];
+  }
+  return out;
+}
+- (BOOL)removeHost:(NSString *)host username:(NSString *)user {
+  if (!host.length||!user.length) return NO;
+  NSDictionary *del=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                      (__bridge id)kSecAttrService:[self serviceForHost:host],
+                      (__bridge id)kSecAttrAccount:user};
+  return SecItemDelete((__bridge CFDictionaryRef)del)==errSecSuccess;
+}
+- (NSArray<BBPasswordEntry *> *)allEntries {
+  NSDictionary *q=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                    (__bridge id)kSecMatchLimit:(__bridge id)kSecMatchLimitAll,
+                    (__bridge id)kSecReturnAttributes:@YES};
+  CFTypeRef result=NULL;
+  if (SecItemCopyMatching((__bridge CFDictionaryRef)q,&result)!=errSecSuccess||!result) return @[];
+  NSArray *items=(__bridge_transfer NSArray *)result;
+  NSMutableArray *out=[NSMutableArray array];
+  for (NSDictionary *d in items) {
+    NSString *svc=d[(__bridge id)kSecAttrService]?:@"";
+    if (![svc hasPrefix:@"BearBrowser-login:"]) continue;
+    BBPasswordEntry *e=[BBPasswordEntry new];
+    e.host=[svc substringFromIndex:18];
+    e.username=d[(__bridge id)kSecAttrAccount]?:@"";
+    e.password=@""; // listing doesn't fetch passwords (avoid bulk Keychain prompts)
+    [out addObject:e];
+  }
+  return out;
+}
+@end
+
+// Datasource/delegate for the Saved Passwords table in Settings → Manage Saved Passwords.
+@interface BBSavedPasswordsDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@property(strong) NSMutableArray<BBPasswordEntry *> *entries;
+@property(weak)   NSTableView *tv;
+- (instancetype)initWithEntries:(NSMutableArray<BBPasswordEntry *> *)e tableView:(NSTableView *)tv;
+- (void)removeSelected:(id)sender;
+@end
+@implementation BBSavedPasswordsDS
+- (instancetype)initWithEntries:(NSMutableArray<BBPasswordEntry *> *)e tableView:(NSTableView *)tv {
+  self=[super init]; _entries=e?:[NSMutableArray array]; _tv=tv; return self;
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return _entries.count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  if (row<0||row>=(NSInteger)_entries.count) return nil;
+  BBPasswordEntry *e=_entries[row];
+  NSTextField *t=[NSTextField labelWithString:[col.identifier isEqualToString:@"site"]?e.host:e.username];
+  t.font=[NSFont systemFontOfSize:12]; return t;
+}
+- (void)removeSelected:(id)sender {
+  NSInteger row=_tv.selectedRow; if (row<0||row>=(NSInteger)_entries.count) return;
+  BBPasswordEntry *e=_entries[row];
+  [[BBPasswordStore shared] removeHost:e.host username:e.username];
+  [_entries removeObjectAtIndex:row]; [_tv reloadData];
+}
+@end
+
 @interface BBBookmarksStore : NSObject
 @property(strong) NSMutableArray<BBBookmark *> *items;
 + (instancetype)shared;
@@ -3511,6 +3632,35 @@ static NSMutableArray *gBBWindowControllers;
     @"})();";
   [config.userContentController addUserScript:[[WKUserScript alloc]
     initWithSource:audioHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO]];
+  // ── Login form autofill: save-on-submit + fill-on-load ────────────────────
+  // Strategy: find each password field, walk up to its <form>, treat the most
+  // plausible nearby text/email/tel input as the username. On submit, post the
+  // values to native; native asks "Save?" then writes to Keychain. On DOMContent
+  // we post the host so native can hand back stored credentials for offer-to-fill.
+  [config.userContentController addScriptMessageHandler:self name:@"loginform"];
+  NSString *autofillHook=
+    @"(function(){'use strict';"
+    @"function post(name,body){try{window.webkit.messageHandlers.loginform.postMessage({k:name,b:body});}catch(e){}}"
+    @"function findUserFor(pw){var f=pw.form;if(!f)return null;var ins=f.querySelectorAll('input');var last=null;"
+    @"for(var i=0;i<ins.length;i++){var n=ins[i];if(n===pw)break;var t=(n.type||'text').toLowerCase();"
+    @"if(t==='text'||t==='email'||t==='tel'||t==='username')last=n;}return last;}"
+    @"function bind(pw){if(pw.__bbBound)return;pw.__bbBound=true;var f=pw.form;if(!f)return;"
+    @"f.addEventListener('submit',function(){try{var u=findUserFor(pw);if(!u||!u.value||!pw.value)return;"
+    @"post('save',{host:location.host,user:String(u.value),pass:String(pw.value)});}catch(e){}},true);}"
+    @"function scan(){document.querySelectorAll('input[type=password]').forEach(bind);}"
+    @"function applyCred(cred){try{var pws=document.querySelectorAll('input[type=password]');"
+    @"for(var i=0;i<pws.length;i++){var pw=pws[i],u=findUserFor(pw);if(!u)continue;"
+    @"u.value=cred.user;pw.value=cred.pass;"
+    @"u.dispatchEvent(new Event('input',{bubbles:true}));u.dispatchEvent(new Event('change',{bubbles:true}));"
+    @"pw.dispatchEvent(new Event('input',{bubbles:true}));pw.dispatchEvent(new Event('change',{bubbles:true}));"
+    @"return;}}catch(e){}}"
+    @"window.__bbAutofill=applyCred;"
+    @"document.addEventListener('DOMContentLoaded',function(){scan();post('lookup',{host:location.host});},true);"
+    @"new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});"
+    @"if(document.readyState!=='loading'){scan();post('lookup',{host:location.host});}"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:autofillHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES]];
   // ── Fingerprinting shield (injected before any page script runs) ──────────
   // Cross-referenced against Mozilla Bugzilla RFP bugs and Firefox test suite:
   //   Bug 418986  (FIXED)  — screen / CSS media query resolution
@@ -5056,6 +5206,48 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
 }
 - (void)readAloud:(id)s           { [[BBVoice shared] readPage:self.webView]; }
+// ── Login autofill UI ─────────────────────────────────────────────────────────
+- (void)offerSaveLoginForHost:(NSString *)host username:(NSString *)user password:(NSString *)pass {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Save password for %@?",host];
+  a.informativeText=[NSString stringWithFormat:@"BearBrowser will store the password for “%@” in your macOS Keychain.",user];
+  [a addButtonWithTitle:@"Save"];
+  [a addButtonWithTitle:@"Never for this site"];
+  [a addButtonWithTitle:@"Not now"];
+  // Per-host opt-out persists in user defaults; lookup short-circuits if set.
+  NSString *neverKey=[NSString stringWithFormat:@"BBLoginNever_%@",host.lowercaseString];
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:neverKey]) return;
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc==NSAlertFirstButtonReturn) {
+      [[BBPasswordStore shared] saveHost:host username:user password:pass];
+    } else if (rc==NSAlertSecondButtonReturn) {
+      [[NSUserDefaults standardUserDefaults] setBool:YES forKey:neverKey];
+    }
+  }];
+}
+- (void)offerFillForTab:(BBTab *)tab webView:(WKWebView *)wv entries:(NSArray<BBPasswordEntry *> *)entries {
+  if (!entries.count||!wv) return;
+  // Single match: silent auto-fill (Chrome's behaviour). Multiple: prompt the user.
+  if (entries.count==1) {
+    [self fillCredential:entries[0] intoWebView:wv]; return;
+  }
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Sign in with a saved account?";
+  a.informativeText=@"BearBrowser has more than one saved login for this site.";
+  for (NSInteger k=0;k<MIN((NSInteger)entries.count,3);k++) [a addButtonWithTitle:entries[k].username];
+  [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    NSInteger idx=rc-NSAlertFirstButtonReturn;
+    if (idx>=0&&idx<(NSInteger)entries.count) [self fillCredential:entries[idx] intoWebView:wv];
+  }];
+}
+- (void)fillCredential:(BBPasswordEntry *)e intoWebView:(WKWebView *)wv {
+  if (!e||!wv) return;
+  NSString *js=[NSString stringWithFormat:
+    @"if(typeof window.__bbAutofill==='function')window.__bbAutofill({user:%@,pass:%@});",
+    [self jsStringLiteral:e.username], [self jsStringLiteral:e.password]];
+  [wv evaluateJavaScript:js completionHandler:nil];
+}
 - (void)muteTab:(id)s {
   BBTab *tab=self.activeTab; if (!tab) return;
   tab.muted=!tab.muted;
@@ -5762,6 +5954,38 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSTextField *lbl=(NSTextField *)objc_getAssociatedObject(self,"BBDLPathLabel");
   if (lbl) { NSString *shown=[path stringByAbbreviatingWithTildeInPath]; lbl.stringValue=shown; lbl.toolTip=shown; }
 }
+- (void)showSavedPasswords:(id)s {
+  NSArray<BBPasswordEntry *> *entries=[[BBPasswordStore shared] allEntries];
+  NSWindow *pw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,520,420)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  pw.releasedWhenClosed=NO; pw.title=@"Saved Passwords"; [pw center];
+  NSView *cv=pw.contentView;
+  NSTextField *hint=[NSTextField labelWithString:
+    @"Saved logins live in the macOS Keychain. Open “Keychain Access” to view the password values."];
+  hint.frame=NSMakeRect(12,pw.contentView.bounds.size.height-40,496,28);
+  hint.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
+  hint.textColor=[NSColor secondaryLabelColor]; hint.font=[NSFont systemFontOfSize:11];
+  hint.maximumNumberOfLines=2; [cv addSubview:hint];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,40,520,pw.contentView.bounds.size.height-80)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=26;
+  NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"site"]; c1.title=@"Site"; c1.width=240;
+  NSTableColumn *c2=[[NSTableColumn alloc]initWithIdentifier:@"user"]; c2.title=@"Username"; c2.width=240;
+  [tv addTableColumn:c1]; [tv addTableColumn:c2];
+  sv.documentView=tv; [cv addSubview:sv];
+  // Tiny inline datasource using objc_setAssociatedObject — entries cached on the window.
+  BBSavedPasswordsDS *ds=[[BBSavedPasswordsDS alloc]initWithEntries:[entries mutableCopy] tableView:tv];
+  tv.dataSource=ds; tv.delegate=ds;
+  objc_setAssociatedObject(pw,@"ds",ds,OBJC_ASSOCIATION_RETAIN);
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,8,100,28)];
+  rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded;
+  rm.target=ds; rm.action=@selector(removeSelected:); [cv addSubview:rm];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(420,8,90,28)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r";
+  done.target=pw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:pw completionHandler:nil];
+}
 - (void)clearMediaPermissions:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
   for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
@@ -5773,7 +5997,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=420;
+  CGFloat W=470,Hh=460;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -5826,6 +6050,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *clearPerms=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
   clearPerms.title=@"Clear All Media Permissions…"; clearPerms.bezelStyle=NSBezelStyleRounded;
   clearPerms.target=self; clearPerms.action=@selector(clearMediaPermissions:); [cv addSubview:clearPerms];
+  y-=38;
+  label(@"Saved passwords:",y+4);
+  NSButton *pwBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  pwBtn.title=@"Manage Saved Passwords…"; pwBtn.bezelStyle=NSBezelStyleRounded;
+  pwBtn.target=self; pwBtn.action=@selector(showSavedPasswords:); [cv addSubview:pwBtn];
   NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
   save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
   save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
@@ -6045,6 +6274,27 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     if (tab.isPlayingAudio!=playing) {
       tab.isPlayingAudio=playing;
       dispatch_async(dispatch_get_main_queue(),^{ [self reloadTabBar]; });
+    }
+  } else if ([msg.name isEqualToString:@"loginform"]) {
+    NSDictionary *m=[msg.body isKindOfClass:[NSDictionary class]]?(NSDictionary *)msg.body:@{};
+    NSString *kind=m[@"k"]; NSDictionary *body=m[@"b"]; WKWebView *wv=msg.webView;
+    if (![kind isKindOfClass:[NSString class]]||![body isKindOfClass:[NSDictionary class]]) return;
+    BBTab *tab=[self tabForWebView:wv];
+    // Never autofill/save inside a private tab — private mode should be hands-off.
+    if (tab.isPrivate) return;
+    if ([kind isEqualToString:@"save"]) {
+      NSString *host=body[@"host"], *user=body[@"user"], *pass=body[@"pass"];
+      if (![host isKindOfClass:[NSString class]]||![user isKindOfClass:[NSString class]]||![pass isKindOfClass:[NSString class]]) return;
+      if (!host.length||!user.length||!pass.length) return;
+      // De-dupe: skip the prompt when an identical (host,user,pass) is already saved.
+      NSArray<BBPasswordEntry *> *existing=[[BBPasswordStore shared] entriesForHost:host];
+      for (BBPasswordEntry *e in existing) if ([e.username isEqualToString:user]&&[e.password isEqualToString:pass]) return;
+      dispatch_async(dispatch_get_main_queue(),^{ [self offerSaveLoginForHost:host username:user password:pass]; });
+    } else if ([kind isEqualToString:@"lookup"]) {
+      NSString *host=body[@"host"]; if (![host isKindOfClass:[NSString class]]||!host.length) return;
+      NSArray<BBPasswordEntry *> *entries=[[BBPasswordStore shared] entriesForHost:host];
+      if (!entries.count) return;
+      dispatch_async(dispatch_get_main_queue(),^{ [self offerFillForTab:tab webView:wv entries:entries]; });
     }
   }
 }
