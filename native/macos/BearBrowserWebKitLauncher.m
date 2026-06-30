@@ -1336,6 +1336,72 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @implementation BBDownloadItem
 @end
 
+// Tiny NSView subclass for download-panel rows: drag the destination file URL
+// out to Finder / Mail / another app once the download has completed.
+@interface BBDownloadRowView : NSView <NSDraggingSource>
+@property(strong) NSURL *fileURL;
+@end
+@implementation BBDownloadRowView
+- (NSDragOperation)draggingSession:(NSDraggingSession *)s sourceOperationMaskForDraggingContext:(NSDraggingContext)c { return NSDragOperationCopy; }
+- (void)mouseDown:(NSEvent *)e {
+  if (!self.fileURL) { [super mouseDown:e]; return; }
+  if (![[NSFileManager defaultManager] fileExistsAtPath:self.fileURL.path]) { [super mouseDown:e]; return; }
+  NSPoint start=e.locationInWindow;
+  NSEvent *evt=e;
+  while (evt) {
+    evt=[self.window nextEventMatchingMask:NSEventMaskLeftMouseDragged|NSEventMaskLeftMouseUp];
+    if (evt.type==NSEventTypeLeftMouseUp) { [super mouseDown:e]; return; }
+    if (evt.type==NSEventTypeLeftMouseDragged) {
+      NSPoint p=evt.locationInWindow;
+      if (hypot(p.x-start.x,p.y-start.y)>6) break;
+    }
+  }
+  NSDraggingItem *di=[[NSDraggingItem alloc]initWithPasteboardWriter:self.fileURL];
+  NSImage *icon=[[NSWorkspace sharedWorkspace] iconForFile:self.fileURL.path];
+  [icon setSize:NSMakeSize(32,32)];
+  NSPoint local=[self convertPoint:start fromView:nil];
+  [di setDraggingFrame:NSMakeRect(local.x-16,local.y-16,32,32) contents:icon];
+  [self beginDraggingSessionWithItems:@[di] event:e source:self];
+}
+@end
+
+// Bookmarks-bar NSView subclass that accepts URL drops (Chrome parity: drag a
+// URL onto the bar to add a bookmark).
+@protocol BBBookmarksBarDelegate <NSObject>
+- (void)bookmarksBarDidDropURL:(NSString *)urlString;
+@end
+@interface BBBookmarksBarView : NSView
+@property(weak) id<BBBookmarksBarDelegate> bbDelegate;
+@end
+@implementation BBBookmarksBarView
+- (instancetype)initWithFrame:(NSRect)f {
+  self=[super initWithFrame:f];
+  [self registerForDraggedTypes:@[NSPasteboardTypeURL,NSPasteboardTypeString]];
+  return self;
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  if ([pb canReadObjectForClasses:@[[NSURL class]] options:nil]) return NSDragOperationCopy;
+  if ([pb canReadObjectForClasses:@[[NSString class]] options:nil]) return NSDragOperationCopy;
+  return NSDragOperationNone;
+}
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return YES; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  NSArray *urls=[pb readObjectsForClasses:@[[NSURL class]] options:nil];
+  NSString *dropped=nil;
+  if (urls.count) dropped=[urls.firstObject absoluteString];
+  else {
+    NSArray *strs=[pb readObjectsForClasses:@[[NSString class]] options:nil];
+    if (strs.count) dropped=[strs.firstObject stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  }
+  if (!dropped.length) return NO;
+  if ([self.bbDelegate respondsToSelector:@selector(bookmarksBarDidDropURL:)])
+    [self.bbDelegate bookmarksBarDidDropURL:dropped];
+  return YES;
+}
+@end
+
 @interface BBDownloadPanel : NSView
 @property(strong) NSMutableArray<BBDownloadItem *> *items;
 @property(strong) NSScrollView *scroll;
@@ -1414,8 +1480,9 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   }
 }
 - (NSView *)rowForItem:(BBDownloadItem *)item {
-  NSView *row=[[NSView alloc]initWithFrame:NSZeroRect]; row.wantsLayer=YES;
+  BBDownloadRowView *row=[[BBDownloadRowView alloc]initWithFrame:NSZeroRect]; row.wantsLayer=YES;
   row.layer.backgroundColor=[NSColor controlBackgroundColor].CGColor;
+  if (item.state==BBDownloadStateDone) row.fileURL=item.destURL;
   // Filename
   NSTextField *name=[[NSTextField alloc]initWithFrame:NSZeroRect];
   name.translatesAutoresizingMaskIntoConstraints=NO;
@@ -3358,7 +3425,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @end
 
 // ── BBDelegate ────────────────────────────────────────────────────────────────
-@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,BBAddressFieldDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate,NSMenuDelegate>
+@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,BBAddressFieldDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate,NSMenuDelegate,BBBookmarksBarDelegate>
 @property(strong) NSWindow *window;
 @property(strong) NSMutableArray<BBTab *> *tabs;
 @property(strong) NSMutableArray<NSDictionary *> *recentlyClosed; // @{url,title}, newest last
@@ -3483,6 +3550,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(findM,@"Find…",@selector(toggleFind:),@"f",Cmd);
   mi(findM,@"Find Next",@selector(findNext:),@"g",Cmd);
   mi(findM,@"Find Previous",@selector(findPrev:),@"g",Cmd|Shift);
+  mi(findM,@"Use Selection for Find",@selector(useSelectionForFind:),@"e",Cmd);
 
   // ── View ──
   NSMenu *viewM=submenu(@"View");
@@ -3526,6 +3594,13 @@ static NSMutableArray *gBBWindowControllers;
   mi(histM,@"Show Full History",@selector(showHistory:),@"y",Cmd);
   [histM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧⌫ is already bound on the app menu's Clear Browsing Data.
+  [histM addItem:[NSMenuItem separatorItem]];
+  // "Recent Pages" inline submenu — last 10 visits, populated on-open via the
+  // NSMenuDelegate hook (same pattern as Recently Closed).
+  NSMenuItem *recentRoot=[histM addItemWithTitle:@"Recent Pages" action:nil keyEquivalent:@""];
+  NSMenu *recentM=[[NSMenu alloc]initWithTitle:@"Recent Pages"]; recentM.delegate=self;
+  recentRoot.submenu=recentM;
+  [histM addItem:[NSMenuItem separatorItem]];
   [histM addItemWithTitle:@"Clear Browsing Data…" action:@selector(clearHistory:) keyEquivalent:@""];
 
   // ── Bookmarks ──
@@ -3562,6 +3637,9 @@ static NSMutableArray *gBBWindowControllers;
   [tabM addItem:[NSMenuItem separatorItem]];
   mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
   [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
+  // Cmd+Option+→ / ← — Chrome's macOS aliases for next/prev tab.
+  [tabM addItemWithTitle:@"" action:@selector(nextTab:) keyEquivalent:@""].keyEquivalentModifierMask=Cmd|Opt;
+  [tabM addItemWithTitle:@"" action:@selector(prevTab:) keyEquivalent:@""].keyEquivalentModifierMask=Cmd|Opt;
   [tabM addItemWithTitle:@"Move Tab Left"  action:@selector(moveTabLeft:)  keyEquivalent:@"["].keyEquivalentModifierMask=Ctrl|Shift;
   [tabM addItemWithTitle:@"Move Tab Right" action:@selector(moveTabRight:) keyEquivalent:@"]"].keyEquivalentModifierMask=Ctrl|Shift;
   [tabM addItem:[NSMenuItem separatorItem]];
@@ -3771,7 +3849,9 @@ static NSMutableArray *gBBWindowControllers;
   [self.root addSubview:self.findBar];
 
   // Bookmarks bar (hidden by default, Cmd+Shift+B toggles)
-  self.bookmarksBar=[[NSView alloc]initWithFrame:NSMakeRect(0,H-kToolbarH-kTabBarH-kBMBarH,W,kBMBarH)];
+  BBBookmarksBarView *bb=[[BBBookmarksBarView alloc]initWithFrame:NSMakeRect(0,H-kToolbarH-kTabBarH-kBMBarH,W,kBMBarH)];
+  bb.bbDelegate=self;
+  self.bookmarksBar=bb;
   self.bookmarksBar.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
   self.bookmarksBar.wantsLayer=YES; self.bookmarksBar.layer.backgroundColor=[NSColor windowBackgroundColor].CGColor;
   self.bookmarksBar.hidden=YES;
@@ -7127,19 +7207,61 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 // Populate History ▸ Recently Closed when it opens (newest first).
 - (void)menuNeedsUpdate:(NSMenu *)menu {
-  if (![menu.title isEqualToString:@"Recently Closed"]) return;
-  [menu removeAllItems];
-  if (!self.recentlyClosed.count) {
-    [menu addItemWithTitle:@"No Recently Closed Tabs" action:nil keyEquivalent:@""].enabled=NO;
+  if ([menu.title isEqualToString:@"Recently Closed"]) {
+    [menu removeAllItems];
+    if (!self.recentlyClosed.count) {
+      [menu addItemWithTitle:@"No Recently Closed Tabs" action:nil keyEquivalent:@""].enabled=NO;
+      return;
+    }
+    for (NSInteger k=(NSInteger)self.recentlyClosed.count-1;k>=0;k--) {
+      NSDictionary *e=self.recentlyClosed[k];
+      NSString *t=e[@"title"]; if(!t.length) t=e[@"url"];
+      if (t.length>60) t=[[t substringToIndex:57] stringByAppendingString:@"…"];
+      NSMenuItem *it=[menu addItemWithTitle:t action:@selector(reopenSpecificClosed:) keyEquivalent:@""];
+      it.target=self; it.tag=k; it.toolTip=e[@"url"];
+    }
     return;
   }
-  for (NSInteger k=(NSInteger)self.recentlyClosed.count-1;k>=0;k--) {
-    NSDictionary *e=self.recentlyClosed[k];
-    NSString *t=e[@"title"]; if(!t.length) t=e[@"url"];
-    if (t.length>60) t=[[t substringToIndex:57] stringByAppendingString:@"…"];
-    NSMenuItem *it=[menu addItemWithTitle:t action:@selector(reopenSpecificClosed:) keyEquivalent:@""];
-    it.target=self; it.tag=k; it.toolTip=e[@"url"];
+  if ([menu.title isEqualToString:@"Recent Pages"]) {
+    [menu removeAllItems];
+    // Deduplicate by URL so the same page revisited 5 times doesn't fill the list.
+    NSArray<BBHistoryEntry *> *all=[BBHistoryStore shared].entries;
+    NSMutableArray<BBHistoryEntry *> *shown=[NSMutableArray array];
+    NSMutableSet<NSString *> *seen=[NSMutableSet set];
+    for (NSInteger k=(NSInteger)all.count-1;k>=0&&shown.count<10;k--) {
+      BBHistoryEntry *e=all[k]; if (!e.urlString.length||[seen containsObject:e.urlString]) continue;
+      [seen addObject:e.urlString]; [shown addObject:e];
+    }
+    if (!shown.count) {
+      [menu addItemWithTitle:@"No Recent Pages" action:nil keyEquivalent:@""].enabled=NO;
+      return;
+    }
+    for (BBHistoryEntry *e in shown) {
+      NSString *t=e.title.length?e.title:e.urlString;
+      if (t.length>60) t=[[t substringToIndex:57] stringByAppendingString:@"…"];
+      NSMenuItem *it=[menu addItemWithTitle:t action:@selector(openRecentPage:) keyEquivalent:@""];
+      it.target=self; it.representedObject=e.urlString; it.toolTip=e.urlString;
+    }
+    return;
   }
+}
+- (void)bookmarksBarDidDropURL:(NSString *)dropped {
+  if (!dropped.length) return;
+  NSURL *u=[NSURL URLWithString:dropped];
+  if (!u.scheme.length) {
+    NSURL *https=[NSURL URLWithString:[@"https://" stringByAppendingString:dropped]];
+    if (https.host.length) u=https;
+  }
+  if (!u.absoluteString.length) return;
+  NSString *title=u.host?:u.absoluteString;
+  if (![[BBBookmarksStore shared] isBookmarked:u.absoluteString])
+    [[BBBookmarksStore shared] addTitle:title url:u.absoluteString folder:nil];
+  [self reloadBookmarksBar]; [self updateStarButton];
+}
+- (void)openRecentPage:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  NSURL *url=[NSURL URLWithString:u]; if (!url) return;
+  [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 - (void)nextTab:(id)s { NSInteger n=self.tabs.count; if(n<2)return; [self tabItemDidSelect:(self.activeTabIndex+1)%n]; }
 - (void)prevTab:(id)s { NSInteger n=self.tabs.count; if(n<2)return; [self tabItemDidSelect:(self.activeTabIndex-1+n)%n]; }
@@ -7567,6 +7689,18 @@ static NSString *kFaviconJS=@"(function(){"
   else { [self clearFind]; [self.window makeFirstResponder:self.webView]; }
 }
 - (void)closeFind:(id)s  { if(self.findBarVisible)[self toggleFind:nil]; }
+- (void)useSelectionForFind:(id)s {
+  [self.webView evaluateJavaScript:@"window.getSelection?String(window.getSelection()):''" completionHandler:^(id r,NSError *e){
+    NSString *sel=[r isKindOfClass:[NSString class]]?(NSString*)r:@"";
+    sel=[sel stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!sel.length) { NSBeep(); return; }
+    dispatch_async(dispatch_get_main_queue(),^{
+      if (!self.findBarVisible) [self toggleFind:nil];
+      self.findBar.queryField.stringValue=sel;
+      [self findNext:nil];
+    });
+  }];
+}
 - (void)doFind:(BOOL)back {
   NSString *q=self.findBar.queryField.stringValue; if(!q.length){[self clearFind];return;}
   WKFindConfiguration *cfg=[[WKFindConfiguration alloc]init];
