@@ -1,0 +1,38 @@
+name: bearbrowser
+base: core22
+version: '0.1.0'
+summary: Gecko-first privacy browser with 101 fingerprinting protections
+description: |
+  BearBrowser is built on Firefox ESR with a 101-surface
+  fingerprinting shield. No telemetry, no cloud sync, anti-tracking built in.
+grade: stable
+confinement: strict
+
+apps:
+  bearbrowser:
+    command: bin/bearbrowser
+    plugs:
+      - network
+      - network-bind
+      - home
+      - x11
+      - wayland
+      - opengl
+      - audio-playback
+      - browser-support
+      - removable-media
+
+parts:
+  bearbrowser:
+    plugin: nil
+    source: .
+    override-build: |
+      mkdir -p $SNAPCRAFT_PART_INSTALL/lib/bearbrowser $SNAPCRAFT_PART_INSTALL/bin
+      if [ -f dist/linux/BearBrowser ]; then
+        install -Dm755 dist/linux/BearBrowser $SNAPCRAFT_PART_INSTALL/lib/bearbrowser/BearBrowser
+      else
+        echo "BearBrowser binary not present — snap will be incomplete until GCP build lands"
+      fi
+      install -Dm644 profiles/default/user.js $SNAPCRAFT_PART_INSTALL/lib/bearbrowser/defaults/profile/user.js
+      printf '#!/bin/sh\nexec $SNAP/lib/bearbrowser/BearBrowser --profile $SNAP_USER_DATA/.bearbrowser/profiles/default "$@"\n' > $SNAPCRAFT_PART_INSTALL/bin/bearbrowser
+      chmod 755 $SNAPCRAFT_PART_INSTALL/bin/bearbrowser

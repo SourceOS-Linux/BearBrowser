@@ -1,0 +1,21 @@
+# BearBrowser — human-secure profile mozconfig (LibreWolf-derived)
+ac_add_options --enable-application=browser
+ac_add_options --enable-optimize
+ac_add_options --disable-debug
+ac_add_options --enable-release
+ac_add_options --enable-rust-simd
+ac_add_options --disable-tests
+ac_add_options --disable-crashreporter
+ac_add_options --disable-updater
+ac_add_options --without-wasm-sandboxed-libraries
+ac_add_options --with-app-name=bearbrowser
+ac_add_options --with-app-basename=BearBrowser
+ac_add_options --with-distribution-id=ai.sourceos.bearbrowser
+mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-bearbrowser-human-secure
+mk_add_options MOZ_MAKE_FLAGS="-j$(nproc)"
+export MOZ_TELEMETRY_REPORTING=
+export MOZ_DATA_REPORTING=
+export MOZ_REQUIRE_SIGNING=
+# Human-secure: broader display support for interactive human use
+ac_add_options --enable-default-toolkit=cairo-gtk3-x11-wayland
+ac_add_options --enable-eme=widevine

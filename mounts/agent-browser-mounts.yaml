@@ -1,23 +1,138 @@
+# =============================================================================
+# BearBrowser agent-runtime sandbox mount plan
+# =============================================================================
+# The filesystem/profile mount plan for the agent-runtime browser sandbox.
+# Per-session isolated profile (rw), quarantined downloads (gated), a READ-ONLY
+# mount of the policy contract, and NO access to the host home beyond an
+# explicit, grant-required workspace-input mount.
+#
+# SPEC GROUNDING
+#   This plan conforms to the canonical SourceOS mount-policy vocabulary so a
+#   compiler can project it into the typed object:
+#     - AgentMachineMountPolicy  https://schemas.srcos.ai/v2/AgentMachineMountPolicy.json
+#   The `agentMachineMountPolicy:` block below is a direct projection (its field
+#   names/enums — allowedRoots[].pathClass/accessMode, deniedPatterns[],
+#   downloadPolicy, evidence — match that schema exactly). The legacy
+#   `spec.mounts[]` block is the BearBrowser-native view kept for the overlay
+#   pipeline; the two are kept consistent.
+#
+# CONFINEMENT CONSISTENCY
+#   Keep consistent with the snap/flatpak confinement defined in packaging
+#   (no host-home access, downloads quarantined, profile ephemeral). The
+#   forbiddenHostPaths list mirrors the snap home-interface exclusions.
+#
+# HONESTY NOTE
+#   Runtime binding is pending the LibreWolf binary build. This is the mount
+#   contract the sandbox will be launched with; it is not yet enforced by a
+#   running browser process.
+# =============================================================================
+
 apiVersion: sourceos.dev/v1alpha1
 kind: BrowserMountPlan
+specVersion: "2.0.0"
+
 metadata:
   name: bearbrowser-agent-mounts
   labels:
     sourceos.dev/product: BearBrowser
     sourceos.dev/runtime: agent-browser
+    sourceos.dev/profile: agent-runtime
+  conformsTo:
+    - https://schemas.srcos.ai/v2/AgentMachineMountPolicy.json
+  runtimeBinding: pending-librewolf-binary
+
 spec:
   defaultIsolation: session
   noAmbientHostMounts: true
   cleanupOnExit: true
+
+  # ---------------------------------------------------------------------------
+  # Canonical projection — AgentMachineMountPolicy.json
+  # ($id https://schemas.srcos.ai/v2/AgentMachineMountPolicy.json)
+  # ---------------------------------------------------------------------------
+  agentMachineMountPolicy:
+    id: urn:srcos:agent-machine-mount-policy:bearbrowser-agent-runtime
+    type: AgentMachineMountPolicy
+    specVersion: "2.0.0"
+    name: BearBrowser agent-runtime mounts
+    defaultDecision: deny                 # enum: deny | ask | permit
+    allowedRoots:
+      - path: /workspace/browser-profile
+        pathClass: cache                  # ephemeral per-session profile state
+        accessMode: read-write            # enum: AgentMachineMountPolicy allowedRoot.accessMode
+        recursive: true
+        requiresGrant: false
+        description: Per-session isolated browser profile (cookies, storage). Wiped on exit.
+      - path: /workspace/downloads
+        pathClass: downloads
+        accessMode: browser-read-write-agent-read-only
+        recursive: false
+        requiresGrant: true               # downloads are GATED per the contract
+        description: Quarantined downloads. Browser writes; agent reads only after a gated approval.
+      - path: /workspace/browser-captures
+        pathClass: artifacts
+        accessMode: write-only-artifacts
+        recursive: false
+        requiresGrant: false
+        description: Screenshots/DOM snapshots/PDFs; hashed + provenance-logged.
+      - path: /run/sourceos/policy/bearbrowser-contract.yaml
+        pathClass: app-bridge
+        accessMode: read-only             # the policy contract is READ-ONLY to the sandbox
+        recursive: false
+        requiresGrant: false
+        description: Read-only mount of policy/bearbrowser-contract.yaml injected by PolicyFabric.
+      - path: /workspace/input
+        pathClass: documents
+        accessMode: read-only
+        recursive: false
+        requiresGrant: true               # the ONLY route to user files; explicit grant required
+        description: Explicitly-granted workspace files. No ambient host-home access.
+    deniedPatterns:
+      - { pattern: "$HOME/**",            reason: "No ambient host-home access.", severity: deny }
+      - { pattern: "~/.ssh/**",           reason: "SSH keys.", severity: deny }
+      - { pattern: "~/.aws/**",           reason: "Cloud credentials.", severity: deny }
+      - { pattern: "~/.azure/**",         reason: "Cloud credentials.", severity: deny }
+      - { pattern: "~/.config/gh/**",     reason: "GitHub token.", severity: deny }
+      - { pattern: "~/.kube/**",          reason: "Cluster credentials.", severity: deny }
+      - { pattern: "/var/run/docker.sock", reason: "Container escape.", severity: deny }
+      - { pattern: "/var/run/podman/podman.sock", reason: "Container escape.", severity: deny }
+    uidGidMapping:
+      mode: runtime-default
+    syncMode: topolvm-local
+    downloadPolicy:
+      defaultHostPath: ~/Downloads/SourceOS/agent-downloads
+      defaultAgentPath: /workspace/downloads
+      browserAccess: read-write
+      agentAccess: read-only
+      directExecutionAllowed: false       # quarantine: a downloaded file is never auto-executed
+      hashDownloads: true
+      recordSourceDomain: true
+      mountWholeDownloadsDirectoryAllowed: false
+    promotionPolicy:
+      downloadsToCodeRequiresEvidence: true
+      downloadsToDocumentsRequiresEvidence: true
+      allowAutomaticPromotion: false
+    evidence:
+      required: true
+      recordDeniedAttempts: true
+      recordMountLaunch: true
+      recordPromotionActions: true
+      redactHostUserName: true
+
+  # ---------------------------------------------------------------------------
+  # BearBrowser-native mount view (consumed by the overlay pipeline).
+  # Kept consistent with the canonical projection above.
+  # ---------------------------------------------------------------------------
   mounts:
     - name: downloads
       mountClass: agent-downloads
-      purpose: Controlled browser downloads created by an agent session.
+      purpose: Quarantined browser downloads created by an agent session (GATED action).
       defaultPath: /workspace/downloads
       mode: readWrite
       governed: true
       required: true
       persistByDefault: true
+      quarantine: true
       provenance:
         emitOnCreate: browser.download.created
         requireSha256: true
@@ -31,7 +146,7 @@ spec:
           - activate
     - name: profile
       mountClass: agent-profile
-      purpose: Ephemeral browser profile state, cookies, local storage, extension state, and browser cache partition metadata.
+      purpose: Ephemeral, per-session browser profile state, cookies, local storage, cache partition metadata.
       defaultPath: /workspace/browser-profile
       mode: readWrite
       governed: true
@@ -43,7 +158,7 @@ spec:
         shareAcrossAgents: false
     - name: captures
       mountClass: agent-captures
-      purpose: Screenshots, DOM snapshots, PDFs, HAR files, and provenance-adjacent capture artifacts.
+      purpose: Screenshots, DOM snapshots, PDFs, HAR files, provenance-adjacent capture artifacts.
       defaultPath: /workspace/browser-captures
       mode: readWrite
       governed: true
@@ -84,16 +199,33 @@ spec:
           - activate
     - name: cache
       mountClass: agent-cache
-      purpose: Disposable network and browser build/runtime cache.
+      purpose: Disposable network and browser runtime cache.
       defaultPath: /workspace/browser-cache
       mode: readWrite
       governed: true
       required: false
       persistByDefault: false
       cleanupOnExit: true
+    - name: policy-contract
+      mountClass: policy-runtime-readonly
+      purpose: READ-ONLY mount of the agent-runtime governance contract.
+      defaultPath: /run/sourceos/policy/bearbrowser-contract.yaml
+      sourcePath: policy/bearbrowser-contract.yaml
+      mode: readOnly
+      governed: true
+      required: true
+      persistByDefault: false
+    - name: policy-bundle
+      mountClass: policy-runtime-readonly
+      purpose: Runtime policy bundle injected by PolicyFabric (compiled Policy/Rule/Obligation objects).
+      defaultPath: /run/sourceos/policy
+      mode: readOnly
+      governed: true
+      required: true
+      persistByDefault: false
     - name: workspace-input
       mountClass: workspace-input-readonly
-      purpose: Read-only user/workspace files explicitly granted to the browser session.
+      purpose: Read-only user/workspace files EXPLICITLY granted to the browser session. The only host-file route.
       defaultPath: /workspace/input
       mode: readOnly
       governed: true
@@ -103,22 +235,16 @@ spec:
         requireExplicitGrant: true
         denySymlinkEscape: true
         denyDeviceFiles: true
-    - name: policy
-      mountClass: policy-runtime-readonly
-      purpose: Runtime policy bundle injected by PolicyFabric.
-      defaultPath: /run/sourceos/policy
-      mode: readOnly
-      governed: true
-      required: true
-      persistByDefault: false
     - name: provenance
       mountClass: provenance-writeonly
-      purpose: Append-only local event buffer before AgentPlane/PolicyFabric ingestion.
+      purpose: Append-only local ReasoningEvent buffer before AgentPlane/PolicyFabric ingestion.
       defaultPath: /run/sourceos/provenance
       mode: writeOnly
       governed: true
       required: true
       persistByDefault: false
+
+  # No access to host home beyond the explicit, grant-required workspace-input mount.
   forbiddenHostPaths:
     - $HOME
     - ~/.ssh
