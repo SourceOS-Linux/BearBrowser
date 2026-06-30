@@ -3090,6 +3090,9 @@ static NSMutableArray *gBBWindowControllers;
   // becomes a dangling pointer → EXC_BAD_ACCESS in objc_retain the next time any
   // retained event-monitor block touches it. Opt out of the legacy release.
   self.window.releasedWhenClosed=NO;
+  // Disallow native NSWindow tabbing — we have our own tabs; macOS's "Merge All Windows"
+  // and per-window tab bar would double up on top of ours.
+  self.window.tabbingMode=NSWindowTabbingModeDisallowed;
   self.window.title=@"BearBrowser";
   self.window.titlebarAppearsTransparent=YES;
   self.window.titleVisibility=NSWindowTitleHidden;
