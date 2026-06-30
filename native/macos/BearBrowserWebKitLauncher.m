@@ -318,6 +318,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(assign) BOOL       muted;           // JS-level audio/video mute
 @property(assign) BOOL       pinned;          // pinned = fixed-width icon-only, no Cmd+W
 @property(assign) BOOL       isPlayingAudio;  // page has active audio (tab badge)
+@property(assign) BOOL       genpassOffered;  // password-generator prompt already shown for this page load
 @end
 @implementation BBTab
 - (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
@@ -3644,9 +3645,12 @@ static NSMutableArray *gBBWindowControllers;
     @"function findUserFor(pw){var f=pw.form;if(!f)return null;var ins=f.querySelectorAll('input');var last=null;"
     @"for(var i=0;i<ins.length;i++){var n=ins[i];if(n===pw)break;var t=(n.type||'text').toLowerCase();"
     @"if(t==='text'||t==='email'||t==='tel'||t==='username')last=n;}return last;}"
+    @"function isNewPw(pw){var a=(pw.getAttribute('autocomplete')||'').toLowerCase();"
+    @"return a.indexOf('new-password')>=0;}"
     @"function bind(pw){if(pw.__bbBound)return;pw.__bbBound=true;var f=pw.form;if(!f)return;"
     @"f.addEventListener('submit',function(){try{var u=findUserFor(pw);if(!u||!u.value||!pw.value)return;"
-    @"post('save',{host:location.host,user:String(u.value),pass:String(pw.value)});}catch(e){}},true);}"
+    @"post('save',{host:location.host,user:String(u.value),pass:String(pw.value)});}catch(e){}},true);"
+    @"pw.addEventListener('focus',function(){if(isNewPw(pw))post('genpassOffer',{host:location.host});},true);}"
     @"function scan(){document.querySelectorAll('input[type=password]').forEach(bind);}"
     @"function applyCred(cred){try{var pws=document.querySelectorAll('input[type=password]');"
     @"for(var i=0;i<pws.length;i++){var pw=pws[i],u=findUserFor(pw);if(!u)continue;"
@@ -3654,7 +3658,12 @@ static NSMutableArray *gBBWindowControllers;
     @"u.dispatchEvent(new Event('input',{bubbles:true}));u.dispatchEvent(new Event('change',{bubbles:true}));"
     @"pw.dispatchEvent(new Event('input',{bubbles:true}));pw.dispatchEvent(new Event('change',{bubbles:true}));"
     @"return;}}catch(e){}}"
+    @"function applyGenPass(p){try{var pws=document.querySelectorAll('input[type=password]');"
+    @"for(var i=0;i<pws.length;i++){var pw=pws[i];if(!isNewPw(pw)&&pws.length>1)continue;"
+    @"pw.value=p;pw.dispatchEvent(new Event('input',{bubbles:true}));pw.dispatchEvent(new Event('change',{bubbles:true}));"
+    @"return;}}catch(e){}}"
     @"window.__bbAutofill=applyCred;"
+    @"window.__bbApplyGenPass=applyGenPass;"
     @"document.addEventListener('DOMContentLoaded',function(){scan();post('lookup',{host:location.host});},true);"
     @"new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});"
     @"if(document.readyState!=='loading'){scan();post('lookup',{host:location.host});}"
@@ -5241,6 +5250,37 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     if (idx>=0&&idx<(NSInteger)entries.count) [self fillCredential:entries[idx] intoWebView:wv];
   }];
 }
+- (NSString *)generateStrongPassword:(NSInteger)len {
+  // Cryptographic random via SecRandomCopyBytes; charset is letters+digits+symbols
+  // chosen for max-compatibility with site password policies (no quotes/backslashes).
+  static const char *cs="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_=+?";
+  size_t csLen=strlen(cs);
+  if (len<8) len=20;
+  uint8_t *buf=(uint8_t *)malloc((size_t)len);
+  if (!buf) return @"";
+  if (SecRandomCopyBytes(kSecRandomDefault,(size_t)len,buf)!=errSecSuccess) { free(buf); return @""; }
+  NSMutableString *out=[NSMutableString stringWithCapacity:(NSUInteger)len];
+  for (NSInteger i=0;i<len;i++) [out appendFormat:@"%c",cs[buf[i]%csLen]];
+  free(buf);
+  return out;
+}
+- (void)offerGenPassForHost:(NSString *)host webView:(WKWebView *)wv {
+  if (!wv) return;
+  NSString *pw=[self generateStrongPassword:20];
+  if (!pw.length) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Use a strong password?";
+  a.informativeText=[NSString stringWithFormat:@"%@\n\nBearBrowser will fill this 20-char password and offer to save it on submit.",pw];
+  [a addButtonWithTitle:@"Use Strong Password"];
+  [a addButtonWithTitle:@"Not now"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *js=[NSString stringWithFormat:
+      @"if(typeof window.__bbApplyGenPass==='function')window.__bbApplyGenPass(%@);",
+      [self jsStringLiteral:pw]];
+    [wv evaluateJavaScript:js completionHandler:nil];
+  }];
+}
 - (void)fillCredential:(BBPasswordEntry *)e intoWebView:(WKWebView *)wv {
   if (!e||!wv) return;
   NSString *js=[NSString stringWithFormat:
@@ -6290,6 +6330,13 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
       NSArray<BBPasswordEntry *> *existing=[[BBPasswordStore shared] entriesForHost:host];
       for (BBPasswordEntry *e in existing) if ([e.username isEqualToString:user]&&[e.password isEqualToString:pass]) return;
       dispatch_async(dispatch_get_main_queue(),^{ [self offerSaveLoginForHost:host username:user password:pass]; });
+    } else if ([kind isEqualToString:@"genpassOffer"]) {
+      // Focus on an autocomplete=new-password field — offer to generate one,
+      // but only the first time per page load to avoid prompt-spam on refocus.
+      if (tab.genpassOffered) return;
+      tab.genpassOffered=YES;
+      NSString *host=body[@"host"]?:@"";
+      dispatch_async(dispatch_get_main_queue(),^{ [self offerGenPassForHost:host webView:wv]; });
     } else if ([kind isEqualToString:@"lookup"]) {
       NSString *host=body[@"host"]; if (![host isKindOfClass:[NSString class]]||!host.length) return;
       NSArray<BBPasswordEntry *> *entries=[[BBPasswordStore shared] entriesForHost:host];
@@ -7233,6 +7280,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
 - (void)webView:(WKWebView *)wv didStartProvisionalNavigation:(WKNavigation *)nav {
   BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
   tab.dialogCount=0; tab.dialogsSuppressed=NO; // reset per-page dialog abuse state
+  tab.genpassOffered=NO;                       // re-arm the password-generator prompt
   tab.isLoading=YES;
   if (wv==self.webView) {
     self.progressBar.doubleValue=0; self.progressBar.hidden=NO;
