@@ -784,6 +784,59 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 }
 @end
 
+// ── BBProfileStore ────────────────────────────────────────────────────────────
+// One stored "address profile" (name, email, phone, street, city, region, postal,
+// country, organization). Lives in NSUserDefaults at BBProfile_v1 — non-sensitive
+// PII (compared to passwords) and the user already chose to type these values into
+// forms once. Filled into matching autocomplete-tagged fields on focus.
+@interface BBProfile : NSObject
+@property(copy) NSString *name, *email, *phone;
+@property(copy) NSString *street, *city, *region, *postal, *country, *organization;
+- (NSDictionary *)toDict;
++ (instancetype)fromDict:(NSDictionary *)d;
+- (BOOL)isEmpty;
+@end
+@implementation BBProfile
+- (NSDictionary *)toDict {
+  return @{@"name":_name?:@"",@"email":_email?:@"",@"phone":_phone?:@"",
+           @"street":_street?:@"",@"city":_city?:@"",@"region":_region?:@"",
+           @"postal":_postal?:@"",@"country":_country?:@"",@"organization":_organization?:@""};
+}
++ (instancetype)fromDict:(NSDictionary *)d {
+  if (![d isKindOfClass:[NSDictionary class]]) return nil;
+  BBProfile *p=[BBProfile new];
+  p.name=d[@"name"]; p.email=d[@"email"]; p.phone=d[@"phone"];
+  p.street=d[@"street"]; p.city=d[@"city"]; p.region=d[@"region"];
+  p.postal=d[@"postal"]; p.country=d[@"country"]; p.organization=d[@"organization"];
+  return p;
+}
+- (BOOL)isEmpty {
+  return !(_name.length||_email.length||_phone.length||_street.length||_city.length||
+           _region.length||_postal.length||_country.length||_organization.length);
+}
+@end
+@interface BBProfileStore : NSObject
++ (instancetype)shared;
+- (BBProfile *)profile;
+- (void)setProfile:(BBProfile *)p;
+@end
+@implementation BBProfileStore {
+  BBProfile *_p;
+}
++ (instancetype)shared { static BBProfileStore *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (instancetype)init {
+  self=[super init];
+  NSDictionary *d=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBProfile_v1"];
+  _p=[BBProfile fromDict:d]?:[BBProfile new];
+  return self;
+}
+- (BBProfile *)profile { return _p; }
+- (void)setProfile:(BBProfile *)p {
+  _p=p?:[BBProfile new];
+  [[NSUserDefaults standardUserDefaults] setObject:[_p toDict] forKey:@"BBProfile_v1"];
+}
+@end
+
 // Datasource/delegate for the Saved Passwords table in Settings → Manage Saved Passwords.
 @interface BBSavedPasswordsDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
 @property(strong) NSMutableArray<BBPasswordEntry *> *entries;
@@ -3664,9 +3717,37 @@ static NSMutableArray *gBBWindowControllers;
     @"return;}}catch(e){}}"
     @"window.__bbAutofill=applyCred;"
     @"window.__bbApplyGenPass=applyGenPass;"
-    @"document.addEventListener('DOMContentLoaded',function(){scan();post('lookup',{host:location.host});},true);"
+    @"function fieldKey(el){var a=(el.getAttribute('autocomplete')||'').toLowerCase();"
+    @"if(a){if(a.indexOf('email')>=0)return'email';if(a.indexOf('tel')>=0)return'phone';"
+    @"if(a==='name'||a==='cc-name')return'name';if(a==='given-name'||a==='additional-name'||a==='family-name')return'name';"
+    @"if(a==='street-address'||a==='address-line1')return'street';"
+    @"if(a==='address-level2')return'city';if(a==='address-level1')return'region';"
+    @"if(a==='postal-code')return'postal';if(a==='country'||a==='country-name')return'country';"
+    @"if(a==='organization')return'organization';}"
+    @"var k=((el.name||'')+' '+(el.id||'')+' '+(el.getAttribute('placeholder')||'')).toLowerCase();"
+    @"if(/(^|[^a-z])(email|e-mail)([^a-z]|$)/.test(k))return'email';"
+    @"if(/(phone|tel|mobile)/.test(k))return'phone';"
+    @"if(/(fname|firstname|first.name|fullname|full.name|^name$|your.name)/.test(k))return'name';"
+    @"if(/(street|address.?1|addr1|address$)/.test(k))return'street';"
+    @"if(/(city|town|locality)/.test(k))return'city';"
+    @"if(/(state|province|region)/.test(k))return'region';"
+    @"if(/(zip|postal|postcode)/.test(k))return'postal';"
+    @"if(/(country)/.test(k))return'country';"
+    @"if(/(company|organi[sz]ation)/.test(k))return'organization';"
+    @"return'';}"
+    @"function applyProfile(p){try{var ins=document.querySelectorAll('input,select,textarea');"
+    @"for(var i=0;i<ins.length;i++){var n=ins[i];var t=(n.type||'').toLowerCase();"
+    @"if(t==='password'||t==='hidden'||t==='checkbox'||t==='radio'||t==='submit'||t==='button')continue;"
+    @"var k=fieldKey(n);if(!k||!p[k])continue;if(n.value)continue;"
+    @"n.value=p[k];n.dispatchEvent(new Event('input',{bubbles:true}));n.dispatchEvent(new Event('change',{bubbles:true}));}"
+    @"}catch(e){}}"
+    @"window.__bbApplyProfile=applyProfile;"
+    @"function hasProfileField(){var ins=document.querySelectorAll('input,select,textarea');"
+    @"for(var i=0;i<ins.length;i++){if(fieldKey(ins[i]))return true;}return false;}"
+    @"function maybeOfferProfile(){if(hasProfileField())post('profileLookup',{host:location.host});}"
+    @"document.addEventListener('DOMContentLoaded',function(){scan();post('lookup',{host:location.host});maybeOfferProfile();},true);"
     @"new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});"
-    @"if(document.readyState!=='loading'){scan();post('lookup',{host:location.host});}"
+    @"if(document.readyState!=='loading'){scan();post('lookup',{host:location.host});maybeOfferProfile();}"
     @"})();";
   [config.userContentController addUserScript:[[WKUserScript alloc]
     initWithSource:autofillHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES]];
@@ -5994,6 +6075,48 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSTextField *lbl=(NSTextField *)objc_getAssociatedObject(self,"BBDLPathLabel");
   if (lbl) { NSString *shown=[path stringByAbbreviatingWithTildeInPath]; lbl.stringValue=shown; lbl.toolTip=shown; }
 }
+- (void)showProfileEditor:(id)s {
+  BBProfile *p=[[BBProfileStore shared] profile];
+  CGFloat W=460,Hh=440;
+  NSWindow *pw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
+  pw.releasedWhenClosed=NO; pw.title=@"Address Profile"; [pw center];
+  NSView *cv=pw.contentView;
+  NSMutableDictionary<NSString *,NSTextField *> *fields=[NSMutableDictionary dictionary];
+  void(^row)(NSString *,NSString *,CGFloat)=^(NSString *lbl,NSString *key,CGFloat yy){
+    NSTextField *l=[NSTextField labelWithString:lbl]; l.frame=NSMakeRect(16,yy,108,20);
+    l.alignment=NSTextAlignmentRight; [cv addSubview:l];
+    NSTextField *t=[[NSTextField alloc]initWithFrame:NSMakeRect(132,yy-2,310,24)];
+    NSString *v=[p valueForKey:key]; if (v.length) t.stringValue=v;
+    [cv addSubview:t]; fields[key]=t;
+  };
+  CGFloat y=Hh-50;
+  row(@"Name:",@"name",y);          y-=32;
+  row(@"Organization:",@"organization",y); y-=32;
+  row(@"Email:",@"email",y);        y-=32;
+  row(@"Phone:",@"phone",y);        y-=32;
+  row(@"Street:",@"street",y);      y-=32;
+  row(@"City:",@"city",y);          y-=32;
+  row(@"State/Region:",@"region",y); y-=32;
+  row(@"Postal code:",@"postal",y); y-=32;
+  row(@"Country:",@"country",y);    y-=32;
+  NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
+  save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
+  objc_setAssociatedObject(save,"BBProfileFields",fields,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  save.target=self; save.action=@selector(saveProfileFromSender:); [cv addSubview:save];
+  NSButton *cancel=[[NSButton alloc]initWithFrame:NSMakeRect(W-196,16,88,32)];
+  cancel.title=@"Cancel"; cancel.bezelStyle=NSBezelStyleRounded; cancel.keyEquivalent=@"\033";
+  cancel.target=pw; cancel.action=@selector(performClose:); [cv addSubview:cancel];
+  [self.window beginSheet:pw completionHandler:nil];
+}
+- (void)saveProfileFromSender:(NSButton *)sender {
+  NSDictionary<NSString *,NSTextField *> *fields=objc_getAssociatedObject(sender,"BBProfileFields");
+  BBProfile *p=[BBProfile new];
+  for (NSString *k in fields) [p setValue:fields[k].stringValue forKey:k];
+  [[BBProfileStore shared] setProfile:p];
+  NSWindow *sheet=sender.window;
+  [self.window endSheet:sheet];
+}
 - (void)showSavedPasswords:(id)s {
   NSArray<BBPasswordEntry *> *entries=[[BBPasswordStore shared] allEntries];
   NSWindow *pw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,520,420)
@@ -6037,7 +6160,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=460;
+  CGFloat W=470,Hh=500;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -6095,6 +6218,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *pwBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
   pwBtn.title=@"Manage Saved Passwords…"; pwBtn.bezelStyle=NSBezelStyleRounded;
   pwBtn.target=self; pwBtn.action=@selector(showSavedPasswords:); [cv addSubview:pwBtn];
+  y-=38;
+  label(@"Address autofill:",y+4);
+  NSButton *prBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  prBtn.title=@"Edit Address Profile…"; prBtn.bezelStyle=NSBezelStyleRounded;
+  prBtn.target=self; prBtn.action=@selector(showProfileEditor:); [cv addSubview:prBtn];
   NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
   save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
   save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
@@ -6330,6 +6458,18 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
       NSArray<BBPasswordEntry *> *existing=[[BBPasswordStore shared] entriesForHost:host];
       for (BBPasswordEntry *e in existing) if ([e.username isEqualToString:user]&&[e.password isEqualToString:pass]) return;
       dispatch_async(dispatch_get_main_queue(),^{ [self offerSaveLoginForHost:host username:user password:pass]; });
+    } else if ([kind isEqualToString:@"profileLookup"]) {
+      BBProfile *p=[[BBProfileStore shared] profile];
+      if (p.isEmpty) return;
+      // Silently fill — same UX as Chrome's autofill once the profile is set.
+      // No prompt: any field with existing value is skipped client-side.
+      NSDictionary *d=[p toDict];
+      NSData *jsonD=[NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+      NSString *json=[[NSString alloc]initWithData:jsonD encoding:NSUTF8StringEncoding];
+      if (!json.length) return;
+      NSString *js=[NSString stringWithFormat:
+        @"if(typeof window.__bbApplyProfile==='function')window.__bbApplyProfile(%@);",json];
+      dispatch_async(dispatch_get_main_queue(),^{ [wv evaluateJavaScript:js completionHandler:nil]; });
     } else if ([kind isEqualToString:@"genpassOffer"]) {
       // Focus on an autocomplete=new-password field — offer to generate one,
       // but only the first time per page load to avoid prompt-spam on refocus.
