@@ -23,6 +23,20 @@ spec:
       - nix
       - oci
       - tarball
+  binarySource:
+    # First successful build (140.12.0esr-1); prior 10 builds failed.
+    buildId: bearbrowser-build-20260630-100322
+    upstreamRef: 140.12.0esr-1
+    gcsBase: gs://sourceos-artifacts-socioprophet/bearbrowser-builds/bearbrowser-build-20260630-100322/artifacts
+    arch: x86_64
+    variants:
+      humanSecure:
+        tarball: bearbrowser-human-secure-linux-x86_64.tar.gz
+        sha256: a94bda8c5e51122f578b53b1df01ddd9de7af12dc0ab40815eb4c4b1347bc7fb
+      torMode:
+        tarball: bearbrowser-tor-mode-linux-x86_64.tar.gz
+        sha256: 0f29fc07448f5cb549d919458dedeefc50cd147063515cd7e77862ed8a1c56ad
+    launcher: bin/bearbrowser
   desktopIntegration:
     desktopEntry: packaging/linux/dev.sourceos.BearBrowser.desktop
     appStream: packaging/linux/dev.sourceos.BearBrowser.metainfo.xml
@@ -39,4 +53,5 @@ spec:
     - upstreamProductBrandingAbsent
     - humanAndAgentProfilesSeparate
     - releaseMetadataPresent
+    # Satisfied 2026-06-30 by build bearbrowser-build-20260630-100322 (140.12.0esr-1).
     - lane13BinaryBuildComplete

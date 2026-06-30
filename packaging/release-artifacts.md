@@ -51,6 +51,13 @@ A BearBrowser release cannot be promoted unless:
 6. Agent-runtime artifacts include policy, mount, and provenance contracts.
 7. Human and agent profile state remain isolated.
 
-## Non-goals for the current scaffold
+## Build status
 
-The current packaging scaffold does not yet build a complete browser binary. It defines the package boundaries, metadata, runtime shape, and release artifact contract that the full LibreWolf-derived build will fill in the next implementation lane.
+As of 2026-06-30, the first successful binary build
+(`bearbrowser-build-20260630-100322`, `140.12.0esr-1`) produced two real Linux
+x86_64 runtimes (human-secure + tor-mode). The Linux packaging
+(deb/snap/appimage/flatpak) now consumes these real binaries — see
+`packaging/RELEASE.md` for SHA256s and the GCS source path, and
+`packaging/linux/binary-source.env` for the single source of truth. Windows and
+macOS binaries are still pending their builds; their package manifests
+(choco/winget/homebrew) intentionally keep placeholder checksums.

@@ -1,10 +1,11 @@
 name: bearbrowser
 base: core22
-version: '0.1.0'
+version: '140.12.0esr-1'
 summary: Gecko-first privacy browser with 101 fingerprinting protections
 description: |
-  BearBrowser is built on Firefox ESR with a 101-surface
-  fingerprinting shield. No telemetry, no cloud sync, anti-tracking built in.
+  BearBrowser is a Gecko-first (Firefox 140 ESR-derived) privacy browser with a
+  101-surface fingerprinting shield. No telemetry, no cloud sync, anti-tracking
+  built in. Ships the real 140.12.0esr-1 Linux x86_64 build.
 grade: stable
 confinement: strict
 
@@ -26,13 +27,31 @@ parts:
   bearbrowser:
     plugin: nil
     source: .
+    build-packages:
+      - tar
     override-build: |
-      mkdir -p $SNAPCRAFT_PART_INSTALL/lib/bearbrowser $SNAPCRAFT_PART_INSTALL/bin
-      if [ -f dist/linux/BearBrowser ]; then
-        install -Dm755 dist/linux/BearBrowser $SNAPCRAFT_PART_INSTALL/lib/bearbrowser/BearBrowser
-      else
-        echo "BearBrowser binary not present — snap will be incomplete until GCP build lands"
+      set -e
+      # Single source of truth for the real binary tarball + SHA256.
+      . packaging/linux/binary-source.env
+      VARIANT="${BEARBROWSER_SNAP_VARIANT:-human}"
+      case "$VARIANT" in
+        human) TARBALL="$BEARBROWSER_HUMAN_TARBALL"; EXPECT_SHA="$BEARBROWSER_HUMAN_SHA256" ;;
+        tor)   TARBALL="$BEARBROWSER_TOR_TARBALL";   EXPECT_SHA="$BEARBROWSER_TOR_SHA256" ;;
+        *) echo "Unknown variant $VARIANT" >&2; exit 2 ;;
+      esac
+
+      STAGED="dist/linux/$TARBALL"
+      if [ ! -f "$STAGED" ]; then
+        mkdir -p dist/linux
+        gcloud storage cp "$BEARBROWSER_GCS_BASE/$TARBALL" "$STAGED"
       fi
-      install -Dm644 profiles/default/user.js $SNAPCRAFT_PART_INSTALL/lib/bearbrowser/defaults/profile/user.js
-      printf '#!/bin/sh\nexec $SNAP/lib/bearbrowser/BearBrowser --profile $SNAP_USER_DATA/.bearbrowser/profiles/default "$@"\n' > $SNAPCRAFT_PART_INSTALL/bin/bearbrowser
-      chmod 755 $SNAPCRAFT_PART_INSTALL/bin/bearbrowser
+      ACTUAL_SHA="$(sha256sum "$STAGED" | awk '{print $1}')"
+      [ "$ACTUAL_SHA" = "$EXPECT_SHA" ] || { echo "SHA256 mismatch: $ACTUAL_SHA != $EXPECT_SHA" >&2; exit 4; }
+
+      # Extract the full Gecko runtime (tarball root is bin/).
+      mkdir -p "$SNAPCRAFT_PART_INSTALL/lib/bearbrowser" "$SNAPCRAFT_PART_INSTALL/bin"
+      tar -xzf "$STAGED" -C "$SNAPCRAFT_PART_INSTALL/lib/bearbrowser"
+      install -Dm644 profiles/default/user.js "$SNAPCRAFT_PART_INSTALL/lib/bearbrowser/defaults/profile/user.js"
+      printf '#!/bin/sh\nexec $SNAP/lib/bearbrowser/%s --profile $SNAP_USER_DATA/.bearbrowser/profiles/default "$@"\n' \
+        "$BEARBROWSER_LAUNCHER_REL" > "$SNAPCRAFT_PART_INSTALL/bin/bearbrowser"
+      chmod 755 "$SNAPCRAFT_PART_INSTALL/bin/bearbrowser"
