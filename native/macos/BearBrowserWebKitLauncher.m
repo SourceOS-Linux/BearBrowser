@@ -297,6 +297,7 @@ static const CGFloat kFindBarH  = 44.0;
 static const CGFloat kBMBarH    = 30.0;
 static const CGFloat kDLPanelW  = 280.0;
 static const CGFloat kTabMaxW   = 220.0;
+static const CGFloat kTabPinnedW = 36.0;  // fixed width for pinned tabs (icon-only)
 static const CGFloat kTabMinW   = 80.0;
 static const CGFloat kTabHardMinW = 44.0; // favicon-only floor when many tabs are open
 static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its title/close (favicon-only)
@@ -315,6 +316,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(copy)   NSString  *suspendedURL;    // URL to reload on wake
 @property(strong) NSDate    *lastActiveAt;    // nil = never focused
 @property(assign) BOOL       muted;           // JS-level audio/video mute
+@property(assign) BOOL       pinned;          // pinned = fixed-width icon-only, no Cmd+W
 @end
 @implementation BBTab
 - (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
@@ -516,28 +518,43 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   for (BBTabItemView *v in self.items) [v removeFromSuperview];
   [self.items removeAllObjects];
   self.activeIndex=active;
-  // Pin the + button to the right edge — it must never be pushed off-screen by tabs.
   CGFloat addX=self.bounds.size.width-34;
   self.addTabButton.frame=NSMakeRect(addX,4,28,28);
   CGFloat clipW=addX-2, clipH=self.bounds.size.height-2;
   self.tabScroll.frame=NSMakeRect(0,1,clipW,clipH);
   NSInteger count=tabs.count;
   if (!count) { self.tabStrip.frame=NSMakeRect(0,0,clipW,clipH); return; }
-  // Compress to fit down to a readable floor (kTabHardMinW). Below that we stop
-  // shrinking and let the strip overflow → the scroll view scrolls instead, and
-  // we bring the active tab into view. This is Chrome's behaviour for many tabs.
-  CGFloat tabW=MIN(kTabMaxW,MAX(kTabHardMinW,floor(clipW/count)));
-  CGFloat totalW=tabW*count;
-  CGFloat stripW=MAX(clipW,totalW);
+
+  // Pinned tabs occupy fixed kTabPinnedW each at the left; regular tabs share the rest.
+  NSInteger pinnedCount=0;
+  for (BBTab *t in tabs) if (t.pinned) pinnedCount++;
+  NSInteger regularCount=count-pinnedCount;
+  CGFloat pinnedTotalW=pinnedCount*kTabPinnedW;
+  CGFloat availW=clipW-pinnedTotalW;
+  CGFloat tabW=regularCount>0?MIN(kTabMaxW,MAX(kTabHardMinW,floor(availW/regularCount))):0;
+  CGFloat regularTotalW=tabW*regularCount;
+  CGFloat stripW=MAX(clipW, pinnedTotalW+regularTotalW);
   self.tabStrip.frame=NSMakeRect(0,0,stripW,clipH);
+
   BBTabItemView *activeItem=nil;
+  CGFloat pinnedX=0, regularX=pinnedTotalW;
+  NSInteger regularIdx=0;
   for (NSInteger i=0;i<count;i++) {
     BBTab *tab=tabs[i];
-    CGFloat x=floor(i*tabW);
-    CGFloat w=(i==count-1)?MAX(kTabHardMinW-2,floor(totalW)-x-2):floor(tabW)-2;
+    CGFloat x, w;
+    BOOL isPinned=tab.pinned;
+    if (isPinned) {
+      x=pinnedX; w=kTabPinnedW-2; pinnedX+=kTabPinnedW;
+    } else {
+      x=regularX;
+      BOOL isLast=(regularIdx==regularCount-1);
+      w=isLast?MAX(kTabHardMinW-2,floor(pinnedTotalW+regularTotalW)-x-2):floor(tabW)-2;
+      regularX+=floor(tabW); regularIdx++;
+    }
     BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,0,w,clipH) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
-    // Override favicon: 💤 for suspended, 🔇 for muted
+    if (isPinned) { item.compact=YES; item.closeButton.hidden=YES; } // pinned = icon-only, no close
+    // Override favicon: 💤 suspended, 🔇 muted
     NSImage *fav=tab.favicon;
     if (tab.suspended && !tab.isLoading) {
       fav=[NSImage imageWithSystemSymbolName:@"moon.zzz" accessibilityDescription:@"Suspended"];
@@ -546,11 +563,10 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
       fav=[NSImage imageWithSystemSymbolName:@"speaker.slash.fill" accessibilityDescription:@"Muted"];
       [fav setTemplate:YES];
     }
-    [item setTabTitle:tab.title favicon:fav loading:tab.isLoading];
+    [item setTabTitle:(isPinned?@"":tab.title) favicon:fav loading:tab.isLoading];
     [self.tabStrip addSubview:item]; [self.items addObject:item];
     if (i==active) activeItem=item;
   }
-  // Scroll the active tab into view when the strip overflows.
   if (activeItem && stripW>clipW)
     [self.tabStrip scrollRectToVisible:NSInsetRect(activeItem.frame,-tabW,0)];
 }
@@ -2913,6 +2929,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(tabM,@"New Tab",@selector(newTab:),@"t",Cmd);
   [tabM addItemWithTitle:@"Duplicate Tab" action:@selector(duplicateCurrentTab:) keyEquivalent:@""];
   [tabM addItemWithTitle:@"Mute Tab" action:@selector(muteTab:) keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Pin Tab" action:@selector(pinCurrentTab:) keyEquivalent:@""];
   [tabM addItem:[NSMenuItem separatorItem]];
   mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
   [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
@@ -4613,6 +4630,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [self.tabs removeObjectAtIndex:i];
 }
 - (void)tabItemDidClose:(NSInteger)i  {
+  if ([self validTabIndex:i] && self.tabs[i].pinned) return; // pinned tabs resist Cmd+W / close button
   [self teardownTabAtIndex:i];
   if (!self.tabs.count) { [self.window performClose:nil]; return; }
   NSInteger newActive=MIN(self.activeTabIndex,(NSInteger)self.tabs.count-1);
@@ -4620,6 +4638,28 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [self activateTab:newActive]; [self reloadTabBar];
 }
 - (void)tabItemDidMiddleClick:(NSInteger)i { [self tabItemDidClose:i]; }
+- (void)ctxTogglePinTab:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  self.tabs[i].pinned=!self.tabs[i].pinned; [self reloadTabBar];
+}
+- (void)ctxToggleMuteTab:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  BBTab *tab=self.tabs[i]; tab.muted=!tab.muted;
+  [tab.webView evaluateJavaScript:[NSString stringWithFormat:
+    @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",tab.muted?@"true":@"false"]
+    completionHandler:nil];
+  [self reloadTabBar];
+}
+- (void)ctxToggleSuspendTab:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  BBTab *tab=self.tabs[i];
+  if (tab.suspended) [self wakeTab:tab]; else [self suspendTab:tab];
+  [self reloadTabBar];
+}
+- (void)pinCurrentTab:(id)s {
+  BBTab *tab=self.activeTab; if (!tab) return;
+  tab.pinned=!tab.pinned; [self reloadTabBar];
+}
 
 // Drag-to-reorder: move the tab and keep the same tab active.
 - (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to {
@@ -5556,6 +5596,10 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   if (a==@selector(muteTab:)) {
     item.title=self.activeTab.muted?@"Unmute Tab":@"Mute Tab";
     return self.webView.URL!=nil;
+  }
+  if (a==@selector(pinCurrentTab:)) {
+    item.title=self.activeTab.pinned?@"Unpin Tab":@"Pin Tab";
+    return YES;
   }
   return YES; // default enabled
 }
