@@ -581,6 +581,18 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 - (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to {
   if ([self.outerDelegate respondsToSelector:@selector(tabItemMovedFrom:to:)]) [self.outerDelegate tabItemMovedFrom:from to:to];
 }
+// Double-click on the empty tab-strip area opens a new tab (Chrome behavior).
+- (void)mouseDown:(NSEvent *)e {
+  if (e.clickCount==2) {
+    NSPoint pt=[self.tabStrip convertPoint:e.locationInWindow fromView:nil];
+    BOOL onTab=NO;
+    for (NSView *v in self.tabStrip.subviews) {
+      if ([v isKindOfClass:[BBTabItemView class]] && NSPointInRect(pt,v.frame)) { onTab=YES; break; }
+    }
+    if (!onTab) [NSApp sendAction:self.addTabButton.action to:self.addTabButton.target from:self];
+  }
+  [super mouseDown:e];
+}
 @end
 
 // ── BBFindBar ─────────────────────────────────────────────────────────────────
@@ -5019,11 +5031,15 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 
 - (void)clearHistory:(id)s {
   NSAlert *a=[[NSAlert alloc]init];
-  a.messageText=@"Clear Browsing History?";
-  a.informativeText=@"This removes all entries from your BearBrowser history. This cannot be undone.";
-  [a addButtonWithTitle:@"Clear History"]; [a addButtonWithTitle:@"Cancel"];
+  a.messageText=@"Clear Browsing Data?";
+  a.informativeText=@"Removes history, cookies, cached images, and site data. This cannot be undone.";
+  [a addButtonWithTitle:@"Clear Data"]; [a addButtonWithTitle:@"Cancel"];
   [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
-    if (rc==NSAlertFirstButtonReturn) [[BBHistoryStore shared] clearAll];
+    if (rc!=NSAlertFirstButtonReturn) return;
+    [[BBHistoryStore shared] clearAll];
+    // Also wipe WebKit's persistent store: cookies, disk cache, local storage, etc.
+    NSSet *all=[WKWebsiteDataStore allWebsiteDataTypes];
+    [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:all modifiedSince:[NSDate distantPast] completionHandler:^{}];
   }];
 }
 - (void)goHome:(id)s {
@@ -6144,8 +6160,17 @@ static NSString *kFaviconJS=@"(function(){"
     if (sel==@selector(moveUp:))     { [self.addressDropdown selectPrev]; return YES; }
     if (sel==@selector(insertNewline:)) {
       if ([self.addressDropdown confirmSelection]) return YES;
-      // Option+Return → open in new tab (Chrome Alt+Enter behavior)
-      BOOL openInNewTab=([NSApp currentEvent].modifierFlags & NSEventModifierFlagOption) != 0;
+      // Ctrl+Return → www.{text}.com expansion (Chrome behavior)
+      NSUInteger mods=[NSApp currentEvent].modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+      if (mods & NSEventModifierFlagControl) {
+        NSString *t=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (t.length && ![t containsString:@"."] && ![t containsString:@" "]) {
+          NSString *expanded=[NSString stringWithFormat:@"https://www.%@.com",t];
+          NSURL *eu=[NSURL URLWithString:expanded];
+          if (eu) { [self.webView loadRequest:[NSURLRequest requestWithURL:eu]]; [self.window makeFirstResponder:self.webView]; return YES; }
+        }
+      }
+      BOOL openInNewTab=(mods & NSEventModifierFlagOption) != 0;
       NSString *raw=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
       // Reject any dangerous scheme typed directly into the address bar
       NSString *rawLower=raw.lowercaseString;
