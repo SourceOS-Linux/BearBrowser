@@ -45,7 +45,8 @@ if [ "$(uname -s)" = "Darwin" ]; then
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   # AVFoundation: speech synthesis (read-aloud). Security/CommonCrypto: token + crypto helpers.
-  clang -fobjc-arc -framework Cocoa -framework WebKit -framework AVFoundation -framework Security "$source" -o "$tmp/BearBrowser"
+  # UniformTypeIdentifiers: export markdown save panel in Research Sessions.
+  clang -fobjc-arc -framework Cocoa -framework WebKit -framework AVFoundation -framework Security -framework UniformTypeIdentifiers "$source" -o "$tmp/BearBrowser"
   test -x "$tmp/BearBrowser"
   echo "ok: native macOS shell compiles"
 else

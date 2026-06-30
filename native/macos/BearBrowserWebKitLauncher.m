@@ -5,6 +5,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -307,11 +308,15 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(strong) NSImage   *favicon;
 @property(assign) BOOL       isLoading;
 @property(assign) BOOL       isPrivate;
-@property(assign) NSInteger  dialogCount;       // JS dialogs shown since last navigation
-@property(assign) BOOL       dialogsSuppressed; // user chose "Block additional dialogs"
+@property(assign) NSInteger  dialogCount;
+@property(assign) BOOL       dialogsSuppressed;
+// Tab suspension — frees WKWebView memory for background tabs
+@property(assign) BOOL       suspended;
+@property(copy)   NSString  *suspendedURL;    // URL to reload on wake
+@property(strong) NSDate    *lastActiveAt;    // nil = never focused
 @end
 @implementation BBTab
-- (instancetype)init { self=[super init]; _title=@"New Tab"; return self; }
+- (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
 @end
 
 // ── BBTabItemView ─────────────────────────────────────────────────────────────
@@ -640,6 +645,106 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   NSData *d=[NSJSONSerialization dataWithJSONObject:arr options:0 error:nil];
   [[NSFileManager defaultManager] createDirectoryAtPath:BBSupportDir() withIntermediateDirectories:YES attributes:nil error:nil];
   [d writeToFile:[BBSupportDir() stringByAppendingPathComponent:@"bookmarks.json"] atomically:YES];
+}
+@end
+
+// ── BBResearchSession ─────────────────────────────────────────────────────────
+// A named pile of URLs with per-item status. Not bookmarks — designed for
+// research workflows: open 500 tabs, collapse to a session, curate, hand to agent.
+typedef NS_ENUM(NSInteger, BBResearchStatus) {
+  BBResearchStatusUnread=0, BBResearchStatusReading, BBResearchStatusDone, BBResearchStatusDismissed
+};
+@interface BBResearchItem : NSObject
+@property(copy)   NSString         *urlString;
+@property(copy)   NSString         *title;
+@property(copy)   NSString         *note;        // user annotation
+@property(assign) BBResearchStatus  status;
+@property(strong) NSDate           *addedAt;
+- (NSDictionary *)toDict;
++ (BBResearchItem *)fromDict:(NSDictionary *)d;
+@end
+@implementation BBResearchItem
+- (NSDictionary *)toDict {
+  return @{@"url":_urlString?:@"",@"title":_title?:@"",@"note":_note?:@"",
+           @"status":@(_status),@"t":@(_addedAt.timeIntervalSince1970)};
+}
++ (BBResearchItem *)fromDict:(NSDictionary *)d {
+  BBResearchItem *it=[BBResearchItem new];
+  it.urlString=d[@"url"]?:@""; it.title=d[@"title"]?:@""; it.note=d[@"note"]?:@"";
+  it.status=(BBResearchStatus)[d[@"status"] integerValue];
+  it.addedAt=[NSDate dateWithTimeIntervalSince1970:[d[@"t"] doubleValue]];
+  return it;
+}
+@end
+
+@interface BBResearchSession : NSObject
+@property(copy)   NSString                       *name;
+@property(strong) NSMutableArray<BBResearchItem*> *items;
+@property(strong) NSDate                          *createdAt;
+- (NSDictionary *)toDict;
++ (BBResearchSession *)fromDict:(NSDictionary *)d;
+- (NSUInteger)unreadCount;
+- (NSString *)exportMarkdown;
+@end
+@implementation BBResearchSession
+- (instancetype)initWithName:(NSString *)name {
+  self=[super init]; _name=name; _items=[NSMutableArray array]; _createdAt=[NSDate date]; return self;
+}
+- (NSDictionary *)toDict {
+  NSMutableArray *arr=[NSMutableArray array];
+  for (BBResearchItem *it in _items) [arr addObject:[it toDict]];
+  return @{@"name":_name?:@"",@"t":@(_createdAt.timeIntervalSince1970),@"items":arr};
+}
++ (BBResearchSession *)fromDict:(NSDictionary *)d {
+  BBResearchSession *s=[[BBResearchSession alloc] initWithName:d[@"name"]?:@"Session"];
+  s.createdAt=[NSDate dateWithTimeIntervalSince1970:[d[@"t"] doubleValue]];
+  for (NSDictionary *id_ in d[@"items"]) [s.items addObject:[BBResearchItem fromDict:id_]];
+  return s;
+}
+- (NSUInteger)unreadCount {
+  NSUInteger n=0; for (BBResearchItem *it in _items) if(it.status==BBResearchStatusUnread) n++; return n;
+}
+- (NSString *)exportMarkdown {
+  NSMutableString *md=[NSMutableString string];
+  [md appendFormat:@"# %@\n\n",_name];
+  static NSArray *labels; if(!labels) labels=@[@"☐",@"…",@"✓",@"✗"];
+  for (BBResearchItem *it in _items) {
+    [md appendFormat:@"- %@ [%@](%@)",labels[it.status],it.title.length?it.title:it.urlString,it.urlString];
+    if (it.note.length) [md appendFormat:@"  \n  > %@",it.note];
+    [md appendString:@"\n"];
+  }
+  return md;
+}
+@end
+
+@interface BBResearchStore : NSObject
+@property(strong) NSMutableArray<BBResearchSession*> *sessions;
++ (instancetype)shared;
+- (void)save;
+- (BBResearchSession *)sessionNamed:(NSString *)name create:(BOOL)create;
+@end
+@implementation BBResearchStore
++ (instancetype)shared { static BBResearchStore *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (instancetype)init {
+  self=[super init]; _sessions=[NSMutableArray array];
+  NSString *path=[BBSupportDir() stringByAppendingPathComponent:@"research-sessions.json"];
+  NSData *d=[NSData dataWithContentsOfFile:path];
+  if (d) for (NSDictionary *r in [NSJSONSerialization JSONObjectWithData:d options:0 error:nil])
+    [_sessions addObject:[BBResearchSession fromDict:r]];
+  return self;
+}
+- (void)save {
+  NSMutableArray *arr=[NSMutableArray array];
+  for (BBResearchSession *s in _sessions) [arr addObject:[s toDict]];
+  NSData *d=[NSJSONSerialization dataWithJSONObject:arr options:NSJSONWritingPrettyPrinted error:nil];
+  [[NSFileManager defaultManager] createDirectoryAtPath:BBSupportDir() withIntermediateDirectories:YES attributes:nil error:nil];
+  [d writeToFile:[BBSupportDir() stringByAppendingPathComponent:@"research-sessions.json"] atomically:YES];
+}
+- (BBResearchSession *)sessionNamed:(NSString *)name create:(BOOL)create {
+  for (BBResearchSession *s in _sessions) if ([s.name isEqualToString:name]) return s;
+  if (!create) return nil;
+  BBResearchSession *s=[[BBResearchSession alloc] initWithName:name];
+  [_sessions addObject:s]; [self save]; return s;
 }
 @end
 
@@ -1209,6 +1314,67 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   [[BBBookmarksStore shared] removeAtIndex:row];
   [self.tv reloadData];
 }
+@end
+
+// ── BBResearchManagerDS ───────────────────────────────────────────────────────
+// Combined NSTableViewDataSource/Delegate for both the session list (left) and
+// the item list (right) in the Research Session Manager window.
+@interface BBResearchManagerDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@property(weak)   NSWindow *rw;
+@property(weak)   id        delegate;
+@property(strong) NSTableView *sessTV;
+@property(strong) NSTableView *itemTV;
+@end
+@implementation BBResearchManagerDS
+- (instancetype)initWithWindow:(NSWindow *)w delegate:(id)d {
+  self=[super init];
+  _rw=w; _delegate=d;
+  _sessTV=objc_getAssociatedObject(w,"sessTV");
+  _itemTV=objc_getAssociatedObject(w,"itemTV");
+  return self;
+}
+- (BBResearchSession *)currentSession {
+  NSInteger row=_sessTV.selectedRow;
+  NSArray *s=[BBResearchStore shared].sessions;
+  if(row<0||row>=(NSInteger)s.count) return nil;
+  return s[row];
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv {
+  if (tv==_sessTV) return (NSInteger)[BBResearchStore shared].sessions.count;
+  BBResearchSession *s=[self currentSession]; return s?(NSInteger)s.items.count:0;
+}
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  NSTextField *f=[tv makeViewWithIdentifier:col.identifier owner:self];
+  if (!f) {
+    f=[[NSTextField alloc]init]; f.identifier=col.identifier; f.bordered=NO;
+    f.editable=NO; f.selectable=NO; f.backgroundColor=[NSColor clearColor];
+    f.lineBreakMode=NSLineBreakByTruncatingTail;
+  }
+  if (tv==_sessTV) {
+    NSArray *s=[BBResearchStore shared].sessions;
+    if (row<0||row>=(NSInteger)s.count) { f.stringValue=@""; return f; }
+    BBResearchSession *sess=s[row];
+    f.stringValue=[NSString stringWithFormat:@"%@ (%lu)",sess.name,(unsigned long)[sess unreadCount]];
+  } else {
+    BBResearchSession *sess=[self currentSession]; if (!sess) { f.stringValue=@""; return f; }
+    if (row<0||row>=(NSInteger)sess.items.count) { f.stringValue=@""; return f; }
+    BBResearchItem *it=sess.items[row];
+    NSString *cid=col.identifier;
+    if ([cid isEqualToString:@"status"]) {
+      static NSArray *icons; if(!icons) icons=@[@"☐",@"…",@"✓",@"✗"];
+      f.stringValue=icons[it.status]; f.alignment=NSTextAlignmentCenter;
+    } else if ([cid isEqualToString:@"title"]) {
+      f.stringValue=it.title.length?it.title:it.urlString;
+    } else {
+      f.stringValue=it.urlString; f.textColor=[NSColor secondaryLabelColor];
+    }
+  }
+  return f;
+}
+- (void)tableViewSelectionDidChange:(NSNotification *)n {
+  if (n.object==_sessTV) [_itemTV reloadData];
+}
+- (BOOL)tableView:(NSTableView *)tv shouldEditTableColumn:(NSTableColumn *)c row:(NSInteger)r { return NO; }
 @end
 
 // ── BBConnectionRecord ────────────────────────────────────────────────────────
@@ -2558,7 +2724,8 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
 @property(assign) BOOL    readerMode;
 @property(strong) NSURL  *readerOriginalURL;
-@property(assign) BOOL    suppressInlineCompletion; // guard against re-entrant completion
+@property(assign) BOOL    suppressInlineCompletion;
+@property(strong) NSTimer *suspendTimer;  // periodic tab suspension sweep
 @end
 
 // Retains a controller for every open browser window. Both NSApplication.delegate
@@ -2693,6 +2860,15 @@ static NSMutableArray *gBBWindowControllers;
   // No key equivalent here — ⌘⇧B is already bound on View ▸ Always Show Bookmarks Bar.
   [bmM addItemWithTitle:@"Show Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
 
+  // ── Research Sessions ──
+  NSMenu *resM=submenu(@"Research");
+  mi(resM,@"Research Sessions…",@selector(openResearchManager:),@"r",Cmd|Shift);
+  [resM addItem:[NSMenuItem separatorItem]];
+  mi(resM,@"Add Tab to Session…",@selector(addCurrentTabToSession:),@"s",Cmd|Shift);
+  [resM addItemWithTitle:@"Collect All Tabs into Session…" action:@selector(collectAllTabsToSession:) keyEquivalent:@""];
+  [resM addItem:[NSMenuItem separatorItem]];
+  [resM addItemWithTitle:@"Suspend Inactive Tabs Now" action:@selector(suspendInactiveTabs:) keyEquivalent:@""];
+
   // ── Tab ──
   NSMenu *tabM=submenu(@"Tab");
   mi(tabM,@"New Tab",@selector(newTab:),@"t",Cmd);
@@ -2732,7 +2908,11 @@ static NSMutableArray *gBBWindowControllers;
     gBBWindowControllers=[NSMutableArray array];
     // Search suggestions default ON (DuckDuckGo's privacy-respecting endpoint); the
     // user can disable in Settings, and they're always off in private tabs.
-    [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"BBSearchSuggestions":@YES}];
+    [[NSUserDefaults standardUserDefaults] registerDefaults:@{
+    @"BBSearchSuggestions":@YES,
+    @"BBInlineAutocomplete":@YES,
+    @"BBSuspendAfterSec":@300,   // 5 minutes
+  }];
   });
   [gBBWindowControllers addObject:self];  // keep this controller alive for its window's lifetime
   BBEmitEvent(@"app.launch",@"allow",@"Native shell launched.",@{@"bundleId":@"dev.sourceos.BearBrowser"});
@@ -2932,6 +3112,7 @@ static NSMutableArray *gBBWindowControllers;
     self.bookmarksBarVisible=YES; self.bookmarksBar.hidden=NO;
     [self reloadBookmarksBar]; [self resizeWebViewForCurrentTab];
   }
+  [self startSuspendTimer];
   [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
   BBLog([NSString stringWithFormat:@"window frame=%@ root=%@ toolbar=%@",
     NSStringFromRect(self.window.frame), NSStringFromRect(self.root.bounds), NSStringFromRect(self.toolbarBg.frame)]);
@@ -4276,16 +4457,76 @@ static NSMutableArray *gBBWindowControllers;
   [self reloadTabBar];
 }
 
+// ── Tab suspension ────────────────────────────────────────────────────────────
+// Suspend a background tab: save its URL, load a minimal placeholder so the
+// WKWebView process yields its memory, and mark it suspended. The tab bar still
+// shows its title + favicon — only the web process is freed.
+static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
+  return [NSString stringWithFormat:
+    @"<!doctype html><html><head><meta charset='utf-8'>"
+    @"<style>body{margin:0;display:flex;align-items:center;justify-content:center;"
+    @"min-height:100vh;font-family:-apple-system,sans-serif;background:#f0f2f4;"
+    @"color:#6e6e73;font-size:13px;}"
+    @".wrap{text-align:center;opacity:.7}"
+    @".icon{font-size:28px;margin-bottom:8px}"
+    @"p{margin:0}</style></head>"
+    @"<body><div class='wrap'><div class='icon'>💤</div><p>%@ — suspended</p>"
+    @"<p style='font-size:11px;margin-top:4px;opacity:.6'>%@</p></div></body></html>",
+    title.length?title:@"Tab", url?:@""];
+}
+- (void)suspendTab:(BBTab *)tab {
+  if (tab.suspended || tab==self.activeTab) return;
+  NSString *url=tab.webView.URL.absoluteString;
+  if (!url.length || [self isInternalURL:url]) return; // don't suspend NTP
+  tab.suspendedURL=url;
+  tab.suspended=YES;
+  [tab.webView loadHTMLString:BBSuspendedHTML(tab.title,url) baseURL:nil];
+  BBLog([NSString stringWithFormat:@"[tab-suspend] %@",url]);
+}
+- (void)wakeTab:(BBTab *)tab {
+  if (!tab.suspended || !tab.suspendedURL.length) return;
+  tab.suspended=NO;
+  NSURL *u=[NSURL URLWithString:tab.suspendedURL];
+  if (u) [tab.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  tab.suspendedURL=nil;
+}
+// Sweep: suspend background tabs idle > threshold (default 5 min, user-configurable)
+- (void)suspendInactiveTabs:(id)sender {
+  NSInteger threshSec=[[NSUserDefaults standardUserDefaults] integerForKey:@"BBSuspendAfterSec"];
+  if (threshSec<=0) threshSec=300; // 5 minutes default
+  NSDate *now=[NSDate date];
+  for (NSInteger i=0;i<(NSInteger)self.tabs.count;i++) {
+    if (i==self.activeTabIndex) continue;
+    BBTab *t=self.tabs[i];
+    if (t.suspended) continue;
+    NSTimeInterval idle=t.lastActiveAt?[now timeIntervalSinceDate:t.lastActiveAt]:9999;
+    if (idle>=threshSec) [self suspendTab:t];
+  }
+}
+- (void)startSuspendTimer {
+  [self.suspendTimer invalidate];
+  // Sweep every 60 seconds; actual suspend threshold is per-tab idle time
+  self.suspendTimer=[NSTimer scheduledTimerWithTimeInterval:60 target:self
+    selector:@selector(suspendInactiveTabs:) userInfo:nil repeats:YES];
+  self.suspendTimer.tolerance=30; // coalesce with other timers
+}
+// ─────────────────────────────────────────────────────────────────────────────
 - (void)activateTab:(NSInteger)index {
-  if (index<0||index>=(NSInteger)self.tabs.count) return; // bounds guard
+  if (index<0||index>=(NSInteger)self.tabs.count) return;
+  // Stamp the tab we're leaving so the suspension sweep knows when it went idle
+  if (self.activeTabIndex>=0 && self.activeTabIndex<(NSInteger)self.tabs.count)
+    self.tabs[self.activeTabIndex].lastActiveAt=[NSDate date];
   for (BBTab *t in self.tabs) { [t.webView removeFromSuperview]; t.webView.hidden=YES; }
   self.activeTabIndex=index;
   BBTab *tab=self.tabs[index];
+  // Wake a suspended tab the moment the user clicks it
+  if (tab.suspended) [self wakeTab:tab];
+  tab.lastActiveAt=[NSDate date];
   tab.webView.hidden=NO;
   [self resizeWebViewForCurrentTab];
   [self.root addSubview:tab.webView positioned:NSWindowBelow relativeTo:self.tabBarView];
-  NSString *url=tab.webView.URL.absoluteString?:@"";
-  self.address.stringValue=[self isInternalURL:url]?@"":url;
+  NSString *url=tab.suspended?tab.suspendedURL:(tab.webView.URL.absoluteString?:@"");
+  self.address.stringValue=[self isInternalURL:url]?@"":url?:@"";
   self.backButton.enabled=tab.webView.canGoBack;
   self.forwardButton.enabled=tab.webView.canGoForward;
   self.window.title=tab.title.length?tab.title:@"BearBrowser";
@@ -4693,6 +4934,176 @@ static NSMutableArray *gBBWindowControllers;
   [self.window makeFirstResponder:self.webView];
   [self emitNav:@"navigation.requested" url:url.absoluteString reason:@"Paste and go." private:self.activeTab.isPrivate];
   [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+}
+
+// ── Research Sessions ─────────────────────────────────────────────────────────
+- (NSString *)promptForSessionName:(NSString *)title existing:(BOOL)allowExisting {
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=title;
+  a.informativeText=allowExisting?@"Enter a name (existing session will be appended to).":@"Enter a new session name.";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  tf.placeholderString=@"My Research";
+  // Pre-fill with the first session name if any exist
+  if (allowExisting && [BBResearchStore shared].sessions.count)
+    tf.stringValue=[BBResearchStore shared].sessions.lastObject.name;
+  a.accessoryView=tf;
+  [a addButtonWithTitle:@"Add"]; [a addButtonWithTitle:@"Cancel"];
+  [a layout]; [[a window] makeFirstResponder:tf]; [tf selectAll:nil];
+  NSModalResponse rc=[a runModal];
+  if (rc!=NSAlertFirstButtonReturn) return nil;
+  return [tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+- (void)addCurrentTabToSession:(id)s {
+  NSString *url=self.webView.URL.absoluteString;
+  if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
+  NSString *name=[self promptForSessionName:@"Add to Research Session" existing:YES];
+  if (!name.length) return;
+  BBResearchSession *sess=[[BBResearchStore shared] sessionNamed:name create:YES];
+  BBResearchItem *it=[BBResearchItem new];
+  it.urlString=url; it.title=self.activeTab.title.length?self.activeTab.title:url;
+  it.note=@""; it.status=BBResearchStatusUnread; it.addedAt=[NSDate date];
+  [sess.items addObject:it]; [[BBResearchStore shared] save];
+  BBLog([NSString stringWithFormat:@"[research] added %@ to %@",url,name]);
+}
+- (void)collectAllTabsToSession:(id)s {
+  NSString *name=[self promptForSessionName:@"Collect All Tabs to Session" existing:YES];
+  if (!name.length) return;
+  BBResearchSession *sess=[[BBResearchStore shared] sessionNamed:name create:YES];
+  NSInteger added=0;
+  for (BBTab *t in self.tabs) {
+    NSString *url=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!url.length||[self isInternalURL:url]) continue;
+    // Deduplicate within session
+    BOOL dup=NO; for (BBResearchItem *x in sess.items) if ([x.urlString isEqualToString:url]) { dup=YES; break; }
+    if (dup) continue;
+    BBResearchItem *it=[BBResearchItem new];
+    it.urlString=url; it.title=t.title.length?t.title:url;
+    it.note=@""; it.status=BBResearchStatusUnread; it.addedAt=[NSDate date];
+    [sess.items addObject:it]; added++;
+  }
+  [[BBResearchStore shared] save];
+  NSAlert *ok=[[NSAlert alloc]init];
+  ok.messageText=[NSString stringWithFormat:@"%ld tab%@ added to \"%@\"", (long)added, added==1?@"":@"s", name];
+  ok.informativeText=@"Open Research Sessions to review, annotate, or hand off to an agent.";
+  [ok addButtonWithTitle:@"Open Sessions"]; [ok addButtonWithTitle:@"Done"];
+  if ([ok runModal]==NSAlertFirstButtonReturn) [self openResearchManager:nil];
+}
+- (void)openResearchManager:(id)s {
+  CGFloat W=800, H=540;
+  NSWindow *rw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,H)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  rw.releasedWhenClosed=NO; rw.title=@"Research Sessions"; [rw center];
+  NSView *cv=rw.contentView;
+
+  // Left: session list
+  NSScrollView *sessScroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,200,H-48)];
+  sessScroll.autoresizingMask=NSViewHeightSizable; sessScroll.hasVerticalScroller=YES;
+  NSTableView *sessTV=[[NSTableView alloc]init]; sessTV.rowHeight=28; sessTV.headerView=nil;
+  NSTableColumn *sc=[[NSTableColumn alloc]initWithIdentifier:@"s"]; sc.width=198;
+  [sessTV addTableColumn:sc]; sessScroll.documentView=sessTV;
+  [cv addSubview:sessScroll];
+
+  // Right: item list
+  NSScrollView *itemScroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(200,48,W-200,H-48)];
+  itemScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; itemScroll.hasVerticalScroller=YES;
+  NSTableView *itemTV=[[NSTableView alloc]init]; itemTV.rowHeight=32; itemTV.usesAlternatingRowBackgroundColors=YES;
+  for (NSArray *col in @[@[@"status",@"S",@42],@[@"title",@"Title",@380],@[@"url",@"URL",@220]]) {
+    NSTableColumn *c=[[NSTableColumn alloc]initWithIdentifier:col[0]];
+    c.width=[col[2] doubleValue]; c.title=col[1];
+    c.resizingMask=NSTableColumnUserResizingMask|NSTableColumnAutoresizingMask;
+    [itemTV addTableColumn:c];
+  }
+  itemScroll.documentView=itemTV; [cv addSubview:itemScroll];
+
+  // Toolbar buttons at bottom
+  void(^btn)(NSString*,NSRect,SEL)=^(NSString*t,NSRect r,SEL a){
+    NSButton *b=[[NSButton alloc]initWithFrame:r]; b.title=t; b.bezelStyle=NSBezelStyleRounded;
+    b.target=self; b.action=a; [cv addSubview:b];
+  };
+  btn(@"New Session", NSMakeRect(8,10,120,28), @selector(researchNewSession:));
+  btn(@"Delete Session", NSMakeRect(136,10,120,28), @selector(researchDeleteSession:));
+  btn(@"Export Markdown", NSMakeRect(264,10,140,28), @selector(researchExportMarkdown:));
+  btn(@"Hand to Agent", NSMakeRect(412,10,130,28), @selector(researchHandToAgent:));
+  btn(@"Open Selected", NSMakeRect(W-140,10,130,28), @selector(researchOpenSelected:));
+
+  // Wiring via associated objects: store the two table views on the window so action handlers can reach them
+  objc_setAssociatedObject(rw, "sessTV", sessTV, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(rw, "itemTV", itemTV, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(rw, "rw", rw, OBJC_ASSOCIATION_RETAIN_NONATOMIC); // keep rw alive
+
+  // Simple data source block — wire both tables with BBResearchManagerDS
+  BBResearchManagerDS *ds=[[BBResearchManagerDS alloc] initWithWindow:rw delegate:self];
+  sessTV.dataSource=ds; sessTV.delegate=ds;
+  itemTV.dataSource=ds; itemTV.delegate=ds;
+  objc_setAssociatedObject(rw, "ds", ds, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+  [rw makeKeyAndOrderFront:nil];
+}
+// Stubs called by research manager buttons — delegate to the DS which has the state
+- (void)researchNewSession:(id)s {
+  NSString *name=[self promptForSessionName:@"New Research Session" existing:NO];
+  if (!name.length) return;
+  [[BBResearchStore shared] sessionNamed:name create:YES];
+  // Reload whichever research window is key
+  NSWindow *rw=[[NSApp keyWindow] isKindOfClass:[NSWindow class]]?[NSApp keyWindow]:nil;
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  [sessTV reloadData];
+}
+- (void)researchDeleteSession:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSInteger row=sessTV.selectedRow;
+  if (row<0||row>=(NSInteger)[BBResearchStore shared].sessions.count) return;
+  [[BBResearchStore shared].sessions removeObjectAtIndex:row];
+  [[BBResearchStore shared] save]; [sessTV reloadData];
+}
+- (void)researchExportMarkdown:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSInteger row=sessTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (row<0||row>=(NSInteger)sessions.count) return;
+  BBResearchSession *sess=sessions[row];
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=[NSString stringWithFormat:@"%@.md",sess.name];
+  sp.allowedContentTypes=@[[UTType typeWithFilenameExtension:@"md"]];
+  [sp beginSheetModalForWindow:rw completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK) return;
+    [[sess exportMarkdown] writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  }];
+}
+- (void)researchHandToAgent:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSInteger row=sessTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (row<0||row>=(NSInteger)sessions.count) return;
+  BBResearchSession *sess=sessions[row];
+  NSMutableArray *urls=[NSMutableArray array];
+  for (BBResearchItem *it in sess.items)
+    if (it.status==BBResearchStatusUnread) [urls addObject:it.urlString];
+  BBProposeAction(@"research_session_hand_off",@"research",
+    [NSString stringWithFormat:@"Research %ld URLs in \"%@\"",(long)urls.count,sess.name],
+    [urls firstObject]?:@"",@"low",@"hold",YES,
+    [NSString stringWithFormat:@"Agent: summarize and triage %ld URLs from research session \"%@\".",(long)urls.count,sess.name]);
+  NSAlert *ok=[[NSAlert alloc]init];
+  ok.messageText=@"Research Session Queued";
+  ok.informativeText=[NSString stringWithFormat:@"%ld unread URLs from \"%@\" proposed to the agent.",(long)urls.count,sess.name];
+  [ok addButtonWithTitle:@"OK"]; [ok runModal];
+}
+- (void)researchOpenSelected:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSTableView *itemTV=objc_getAssociatedObject(rw,"itemTV");
+  NSInteger srow=sessTV.selectedRow, irow=itemTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (srow<0||srow>=(NSInteger)sessions.count) return;
+  BBResearchSession *sess=sessions[srow];
+  if (irow<0||irow>=(NSInteger)sess.items.count) return;
+  BBResearchItem *it=sess.items[irow];
+  NSURL *u=[NSURL URLWithString:it.urlString]; if(!u) return;
+  it.status=BBResearchStatusReading; [[BBResearchStore shared] save]; [itemTV reloadData];
+  [self addTabPrivate:NO]; [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
 }
 
 - (void)newTab:(id)s              { [self addTabPrivate:NO]; }
@@ -5596,6 +6007,16 @@ static const NSInteger kDialogAbuseThreshold = 3;
   [[NSPasteboard generalPasteboard] clearContents];
   [[NSPasteboard generalPasteboard] setString:u forType:NSPasteboardTypeString];
 }
+- (void)contextAddLinkToSession:(NSMenuItem *)item {
+  NSURL *url=item.representedObject; if (!url) return;
+  NSString *name=[self promptForSessionName:@"Add Link to Research Session" existing:YES];
+  if (!name.length) return;
+  BBResearchSession *sess=[[BBResearchStore shared] sessionNamed:name create:YES];
+  BBResearchItem *it=[BBResearchItem new];
+  it.urlString=url.absoluteString; it.title=url.host?:url.absoluteString;
+  it.note=@""; it.status=BBResearchStatusUnread; it.addedAt=[NSDate date];
+  [sess.items addObject:it]; [[BBResearchStore shared] save];
+}
 - (void)contextOpenLinkNewWindow:(NSMenuItem *)item {
   NSURL *url=item.representedObject; if (!url) return;
   [self openURLInNewWindow:url];
@@ -5654,6 +6075,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
           add(@"Open Link in New Tab",@selector(contextOpenLinkNewTab:),linkURL);
           add(@"Open Link in New Window",@selector(contextOpenLinkNewWindow:),linkURL);
           add(@"Copy Link Address",@selector(contextCopyLink:),linkURL);
+          add(@"Add Link to Research Session…",@selector(contextAddLinkToSession:),linkURL);
           [menu addItem:[NSMenuItem separatorItem]];
         }
         if (imgURL) {
@@ -5666,6 +6088,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
         add(@"Reload",@selector(reloadOrStop:),nil);
         [menu addItem:[NSMenuItem separatorItem]];
         add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
+        add(@"Add Page to Research Session…",@selector(addCurrentTabToSession:),nil);
         add(@"Save Page As…",@selector(savePage:),nil);
         add(@"Print…",@selector(printPage:),nil);
         [menu addItem:[NSMenuItem separatorItem]];
