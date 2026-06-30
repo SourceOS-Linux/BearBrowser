@@ -6710,17 +6710,34 @@ static const NSInteger kDialogAbuseThreshold = 3;
     return;
   }
 
-  // Cmd+click → open in new background tab
-  if (action.navigationType==WKNavigationTypeLinkActivated &&
-      (action.modifierFlags & NSEventModifierFlagCommand)) {
-    decisionHandler(WKNavigationActionPolicyCancel);
-    dispatch_async(dispatch_get_main_queue(),^{
-      NSInteger prev=self.activeTabIndex;
-      [self addTabPrivate:self.activeTab.isPrivate];
-      [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
-      [self tabItemDidSelect:prev]; // stay on current tab
-    });
-    return;
+  // Modifier-click behaviors on links (Chrome parity):
+  //   ⌘⇧-click → new tab AND switch to it (foreground)
+  //   ⌘-click  → new background tab (stay on current)
+  //   ⇧-click  → new window
+  if (action.navigationType==WKNavigationTypeLinkActivated) {
+    NSEventModifierFlags m=action.modifierFlags;
+    BOOL cmd=(m & NSEventModifierFlagCommand)!=0;
+    BOOL shift=(m & NSEventModifierFlagShift)!=0;
+    if (cmd) {
+      decisionHandler(WKNavigationActionPolicyCancel);
+      dispatch_async(dispatch_get_main_queue(),^{
+        NSInteger prev=self.activeTabIndex;
+        [self addTabPrivate:self.activeTab.isPrivate];
+        [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+        if (!shift) [self tabItemDidSelect:prev]; // ⌘+click stays, ⌘⇧+click foregrounds
+      });
+      return;
+    }
+    if (shift) {
+      decisionHandler(WKNavigationActionPolicyCancel);
+      dispatch_async(dispatch_get_main_queue(),^{
+        BBDelegate *w=[[BBDelegate alloc]init];
+        NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+        [w applicationDidFinishLaunching:dummy];
+        [w.webView loadRequest:[NSURLRequest requestWithURL:url]];
+      });
+      return;
+    }
   }
 
   // Tracking-parameter strip — remove well-known analytics tags before loading
