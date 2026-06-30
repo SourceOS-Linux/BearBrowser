@@ -4618,7 +4618,8 @@ static NSMutableArray *gBBWindowControllers;
   } else if ([path isEqualToString:@"title"]) {
     BBTab *tab=[self tabForWebView:wv];
     if (tab&&wv.title.length) {
-      tab.title=wv.title; [self reloadTabBar]; self.window.title=wv.title;
+      tab.title=wv.title; [self reloadTabBar];
+      if (tab==self.activeTab) self.window.title=[self windowTitleForTab:tab];
       // Patch the history entry recorded at didFinishNavigation (its title was
       // usually empty/placeholder because the title hadn't loaded yet).
       if (!tab.isPrivate) [[BBHistoryStore shared] updateTitle:wv.title forURL:wv.URL.absoluteString];
@@ -4740,7 +4741,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   self.address.stringValue=[self isInternalURL:url]?@"":url?:@"";
   self.backButton.enabled=tab.webView.canGoBack;
   self.forwardButton.enabled=tab.webView.canGoForward;
-  self.window.title=tab.title.length?tab.title:@"BearBrowser";
+  self.window.title=[self windowTitleForTab:tab];
   [self updateSecurityIndicator:tab.webView.URL];
   [self updateStarButton];
   [self applyZoomForCurrentTab];
@@ -4765,7 +4766,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 - (void)teardownTabAtIndex:(NSInteger)i {
   if (i<0||i>=(NSInteger)self.tabs.count) return;
   BBTab *t=self.tabs[i];
-  NSString *u=t.webView.URL.absoluteString;
+  NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
   if (u.length && ![self isInternalURL:u] && !t.isPrivate) [self pushRecentlyClosed:u title:t.title];
   [t.webView removeObserver:self forKeyPath:@"estimatedProgress"];
   [t.webView removeObserver:self forKeyPath:@"title"];
@@ -4981,6 +4982,10 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [wv evaluateJavaScript:js completionHandler:nil];
 }
 
+- (NSString *)windowTitleForTab:(BBTab *)tab {
+  NSString *base=tab.title.length?tab.title:@"BearBrowser";
+  return tab.isPrivate?[@"\U0001F575 Private — " stringByAppendingString:base]:base;
+}
 - (BBTab *)tabForWebView:(WKWebView *)wv {
   for (BBTab *t in self.tabs) if(t.webView==wv) return t;
   return nil;
@@ -6889,7 +6894,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
     [ri setTemplate:YES]; self.reloadButton.image=ri; self.reloadButton.toolTip=@"Reload";
     self.address.stringValue=[self isInternalURL:url]?@"":url;
     self.backButton.enabled=wv.canGoBack; self.forwardButton.enabled=wv.canGoForward;
-    self.window.title=tab.title;
+    self.window.title=[self windowTitleForTab:tab];
     [self updateSecurityIndicator:wv.URL];
     [self updateStarButton];
     [self applyZoomForCurrentTab];
