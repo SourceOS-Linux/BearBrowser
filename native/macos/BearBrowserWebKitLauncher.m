@@ -922,6 +922,112 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 }
 @end
 
+// ── BBReadingList ─────────────────────────────────────────────────────────────
+// Persistent "save for later" list, distinct from bookmarks: items have a read/
+// unread state, and the UI defaults to unread. Stored at readinglist.json.
+@interface BBReadingItem : NSObject
+@property(copy) NSString *title, *urlString;
+@property(strong) NSDate *addedAt;
+@property(assign) BOOL    read;
+@end
+@implementation BBReadingItem
+@end
+@interface BBReadingList : NSObject
+@property(strong) NSMutableArray<BBReadingItem *> *items;
++ (instancetype)shared;
+- (void)addTitle:(NSString *)t url:(NSString *)u;
+- (void)removeAtIndex:(NSInteger)i;
+- (void)toggleReadAtIndex:(NSInteger)i;
+- (NSInteger)unreadCount;
+- (BOOL)contains:(NSString *)u;
+- (void)save;
+@end
+@implementation BBReadingList
++ (instancetype)shared { static BBReadingList *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (instancetype)init {
+  self=[super init]; _items=[NSMutableArray array];
+  NSData *d=[NSData dataWithContentsOfFile:[BBSupportDir() stringByAppendingPathComponent:@"readinglist.json"]];
+  if (d) for (NSDictionary *r in [NSJSONSerialization JSONObjectWithData:d options:0 error:nil]) {
+    BBReadingItem *it=[BBReadingItem new];
+    it.title=r[@"title"]?:@""; it.urlString=r[@"url"]?:@"";
+    it.addedAt=[NSDate dateWithTimeIntervalSince1970:[r[@"t"] doubleValue]];
+    it.read=[r[@"read"] boolValue];
+    [_items addObject:it];
+  }
+  return self;
+}
+- (void)addTitle:(NSString *)t url:(NSString *)u {
+  if (!u.length) return;
+  for (BBReadingItem *it in _items) if ([it.urlString isEqualToString:u]) return; // de-dupe
+  BBReadingItem *it=[BBReadingItem new];
+  it.title=t.length?t:u; it.urlString=u; it.addedAt=[NSDate date]; it.read=NO;
+  [_items addObject:it]; [self save];
+}
+- (void)removeAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)_items.count){[_items removeObjectAtIndex:i];[self save];} }
+- (void)toggleReadAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)_items.count){_items[i].read=!_items[i].read;[self save];} }
+- (NSInteger)unreadCount { NSInteger n=0; for (BBReadingItem *it in _items) if (!it.read) n++; return n; }
+- (BOOL)contains:(NSString *)u { for (BBReadingItem *it in _items) if ([it.urlString isEqualToString:u]) return YES; return NO; }
+- (void)save {
+  NSMutableArray *arr=[NSMutableArray array];
+  for (BBReadingItem *it in _items) [arr addObject:@{@"title":it.title?:@"",@"url":it.urlString?:@"",
+    @"t":@(it.addedAt.timeIntervalSince1970),@"read":@(it.read)}];
+  NSData *d=[NSJSONSerialization dataWithJSONObject:arr options:0 error:nil];
+  [[NSFileManager defaultManager] createDirectoryAtPath:BBSupportDir() withIntermediateDirectories:YES attributes:nil error:nil];
+  [d writeToFile:[BBSupportDir() stringByAppendingPathComponent:@"readinglist.json"] atomically:YES];
+}
+@end
+
+// Datasource/delegate for the Reading List sheet (defined here so it can see
+// BBReadingItem/BBReadingList declared just above).
+@interface BBReadingListDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@property(weak) WKWebView *webView;
+@property(weak) NSWindow *win;
+@property(weak) NSTableView *tv;
+- (instancetype)initWithWebView:(WKWebView *)wv window:(NSWindow *)w tableView:(NSTableView *)tv;
+- (void)openSelected;
+- (void)removeSelected;
+- (void)toggleReadSelected;
+@end
+@implementation BBReadingListDS
+- (instancetype)initWithWebView:(WKWebView *)wv window:(NSWindow *)w tableView:(NSTableView *)tv {
+  self=[super init]; _webView=wv; _win=w; _tv=tv; return self;
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return [BBReadingList shared].items.count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  NSArray<BBReadingItem *> *items=[BBReadingList shared].items;
+  if (row<0||row>=(NSInteger)items.count) return nil;
+  BBReadingItem *it=items[row];
+  if ([col.identifier isEqualToString:@"read"]) {
+    NSImageView *iv=[[NSImageView alloc]initWithFrame:NSMakeRect(0,0,18,18)];
+    NSImage *img=[NSImage imageWithSystemSymbolName:it.read?@"checkmark.circle.fill":@"circle" accessibilityDescription:@"Read"];
+    [img setTemplate:YES]; iv.image=img;
+    return iv;
+  }
+  NSTextField *f=[NSTextField labelWithString:[col.identifier isEqualToString:@"title"]?(it.title?:it.urlString):it.urlString];
+  f.font=[NSFont systemFontOfSize:12];
+  f.textColor=it.read?[NSColor tertiaryLabelColor]:[NSColor labelColor];
+  return f;
+}
+- (void)openSelected {
+  NSInteger row=_tv.selectedRow; NSArray<BBReadingItem *> *items=[BBReadingList shared].items;
+  if (row<0||row>=(NSInteger)items.count) return;
+  NSURL *u=[NSURL URLWithString:items[row].urlString]; if (!u) return;
+  [_webView loadRequest:[NSURLRequest requestWithURL:u]];
+  if (!items[row].read) { [[BBReadingList shared] toggleReadAtIndex:row]; [_tv reloadData]; }
+  [_win.sheetParent endSheet:_win];
+}
+- (void)removeSelected {
+  NSInteger row=_tv.selectedRow;
+  [[BBReadingList shared] removeAtIndex:row];
+  [_tv reloadData];
+}
+- (void)toggleReadSelected {
+  NSInteger row=_tv.selectedRow;
+  [[BBReadingList shared] toggleReadAtIndex:row];
+  [_tv reloadData];
+}
+@end
+
 // ── BBResearchSession ─────────────────────────────────────────────────────────
 // A named pile of URLs with per-item status. Not bookmarks — designed for
 // research workflows: open 500 tabs, collapse to a session, curate, hand to agent.
@@ -3192,6 +3298,9 @@ static NSMutableArray *gBBWindowControllers;
   mi(bmM,@"Bookmark This Tab…",@selector(addBookmark:),@"d",Cmd);
   mi(bmM,@"Bookmark All Tabs…",@selector(bookmarkAllTabs:),@"d",Cmd|Shift);
   [bmM addItem:[NSMenuItem separatorItem]];
+  mi(bmM,@"Add to Reading List",@selector(addToReadingList:),@"d",Cmd|Opt);
+  [bmM addItemWithTitle:@"Show Reading List…" action:@selector(showReadingList:) keyEquivalent:@""];
+  [bmM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧B is already bound on View ▸ Always Show Bookmarks Bar.
   [bmM addItemWithTitle:@"Show Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
 
@@ -5452,6 +5561,49 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     });
   }];
 }
+// ── Reading List ────────────────────────────────────────────────────────────
+- (void)addToReadingList:(id)s {
+  NSString *url=self.webView.URL.absoluteString; NSString *title=self.activeTab.title?:url;
+  if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
+  [[BBReadingList shared] addTitle:title url:url];
+  [self showStatus:@"Added to Reading List"];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(1.3*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    if ([self.statusBar.stringValue isEqualToString:@"Added to Reading List"]) self.statusBar.hidden=YES;
+  });
+}
+- (void)showReadingList:(id)s {
+  CGFloat W=640,Hh=460;
+  NSWindow *rw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  rw.releasedWhenClosed=NO; rw.title=@"Reading List"; [rw center];
+  NSView *cv=rw.contentView;
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-48)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=30;
+  NSTableColumn *cr=[[NSTableColumn alloc]initWithIdentifier:@"read"];  cr.title=@"";      cr.width=22;
+  NSTableColumn *ct=[[NSTableColumn alloc]initWithIdentifier:@"title"]; ct.title=@"Title"; ct.width=300;
+  NSTableColumn *cu=[[NSTableColumn alloc]initWithIdentifier:@"url"];   cu.title=@"URL";   cu.width=300;
+  [tv addTableColumn:cr]; [tv addTableColumn:ct]; [tv addTableColumn:cu];
+  sv.documentView=tv; [cv addSubview:sv];
+  BBReadingListDS *ds=[[BBReadingListDS alloc]initWithWebView:self.webView window:rw tableView:tv];
+  tv.dataSource=ds; tv.delegate=ds; tv.target=ds; tv.doubleAction=@selector(openSelected);
+  objc_setAssociatedObject(rw,@"rlds",ds,OBJC_ASSOCIATION_RETAIN);
+  [tv reloadData];
+  NSButton *open=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,90,30)];
+  open.title=@"Open"; open.bezelStyle=NSBezelStyleRounded; open.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  open.target=ds; open.action=@selector(openSelected); [cv addSubview:open];
+  NSButton *toggle=[[NSButton alloc]initWithFrame:NSMakeRect(108,10,140,30)];
+  toggle.title=@"Mark Read/Unread"; toggle.bezelStyle=NSBezelStyleRounded; toggle.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  toggle.target=ds; toggle.action=@selector(toggleReadSelected); [cv addSubview:toggle];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(254,10,90,30)];
+  rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=rw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:rw completionHandler:nil];
+}
 - (void)bookmarkAllTabs:(id)s {
   NSInteger added=0;
   for (BBTab *t in self.tabs) {
@@ -6669,6 +6821,8 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   }
   if (a==@selector(toggleReader:))     return self.webView.URL!=nil;
   if (a==@selector(translatePage:))    return self.webView.URL!=nil && !([self isInternalURL:self.webView.URL.absoluteString]);
+  if (a==@selector(addToReadingList:)) return self.webView.URL!=nil && !([self isInternalURL:self.webView.URL.absoluteString]);
+  if (a==@selector(showReadingList:))  return YES;
   if (a==@selector(toggleBookmarkCurrent:)) {
     NSString *url=self.webView.URL.absoluteString;
     BOOL isBookmarked=url.length&&[[BBBookmarksStore shared] isBookmarked:url];
@@ -7547,6 +7701,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
         [menu addItem:[NSMenuItem separatorItem]];
         add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
         add(@"Add Page to Research Session…",@selector(addCurrentTabToSession:),nil);
+        add(@"Add to Reading List",@selector(addToReadingList:),nil);
         add(@"Save Page As…",@selector(savePage:),nil);
         add(@"Share Page…",@selector(sharePage:),nil);
         add(@"Print…",@selector(printPage:),nil);
