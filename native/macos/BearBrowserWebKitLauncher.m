@@ -2934,6 +2934,8 @@ static NSMutableArray *gBBWindowControllers;
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Reload This Page",@selector(reloadOrStop:),@"r",Cmd);
   mi(viewM,@"Force Reload This Page",@selector(hardReload:),@"r",Cmd|Shift);
+  // Cmd+. = Stop loading (Chrome alias; works while a page is loading).
+  [viewM addItemWithTitle:@"Stop Loading" action:@selector(stopLoading:) keyEquivalent:@"."].keyEquivalentModifierMask=Cmd;
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Actual Size",@selector(zoomReset:),@"0",Cmd);
   mi(viewM,@"Zoom In",@selector(zoomIn:),@"+",Cmd);
@@ -6007,6 +6009,7 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   WKBackForwardListItem *item=mi.representedObject;
   if ([item isKindOfClass:[WKBackForwardListItem class]]) [self.webView goToBackForwardListItem:item];
 }
+- (void)stopLoading:(id)s { if (self.activeTab.isLoading) [self.webView stopLoading]; else NSBeep(); }
 - (void)reloadOrStop:(id)s {
   if (self.activeTab.isLoading) [self.webView stopLoading]; else [self.webView reload];
 }
@@ -6355,7 +6358,8 @@ static NSString *kFaviconJS=@"(function(){"
           if (eu) { [self.webView loadRequest:[NSURLRequest requestWithURL:eu]]; [self.window makeFirstResponder:self.webView]; return YES; }
         }
       }
-      BOOL openInNewTab=(mods & NSEventModifierFlagOption) != 0;
+      // Open in new tab when either Cmd (Chrome standard on macOS) or Option is held with Enter.
+      BOOL openInNewTab=((mods & NSEventModifierFlagOption) | (mods & NSEventModifierFlagCommand)) != 0;
       NSString *raw=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
       // Reject any dangerous scheme typed directly into the address bar
       NSString *rawLower=raw.lowercaseString;
