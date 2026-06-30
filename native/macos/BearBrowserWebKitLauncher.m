@@ -6483,6 +6483,17 @@ static const NSInteger kDialogAbuseThreshold = 3;
     }
   }
 
+  // Non-http(s) external schemes (mailto:, tel:, sms:, ftp:, magnet:, etc.) — hand off to the OS.
+  BOOL isWebScheme=[scheme isEqualToString:@"https"]||[scheme isEqualToString:@"http"]
+                   ||[scheme isEqualToString:@"file"]||[scheme isEqualToString:@"blob"]
+                   ||[scheme isEqualToString:@"about"]||[scheme isEqualToString:@"data"]
+                   ||[scheme isEqualToString:@"bbfont"]||[scheme isEqualToString:@"bearbrowser"];
+  if (!isWebScheme && scheme.length) {
+    decisionHandler(WKNavigationActionPolicyCancel);
+    [[NSWorkspace sharedWorkspace] openURL:url];
+    return;
+  }
+
   // Auto-upgrade plain HTTP to HTTPS (skip localhost and .local)
   if ([url.scheme isEqualToString:@"http"]) {
     NSString *host=url.host?:@"";
