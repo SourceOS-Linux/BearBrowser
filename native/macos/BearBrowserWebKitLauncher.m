@@ -317,6 +317,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(strong) NSDate    *lastActiveAt;    // nil = never focused
 @property(assign) BOOL       muted;           // JS-level audio/video mute
 @property(assign) BOOL       pinned;          // pinned = fixed-width icon-only, no Cmd+W
+@property(assign) BOOL       isPlayingAudio;  // page has active audio (tab badge)
 @end
 @implementation BBTab
 - (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
@@ -567,13 +568,16 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
     BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,0,w,clipH) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
     if (isPinned) { item.compact=YES; item.closeButton.hidden=YES; } // pinned = icon-only, no close
-    // Override favicon: 💤 suspended, 🔇 muted
+    // Override favicon: 💤 suspended, 🔇 muted, 🔊 playing audio
     NSImage *fav=tab.favicon;
     if (tab.suspended && !tab.isLoading) {
       fav=[NSImage imageWithSystemSymbolName:@"moon.zzz" accessibilityDescription:@"Suspended"];
       [fav setTemplate:YES];
     } else if (tab.muted) {
       fav=[NSImage imageWithSystemSymbolName:@"speaker.slash.fill" accessibilityDescription:@"Muted"];
+      [fav setTemplate:YES];
+    } else if (tab.isPlayingAudio) {
+      fav=[NSImage imageWithSystemSymbolName:@"speaker.wave.2.fill" accessibilityDescription:@"Playing Audio"];
       [fav setTemplate:YES];
     }
     [item setTabTitle:(isPinned?@"":tab.title) favicon:fav loading:tab.isLoading];
@@ -3432,6 +3436,22 @@ static NSMutableArray *gBBWindowControllers;
     @"})();";
   [config.userContentController addUserScript:[[WKUserScript alloc]
     initWithSource:hoverHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO]];
+  // Audio-playing indicator — posts 1 when any audio/video starts, 0 when all stop.
+  [config.userContentController addScriptMessageHandler:self name:@"audiostate"];
+  NSString *audioHook=
+    @"(function(){'use strict';"
+    @"function post(v){try{window.webkit.messageHandlers.audiostate.postMessage(v);}catch(e){}}"
+    @"function update(){"
+    @"var active=[].slice.call(document.querySelectorAll('audio,video'))"
+    @".some(function(m){return !m.paused&&!m.muted&&m.volume>0;});"
+    @"post(active?1:0);}"
+    @"document.addEventListener('play',update,true);"
+    @"document.addEventListener('pause',update,true);"
+    @"document.addEventListener('ended',update,true);"
+    @"document.addEventListener('volumechange',update,true);"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:audioHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO]];
   // ── Fingerprinting shield (injected before any page script runs) ──────────
   // Cross-referenced against Mozilla Bugzilla RFP bugs and Firefox test suite:
   //   Bug 418986  (FIXED)  — screen / CSS media query resolution
@@ -5794,6 +5814,13 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     if (msg.webView!=self.webView) return;
     NSString *url=[msg.body isKindOfClass:[NSString class]]?msg.body:@"";
     dispatch_async(dispatch_get_main_queue(),^{ [self showStatus:url]; });
+  } else if ([msg.name isEqualToString:@"audiostate"]) {
+    BBTab *tab=[self tabForWebView:msg.webView]; if (!tab) return;
+    BOOL playing=[[msg.body isKindOfClass:[NSNumber class]]?(NSNumber*)msg.body:@0 boolValue];
+    if (tab.isPlayingAudio!=playing) {
+      tab.isPlayingAudio=playing;
+      dispatch_async(dispatch_get_main_queue(),^{ [self reloadTabBar]; });
+    }
   }
 }
 static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOOL blocked){
