@@ -4903,9 +4903,17 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   for (NSDictionary *d in sites) {
     NSString *host=d[@"host"]?:@""; NSString *url=d[@"url"]?:@"";
     NSString *letter=host.length?[[host substringToIndex:1] uppercaseString]:@"•";
+    // Use real favicon.ico; fall back to the letter initial on error (privacy-safe: only fetches
+    // from sites the user has already visited, same as Chrome's top-sites favicons behaviour).
+    NSString *faviconSrc=[NSString stringWithFormat:@"https://%@/favicon.ico",[self htmlEscape:host]];
     [html appendFormat:
-      @"<a class=\"shortcut\" href=\"%@\"><div class=\"shortcut-icon\">%@</div><span class=\"shortcut-label\">%@</span></a>",
-      [self htmlEscape:url],[self htmlEscape:letter],[self htmlEscape:host]];
+      @"<a class=\"shortcut\" href=\"%@\">"
+      @"<div class=\"shortcut-icon\" style=\"position:relative;overflow:hidden\">"
+      @"<img src=\"%@\" width=\"32\" height=\"32\" style=\"object-fit:contain\" "
+      @"onerror=\"this.style.display='none';this.nextElementSibling.style.display='flex'\">"
+      @"<span style=\"display:none;width:100%%;height:100%%;align-items:center;justify-content:center;font-size:24px\">%@</span>"
+      @"</div><span class=\"shortcut-label\">%@</span></a>",
+      [self htmlEscape:url], faviconSrc, [self htmlEscape:letter], [self htmlEscape:host]];
   }
   NSString *js=[NSString stringWithFormat:
     @"(function(){var g=document.querySelector('.grid'); if(g) g.innerHTML=%@;})();",
