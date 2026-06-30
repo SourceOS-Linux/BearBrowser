@@ -6763,8 +6763,11 @@ static const NSInteger kDialogAbuseThreshold = 3;
 
 - (void)contextOpenLinkNewTab:(NSMenuItem *)item {
   NSURL *url=item.representedObject; if (!url) return;
+  // Chrome's "Open Link in New Tab" opens in BACKGROUND — current tab stays focused.
+  NSInteger prev=self.activeTabIndex;
   [self addTabPrivate:self.activeTab.isPrivate];
   [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+  if (prev>=0 && prev<(NSInteger)self.tabs.count-1) [self tabItemDidSelect:prev];
 }
 - (void)contextCopyLink:(NSMenuItem *)item {
   NSURL *url=item.representedObject; if (!url) return;
