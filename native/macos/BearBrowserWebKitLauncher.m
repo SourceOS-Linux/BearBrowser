@@ -2846,6 +2846,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(fileM,@"Save Page As…",@selector(savePage:),@"s",Cmd);
   [fileM addItem:[NSMenuItem separatorItem]];
   mi(fileM,@"Print…",@selector(printPage:),@"p",Cmd);
+  [fileM addItemWithTitle:@"" action:@selector(printPage:) keyEquivalent:@"p"].keyEquivalentModifierMask=Cmd|Shift;
 
   // ── Edit ──
   NSMenu *editM=submenu(@"Edit");
@@ -3165,9 +3166,16 @@ static NSMutableArray *gBBWindowControllers;
       u=entry[@"url"]; pinned=[entry[@"pinned"] boolValue]; muted=[entry[@"muted"] boolValue];
     }
     if (!u.length) continue;
+    NSURL *nsurl=[NSURL URLWithString:u]; if(!nsurl) continue;
     [self addTabPrivate:NO];
     BBTab *tab=self.activeTab; tab.pinned=pinned; tab.muted=muted;
-    [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:u]]];
+    // Eagerly restore title and favicon so pinned tabs look right before the page loads
+    if ([entry isKindOfClass:[NSDictionary class]]) {
+      NSString *savedTitle=entry[@"title"]; if (savedTitle.length) tab.title=savedTitle;
+      NSString *b64=entry[@"favicon"];
+      if (b64.length) { NSData *png=[[NSData alloc]initWithBase64EncodedString:b64 options:0]; if(png) tab.favicon=[[NSImage alloc]initWithData:png]; }
+    }
+    [self.webView loadRequest:[NSURLRequest requestWithURL:nsurl]];
     if (muted) [self.webView evaluateJavaScript:
       @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=true;})"
       completionHandler:nil];
@@ -4813,15 +4821,46 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 - (void)applicationWillTerminate:(NSNotification *)n {
   if ([[NSUserDefaults standardUserDefaults] boolForKey:@"BBClearOnQuit"]) [[BBHistoryStore shared] clearAll];
 }
+// ── beforeunload dialog (sites that need to confirm navigation away) ──────────
+- (void)webView:(WKWebView *)wv runBeforeUnloadConfirmPanelWithMessage:(NSString *)message
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void(^)(BOOL))done {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Leave site?";
+  a.informativeText=message.length?message:@"Changes you made may not be saved.";
+  [a addButtonWithTitle:@"Leave"]; [a addButtonWithTitle:@"Stay"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    done(rc==NSAlertFirstButtonReturn);
+  }];
+}
+// ── Warn when closing a window with multiple tabs ─────────────────────────────
+- (BOOL)windowShouldClose:(NSWindow *)w {
+  NSInteger count=[self.tabs count];
+  NSInteger nonPinned=0;
+  for (BBTab *t in self.tabs) if (!t.pinned) nonPinned++;
+  if (nonPinned < 2) return YES; // 0 or 1 closeable tabs: close without dialog
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Close %ld tabs?", (long)count];
+  a.informativeText=@"Your tabs will be saved and restored next time you launch BearBrowser.";
+  [a addButtonWithTitle:@"Close All"]; [a addButtonWithTitle:@"Cancel"];
+  a.alertStyle=NSAlertStyleWarning;
+  return [a runModal]==NSAlertFirstButtonReturn;
+}
 - (void)windowWillClose:(NSNotification *)n {
   [[NSUserDefaults standardUserDefaults] setObject:NSStringFromRect(self.window.frame) forKey:@"BBWindowFrame"];
-  // Persist non-private tab metadata (url + pinned + muted) for session restore
+  // Persist non-private tab metadata (url + pinned + muted + favicon) for session restore
   NSMutableArray *tabDicts=[NSMutableArray array];
   for (BBTab *t in self.tabs) {
     if (t.isPrivate) continue;
     NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
     if (!u.length || [self isInternalURL:u]) continue;
-    [tabDicts addObject:@{@"url":u,@"pinned":@(t.pinned),@"muted":@(t.muted)}];
+    NSMutableDictionary *d=[NSMutableDictionary dictionaryWithDictionary:
+      @{@"url":u,@"pinned":@(t.pinned),@"muted":@(t.muted),@"title":t.title?:@""}];
+    if (t.favicon) {
+      NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[t.favicon TIFFRepresentation]];
+      NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (png) d[@"favicon"]=[png base64EncodedStringWithOptions:0];
+    }
+    [tabDicts addObject:d];
   }
   [[NSUserDefaults standardUserDefaults] setObject:tabDicts forKey:@"BBSessionURLs"];
   // Tear down local event monitors so they stop firing against torn-down state.
@@ -5338,9 +5377,18 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 
 - (void)settingsAccept:(id)s { [NSApp stopModalWithCode:NSModalResponseOK]; }
 - (void)settingsCancel:(id)s { [NSApp stopModalWithCode:NSModalResponseCancel]; }
+- (void)clearMediaPermissions:(id)s {
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
+    if ([key hasPrefix:@"BBMediaPerm_"]) [ud removeObjectForKey:key];
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Site permissions cleared";
+  a.informativeText=@"All saved camera and microphone permissions have been reset. Sites will ask again.";
+  [a addButtonWithTitle:@"OK"]; [a runModal];
+}
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=340;
+  CGFloat W=470,Hh=380;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -5374,7 +5422,12 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [cv addSubview:sug]; y-=28;
   NSButton *clr=[NSButton checkboxWithTitle:@"Clear history when quitting" target:nil action:nil];
   clr.frame=NSMakeRect(192,y,260,20); clr.state=[ud boolForKey:@"BBClearOnQuit"]?NSControlStateValueOn:NSControlStateValueOff;
-  [cv addSubview:clr];
+  [cv addSubview:clr]; y-=40;
+  // Site permission management
+  label(@"Site permissions:",y+4);
+  NSButton *clearPerms=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  clearPerms.title=@"Clear All Media Permissions…"; clearPerms.bezelStyle=NSBezelStyleRounded;
+  clearPerms.target=self; clearPerms.action=@selector(clearMediaPermissions:); [cv addSubview:clearPerms];
   NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
   save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
   save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
@@ -6392,6 +6445,14 @@ static const NSInteger kDialogAbuseThreshold = 3;
     self.address.stringValue=wv.URL.absoluteString?:@"";
   }
   [self reloadTabBar];
+}
+// Fires when the response has committed and the new page has begun rendering.
+// Update URL bar here to catch redirect chains: provisional URL might differ from the final one.
+- (void)webView:(WKWebView *)wv didCommitNavigation:(WKNavigation *)nav {
+  if (wv!=self.webView) return;
+  NSString *url=wv.URL.absoluteString?:@"";
+  self.address.stringValue=[self isInternalURL:url]?@"":url;
+  [self updateSecurityIndicator:wv.URL];
 }
 - (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)nav {
   BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
