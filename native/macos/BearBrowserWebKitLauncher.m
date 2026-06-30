@@ -5073,6 +5073,16 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)muteAllTabs:(id)s   { [self setAllTabsMuted:YES]; }
 - (void)unmuteAllTabs:(id)s { [self setAllTabsMuted:NO];  }
+- (void)contextSaveLink:(id)sender {
+  NSMenuItem *mi=(NSMenuItem *)sender; NSString *urlStr=mi.representedObject;
+  if (!urlStr.length) return;
+  NSURL *src=[NSURL URLWithString:urlStr]; if (!src) return;
+  NSURLRequest *req=[NSURLRequest requestWithURL:src];
+  // Route through WKWebView so it inherits cookies/UA + uses our download delegate.
+  [self.webView startDownloadUsingRequest:req completionHandler:^(WKDownload *dl){
+    dl.delegate=self;
+  }];
+}
 - (void)contextSaveImage:(id)sender {
   NSMenuItem *mi=(NSMenuItem *)sender; NSString *urlStr=mi.representedObject;
   if (!urlStr.length) return;
@@ -6857,6 +6867,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
           add(@"Open Link in New Window",@selector(contextOpenLinkNewWindow:),linkURL);
           add(@"Open Link in Incognito Window",@selector(contextOpenLinkIncognito:),linkURL);
           add(@"Copy Link Address",@selector(contextCopyLink:),linkURL);
+          add(@"Save Link As…",@selector(contextSaveLink:),linkURL);
           add(@"Add Link to Research Session…",@selector(contextAddLinkToSession:),linkURL);
           [menu addItem:[NSMenuItem separatorItem]];
         }
