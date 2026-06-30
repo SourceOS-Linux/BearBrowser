@@ -4552,6 +4552,7 @@ static NSMutableArray *gBBWindowControllers;
   wv.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   wv.navigationDelegate=self; wv.UIDelegate=self;
   wv.allowsBackForwardNavigationGestures=YES; wv.allowsLinkPreview=YES;
+  wv.allowsMagnification=YES; // trackpad pinch-to-zoom (Chrome parity)
   // Required for Web Inspector / "Inspect Element" to open on macOS 13.3+ (defaults NO).
   if (@available(macOS 13.3, *)) wv.inspectable=YES;
   // PiP enabled on macOS via configuration (allowsPictureInPictureMediaPlayback is iOS-only)
@@ -5958,7 +5959,7 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
 }
 - (void)zoomIn:(id)s    { [self setZoom:self.webView.pageZoom+0.1]; }
 - (void)zoomOut:(id)s   { [self setZoom:self.webView.pageZoom-0.1]; }
-- (void)zoomReset:(id)s { [self setZoom:1.0]; }
+- (void)zoomReset:(id)s { self.webView.magnification=1.0; [self setZoom:1.0]; }
 - (NSString *)currentHost { return self.webView.URL.host?:@""; }
 // Set zoom for the active tab, remember it per-host, and flash the level.
 - (void)setZoom:(CGFloat)z {
@@ -6328,6 +6329,7 @@ static NSString *kFaviconJS=@"(function(){"
   newWV.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   newWV.navigationDelegate=self; newWV.UIDelegate=self;
   newWV.allowsBackForwardNavigationGestures=YES; newWV.allowsLinkPreview=YES;
+  newWV.allowsMagnification=YES; // trackpad pinch-to-zoom (Chrome parity)
   if (@available(macOS 13.3, *)) newWV.inspectable=YES;
   [newWV addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
   [newWV addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
