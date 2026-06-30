@@ -5644,6 +5644,16 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 
 - (void)settingsAccept:(id)s { [NSApp stopModalWithCode:NSModalResponseOK]; }
 - (void)settingsCancel:(id)s { [NSApp stopModalWithCode:NSModalResponseCancel]; }
+- (void)pickDownloadDir:(id)s {
+  NSOpenPanel *p=[NSOpenPanel openPanel];
+  p.canChooseDirectories=YES; p.canChooseFiles=NO; p.allowsMultipleSelection=NO;
+  p.title=@"Choose Downloads Folder";
+  if ([p runModal]!=NSModalResponseOK || !p.URL) return;
+  NSString *path=p.URL.path;
+  [[NSUserDefaults standardUserDefaults] setObject:path forKey:@"BBDownloadDir"];
+  NSTextField *lbl=(NSTextField *)objc_getAssociatedObject(self,"BBDLPathLabel");
+  if (lbl) { NSString *shown=[path stringByAbbreviatingWithTildeInPath]; lbl.stringValue=shown; lbl.toolTip=shown; }
+}
 - (void)clearMediaPermissions:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
   for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
@@ -5655,7 +5665,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=380;
+  CGFloat W=470,Hh=420;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -5690,6 +5700,19 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *clr=[NSButton checkboxWithTitle:@"Clear history when quitting" target:nil action:nil];
   clr.frame=NSMakeRect(192,y,260,20); clr.state=[ud boolForKey:@"BBClearOnQuit"]?NSControlStateValueOn:NSControlStateValueOff;
   [cv addSubview:clr]; y-=40;
+  // Download folder picker (Chrome-style)
+  label(@"Downloads folder:",y+4);
+  NSString *curDL=[ud stringForKey:@"BBDownloadDir"];
+  NSString *shownPath=curDL.length?[curDL stringByAbbreviatingWithTildeInPath]:@"~/Downloads";
+  NSTextField *dlPath=[NSTextField labelWithString:shownPath];
+  dlPath.frame=NSMakeRect(192,y-2,180,22);
+  dlPath.lineBreakMode=NSLineBreakByTruncatingMiddle; dlPath.toolTip=shownPath;
+  [cv addSubview:dlPath];
+  NSButton *dlPick=[[NSButton alloc]initWithFrame:NSMakeRect(376,y-4,76,26)];
+  dlPick.title=@"Choose…"; dlPick.bezelStyle=NSBezelStyleRounded;
+  objc_setAssociatedObject(self,"BBDLPathLabel",dlPath,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  dlPick.target=self; dlPick.action=@selector(pickDownloadDir:); [cv addSubview:dlPick];
+  y-=40;
   // Site permission management
   label(@"Site permissions:",y+4);
   NSButton *clearPerms=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
@@ -6960,7 +6983,14 @@ static const NSInteger kDialogAbuseThreshold = 3;
   return nil;
 }
 - (void)download:(WKDownload *)download decideDestinationUsingResponse:(NSURLResponse *)response suggestedFilename:(NSString *)filename completionHandler:(void(^)(NSURL *))completionHandler {
-  NSURL *dlDir=[NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"]];
+  // Honor per-user download dir if Settings has saved one and it still exists.
+  NSString *custom=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBDownloadDir"];
+  BOOL isDir=NO;
+  NSURL *dlDir;
+  if (custom.length && [[NSFileManager defaultManager] fileExistsAtPath:custom isDirectory:&isDir] && isDir)
+    dlDir=[NSURL fileURLWithPath:custom];
+  else
+    dlDir=[NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"]];
   [[NSFileManager defaultManager] createDirectoryAtURL:dlDir withIntermediateDirectories:YES attributes:nil error:nil];
   // SANITIZE the server-supplied filename: take only the last path component and
   // strip path separators so a malicious Content-Disposition (e.g. "../../foo")
