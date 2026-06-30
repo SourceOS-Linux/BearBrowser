@@ -331,6 +331,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 - (void)tabItemDidMiddleClick:(NSInteger)index;       // middle-click closes (Chrome)
 - (NSMenu *)tabItemContextMenu:(NSInteger)index;      // right-click tab menu
 - (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to; // drag-to-reorder
+- (void)tabBarDidDropURL:(NSString *)urlString;            // URL dragged onto tab strip
 @end
 
 @interface BBTabItemView : NSView
@@ -526,6 +527,8 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   [pi setTemplate:YES]; _addTabButton.image=pi; _addTabButton.imagePosition=NSImageOnly;
   _addTabButton.bezelStyle=NSBezelStyleToolbar; _addTabButton.bordered=NO;
   _addTabButton.toolTip=@"New Tab (⌘T)"; [self addSubview:_addTabButton];
+  // Accept URL drags onto the tab bar — open dropped URLs as new tabs (Chrome parity).
+  [self registerForDraggedTypes:@[NSPasteboardTypeURL,NSPasteboardTypeString]];
   return self;
 }
 - (void)reloadWithTabs:(NSArray<BBTab *> *)tabs activeIndex:(NSInteger)active {
@@ -609,6 +612,28 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
     if (!onTab) [NSApp sendAction:self.addTabButton.action to:self.addTabButton.target from:self];
   }
   [super mouseDown:e];
+}
+// Drag-and-drop: open dropped URLs (from another app, a link in the page, etc.) as new tabs.
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  if ([pb canReadObjectForClasses:@[[NSURL class]] options:nil]) return NSDragOperationCopy;
+  if ([pb canReadObjectForClasses:@[[NSString class]] options:nil]) return NSDragOperationCopy;
+  return NSDragOperationNone;
+}
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return YES; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  NSArray *urls=[pb readObjectsForClasses:@[[NSURL class]] options:nil];
+  NSString *dropped=nil;
+  if (urls.count) dropped=[urls.firstObject absoluteString];
+  else {
+    NSArray *strs=[pb readObjectsForClasses:@[[NSString class]] options:nil];
+    if (strs.count) dropped=[strs.firstObject stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  }
+  if (!dropped.length) return NO;
+  if ([self.outerDelegate respondsToSelector:@selector(tabBarDidDropURL:)])
+    [self.outerDelegate tabBarDidDropURL:dropped];
+  return YES;
 }
 @end
 
@@ -2803,6 +2828,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) id               addrDismissMonitor;   // local event monitor (must be removed to avoid firing after teardown)
 @property(strong) id               contextMenuMonitor;
 @property(strong) id               middleClickMonitor;
+@property(strong) id               ctrlScrollMonitor;    // Ctrl+scroll → page zoom (Chrome parity)
 @property(strong) NSButton        *starButton;           // bookmark this page (address bar)
 @property(strong) NSTextField     *statusBar;            // Chrome-style hovered-link bubble (bottom-left)
 @property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
@@ -2893,6 +2919,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(editM,@"Copy",@selector(copy:),@"c",Cmd);
   mi(editM,@"Paste",@selector(paste:),@"v",Cmd);
   mi(editM,@"Paste and Go",@selector(pasteAndGo:),@"v",Cmd|Shift);
+  mi(editM,@"Copy Current URL",@selector(contextCopyPageURL:),@"c",Cmd|Shift);
   mi(editM,@"Select All",@selector(selectAll:),@"a",Cmd);
   [editM addItem:[NSMenuItem separatorItem]];
   NSMenuItem *findI=[editM addItemWithTitle:@"Find" action:nil keyEquivalent:@""];
@@ -3257,6 +3284,22 @@ static NSMutableArray *gBBWindowControllers;
     return e;
   }];
   [self installContextMenuMonitor];
+  [self installCtrlScrollMonitor];
+}
+- (void)installCtrlScrollMonitor {
+  __weak BBDelegate *weak=self;
+  __block CGFloat accum=0;
+  self.ctrlScrollMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel handler:^NSEvent*(NSEvent *e){
+    BBDelegate *s=weak; if (!s||e.window!=s.window) return e;
+    if (!(e.modifierFlags & NSEventModifierFlagControl)) return e;
+    NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
+    if (!NSPointInRect(pt,s.webView.bounds)) return e;
+    accum+=e.scrollingDeltaY;
+    CGFloat step=e.hasPreciseScrollingDeltas?12.0:1.0;
+    while (accum>=step)  { accum-=step; [s zoomIn:nil];  }
+    while (accum<=-step) { accum+=step; [s zoomOut:nil]; }
+    return nil; // swallow — don't scroll the page
+  }];
 }
 
 // Returns YES for URLs that should show as blank in the address bar (start page, new-tab).
@@ -4771,6 +4814,18 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   self.activeTabIndex=act;
   [self reloadTabBar];
 }
+- (void)tabBarDidDropURL:(NSString *)dropped {
+  // Resolve raw URL or fall back to search-engine query (matches address bar Enter behaviour).
+  if (!dropped.length) return;
+  NSURL *u=[NSURL URLWithString:dropped];
+  if (!u.scheme.length) {
+    NSURL *https=[NSURL URLWithString:[@"https://" stringByAppendingString:dropped]];
+    if (https.host.length) u=https;
+  }
+  if (!u) return;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
 
 // Right-click tab menu (Chrome's set + BearBrowser extensions).
 - (NSMenu *)tabItemContextMenu:(NSInteger)i {
@@ -4978,6 +5033,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   if (self.addrDismissMonitor) { [NSEvent removeMonitor:self.addrDismissMonitor]; self.addrDismissMonitor=nil; }
   if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
   if (self.middleClickMonitor) { [NSEvent removeMonitor:self.middleClickMonitor]; self.middleClickMonitor=nil; }
+  if (self.ctrlScrollMonitor)  { [NSEvent removeMonitor:self.ctrlScrollMonitor];  self.ctrlScrollMonitor=nil; }
   [self.suspendTimer invalidate]; self.suspendTimer=nil;
   [self.sessionAutosaveTimer invalidate]; self.sessionAutosaveTimer=nil;
   // Release this window's controller. Deferred so we never dealloc self midway
