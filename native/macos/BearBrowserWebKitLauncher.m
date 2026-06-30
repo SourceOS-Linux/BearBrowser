@@ -5978,6 +5978,8 @@ static NSString *kFaviconJS=@"(function(){"
     if (sel==@selector(moveUp:))     { [self.addressDropdown selectPrev]; return YES; }
     if (sel==@selector(insertNewline:)) {
       if ([self.addressDropdown confirmSelection]) return YES;
+      // Option+Return → open in new tab (Chrome Alt+Enter behavior)
+      BOOL openInNewTab=([NSApp currentEvent].modifierFlags & NSEventModifierFlagOption) != 0;
       NSString *raw=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
       // Reject any dangerous scheme typed directly into the address bar
       NSString *rawLower=raw.lowercaseString;
@@ -5996,6 +5998,7 @@ static NSString *kFaviconJS=@"(function(){"
       }
       if (url) {
         [self emitNav:@"navigation.requested" url:url.absoluteString reason:@"User navigation." private:self.activeTab.isPrivate];
+        if (openInNewTab) { [self addTabPrivate:self.activeTab.isPrivate]; }
         [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
       }
       [self.window makeFirstResponder:self.webView]; return YES;
@@ -6330,6 +6333,24 @@ static const NSInteger kDialogAbuseThreshold = 3;
   NSURL *url=item.representedObject; if (!url) return;
   [self openURLInNewWindow:url];
 }
+- (void)contextOpenLinkIncognito:(NSMenuItem *)item {
+  NSURL *url=item.representedObject; if (!url) return;
+  BBDelegate *w=[[BBDelegate alloc]init];
+  [w applicationDidFinishLaunching:[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+  if (url) { [w addTabPrivate:YES]; [w.webView loadRequest:[NSURLRequest requestWithURL:url]]; }
+}
+- (void)contextCopyImage:(NSMenuItem *)item {
+  NSString *urlStr=item.representedObject; if (!urlStr) return;
+  NSURL *src=[NSURL URLWithString:urlStr]; if (!src) return;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+    NSData *data=[NSData dataWithContentsOfURL:src]; if (!data) return;
+    NSImage *img=[[NSImage alloc]initWithData:data]; if (!img) return;
+    dispatch_async(dispatch_get_main_queue(),^{
+      [[NSPasteboard generalPasteboard] clearContents];
+      [[NSPasteboard generalPasteboard] writeObjects:@[img]];
+    });
+  });
+}
 - (void)openURLInNewWindow:(NSURL *)url {
   BBDelegate *w=[[BBDelegate alloc]init]; // retained by gBBWindowControllers in launch
   [w applicationDidFinishLaunching:[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
@@ -6383,12 +6404,14 @@ static const NSInteger kDialogAbuseThreshold = 3;
         if (linkURL) {
           add(@"Open Link in New Tab",@selector(contextOpenLinkNewTab:),linkURL);
           add(@"Open Link in New Window",@selector(contextOpenLinkNewWindow:),linkURL);
+          add(@"Open Link in Incognito Window",@selector(contextOpenLinkIncognito:),linkURL);
           add(@"Copy Link Address",@selector(contextCopyLink:),linkURL);
           add(@"Add Link to Research Session…",@selector(contextAddLinkToSession:),linkURL);
           [menu addItem:[NSMenuItem separatorItem]];
         }
         if (imgURL) {
           add(@"Open Image in New Tab",@selector(contextOpenLinkNewTab:),imgURL);
+          add(@"Copy Image",@selector(contextCopyImage:),imgURL);
           add(@"Copy Image Address",@selector(contextCopyLink:),imgURL);
           add(@"Save Image As…",@selector(contextSaveImage:),imgURL);
           [menu addItem:[NSMenuItem separatorItem]];
