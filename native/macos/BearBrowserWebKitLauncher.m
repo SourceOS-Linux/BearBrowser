@@ -943,10 +943,15 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   return self;
 }
 - (void)themeChanged:(NSNotification *)n { self.layer.backgroundColor=[NSColor windowBackgroundColor].CGColor; }
+- (void)updateDockBadge {
+  NSInteger active=0;
+  for (BBDownloadItem *it in self.items) if (it.state==BBDownloadStateActive) active++;
+  [NSApp dockTile].badgeLabel=active>0?[NSString stringWithFormat:@"%ld",(long)active]:@"";
+}
 - (void)addItem:(BBDownloadItem *)item {
   [self.items addObject:item];
   if (!self.pollTimer) self.pollTimer=[NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(pollFileSizes) userInfo:nil repeats:YES];
-  [self refresh]; [self show];
+  [self updateDockBadge]; [self refresh]; [self show];
 }
 - (void)pollFileSizes {
   BOOL anyActive=NO;
@@ -958,7 +963,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
     }
   }
   if (!anyActive) { [self.pollTimer invalidate]; self.pollTimer=nil; }
-  dispatch_async(dispatch_get_main_queue(),^{ [self refresh]; });
+  dispatch_async(dispatch_get_main_queue(),^{ [self updateDockBadge]; [self refresh]; });
 }
 - (void)refresh {
   for (NSView *v in self.stack.arrangedSubviews) [self.stack removeArrangedSubview:v];
@@ -2804,7 +2809,8 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(assign) BOOL    readerMode;
 @property(strong) NSURL  *readerOriginalURL;
 @property(assign) BOOL    suppressInlineCompletion;
-@property(strong) NSTimer *suspendTimer;  // periodic tab suspension sweep
+@property(strong) NSTimer *suspendTimer;         // periodic tab suspension sweep
+@property(strong) NSTimer *sessionAutosaveTimer; // crash-safe periodic session flush
 @end
 
 // Retains a controller for every open browser window. Both NSApplication.delegate
@@ -4629,12 +4635,34 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     if (idle>=threshSec) [self suspendTab:t];
   }
 }
+- (void)autosaveSession:(NSTimer *)t {
+  NSMutableArray *tabDicts=[NSMutableArray array];
+  for (BBTab *tab in self.tabs) {
+    if (tab.isPrivate) continue;
+    NSString *u=tab.suspended?tab.suspendedURL:tab.webView.URL.absoluteString;
+    if (!u.length || [self isInternalURL:u]) continue;
+    NSMutableDictionary *d=[NSMutableDictionary dictionaryWithDictionary:
+      @{@"url":u,@"pinned":@(tab.pinned),@"muted":@(tab.muted),@"title":tab.title?:@""}];
+    if (tab.favicon) {
+      NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[tab.favicon TIFFRepresentation]];
+      NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (png) d[@"favicon"]=[png base64EncodedStringWithOptions:0];
+    }
+    [tabDicts addObject:d];
+  }
+  [[NSUserDefaults standardUserDefaults] setObject:tabDicts forKey:@"BBSessionURLs"];
+}
 - (void)startSuspendTimer {
   [self.suspendTimer invalidate];
   // Sweep every 60 seconds; actual suspend threshold is per-tab idle time
   self.suspendTimer=[NSTimer scheduledTimerWithTimeInterval:60 target:self
     selector:@selector(suspendInactiveTabs:) userInfo:nil repeats:YES];
   self.suspendTimer.tolerance=30; // coalesce with other timers
+  // Crash-safe session autosave every 30 seconds.
+  [self.sessionAutosaveTimer invalidate];
+  self.sessionAutosaveTimer=[NSTimer scheduledTimerWithTimeInterval:30 target:self
+    selector:@selector(autosaveSession:) userInfo:nil repeats:YES];
+  self.sessionAutosaveTimer.tolerance=15;
 
   // On memory pressure warnings, aggressively suspend idle tabs immediately
   dispatch_source_t mp=dispatch_source_create(
@@ -4942,6 +4970,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
   if (self.middleClickMonitor) { [NSEvent removeMonitor:self.middleClickMonitor]; self.middleClickMonitor=nil; }
   [self.suspendTimer invalidate]; self.suspendTimer=nil;
+  [self.sessionAutosaveTimer invalidate]; self.sessionAutosaveTimer=nil;
   // Release this window's controller. Deferred so we never dealloc self midway
   // through this very method (the removal can drop the last strong reference).
   dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
@@ -5872,6 +5901,24 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
 }
 - (void)goBack:(id)s    { if(self.webView.canGoBack)    [self.webView goBack]; }
 - (void)goForward:(id)s { if(self.webView.canGoForward) [self.webView goForward]; }
+- (void)showNavHistoryMenu:(BOOL)back at:(NSPoint)winLoc {
+  WKBackForwardList *bfl=self.webView.backForwardList;
+  NSArray<WKBackForwardListItem *> *items=back
+    ? [[bfl.backList reverseObjectEnumerator] allObjects]
+    : bfl.forwardList;
+  if (!items.count) return;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  for (WKBackForwardListItem *item in items) {
+    NSString *t=item.title.length?item.title:item.URL.absoluteString;
+    NSMenuItem *mi=[[NSMenuItem alloc]initWithTitle:t action:@selector(navHistoryGo:) keyEquivalent:@""];
+    mi.target=self; mi.representedObject=item; [m addItem:mi];
+  }
+  [m popUpMenuPositioningItem:nil atLocation:winLoc inView:nil];
+}
+- (void)navHistoryGo:(NSMenuItem *)mi {
+  WKBackForwardListItem *item=mi.representedObject;
+  if ([item isKindOfClass:[WKBackForwardListItem class]]) [self.webView goToBackForwardListItem:item];
+}
 - (void)reloadOrStop:(id)s {
   if (self.activeTab.isLoading) [self.webView stopLoading]; else [self.webView reload];
 }
@@ -6624,6 +6671,10 @@ static const NSInteger kDialogAbuseThreshold = 3;
   __weak BBDelegate *weak=self;
   self.contextMenuMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent *e){
     BBDelegate *s=weak; if (!s||e.window!=s.window) return e;
+    // Right-click on back / forward button → show nav-history dropdown (Chrome UX).
+    NSPoint toolPt=[s.toolbarBg convertPoint:e.locationInWindow fromView:nil];
+    if (NSPointInRect(toolPt,s.backButton.frame))    { [s showNavHistoryMenu:YES  at:e.locationInWindow]; return nil; }
+    if (NSPointInRect(toolPt,s.forwardButton.frame)) { [s showNavHistoryMenu:NO   at:e.locationInWindow]; return nil; }
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if (!NSPointInRect(pt,s.webView.bounds)) return e;
     // Probe the page at the click point for a link, an image, and any selection.
