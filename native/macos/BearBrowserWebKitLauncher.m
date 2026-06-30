@@ -3026,6 +3026,9 @@ static NSMutableArray *gBBWindowControllers;
   NSMenu *helpM=submenu(@"Help");
   [NSApp setHelpMenu:helpM];
   [helpM addItemWithTitle:@"BearBrowser Help" action:@selector(openBearHelp:) keyEquivalent:@""];
+  [helpM addItem:[NSMenuItem separatorItem]];
+  [helpM addItemWithTitle:@"Keyboard Shortcuts" action:@selector(showKeyboardShortcuts:) keyEquivalent:@"/"].keyEquivalentModifierMask=Cmd;
+  [helpM addItemWithTitle:@"Report an Issue…" action:@selector(reportIssue:) keyEquivalent:@""];
 }
 
 // ── App launch ────────────────────────────────────────────────────────────────
@@ -5248,6 +5251,44 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [self loadStartPage:self.webView];
 }
 - (void)openBearHelp:(id)s { [self addTabPrivate:NO]; [self loadStartPage:self.webView]; }
+- (void)reportIssue:(id)s {
+  NSURL *u=[NSURL URLWithString:@"https://github.com/SourceOS-Linux/BearBrowser/issues/new"];
+  if (u) [[NSWorkspace sharedWorkspace] openURL:u];
+}
+- (void)showKeyboardShortcuts:(id)s {
+  // One-shot, scrollable cheat sheet. Lives in NSAlert so it's modal-light.
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"BearBrowser Keyboard Shortcuts";
+  a.informativeText=
+    @"Navigation\n"
+    @"  ⌘L / ⌘K        Focus address bar\n"
+    @"  ⌘[ / ⌘]        Back / Forward\n"
+    @"  ⌘R              Reload    ⇧⌘R  Hard reload    ⌘.  Stop\n"
+    @"  ⇧⌘H            Home\n\n"
+    @"Tabs\n"
+    @"  ⌘T              New tab    ⇧⌘T  Reopen closed tab\n"
+    @"  ⌘W              Close tab    ⇧⌘W  Close window\n"
+    @"  ⌃⇥ / ⇧⌃⇥      Next / Previous tab\n"
+    @"  ⌘1…⌘8 / ⌘9   Jump to tab / last tab\n"
+    @"  ⇧⌘A            Tab search\n"
+    @"  ⇧⌃[ / ⇧⌃]    Move tab left / right\n\n"
+    @"View\n"
+    @"  ⌘+ / ⌘− / ⌘0  Zoom in / out / reset    ⌃scroll Zoom\n"
+    @"  ⇧⌘B            Toggle bookmarks bar\n"
+    @"  ⌃⌘F             Full screen\n\n"
+    @"Find / Edit\n"
+    @"  ⌘F              Find on page    ⌘G / ⇧⌘G  Next / Previous\n"
+    @"  ⇧⌘C            Copy current URL\n"
+    @"  ⇧⌘V            Paste and go\n\n"
+    @"Windows / Files\n"
+    @"  ⌘N              New window    ⇧⌘N  Incognito window\n"
+    @"  ⌘O              Open file    ⌘S  Save page    ⌘P  Print\n\n"
+    @"History / Downloads\n"
+    @"  ⌘Y              Show history    ⇧⌘J  Downloads\n"
+    @"  ⇧⌘⌫           Clear browsing data";
+  [a addButtonWithTitle:@"Close"];
+  [a beginSheetModalForWindow:self.window completionHandler:nil];
+}
 // Reader mode: extract the main article (best-effort, by paragraph density) and
 // render it in our OWN clean template, so the layout is fully under our control.
 - (void)toggleReader:(id)s {
