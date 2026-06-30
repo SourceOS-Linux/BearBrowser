@@ -314,6 +314,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(assign) BOOL       suspended;
 @property(copy)   NSString  *suspendedURL;    // URL to reload on wake
 @property(strong) NSDate    *lastActiveAt;    // nil = never focused
+@property(assign) BOOL       muted;           // JS-level audio/video mute
 @end
 @implementation BBTab
 - (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
@@ -536,10 +537,13 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
     CGFloat w=(i==count-1)?MAX(kTabHardMinW-2,floor(totalW)-x-2):floor(tabW)-2;
     BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,0,w,clipH) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
-    // Suspended tabs show a moon icon instead of their favicon
+    // Override favicon: 💤 for suspended, 🔇 for muted
     NSImage *fav=tab.favicon;
     if (tab.suspended && !tab.isLoading) {
       fav=[NSImage imageWithSystemSymbolName:@"moon.zzz" accessibilityDescription:@"Suspended"];
+      [fav setTemplate:YES];
+    } else if (tab.muted) {
+      fav=[NSImage imageWithSystemSymbolName:@"speaker.slash.fill" accessibilityDescription:@"Muted"];
       [fav setTemplate:YES];
     }
     [item setTabTitle:tab.title favicon:fav loading:tab.isLoading];
@@ -2818,6 +2822,8 @@ static NSMutableArray *gBBWindowControllers;
   [fileM addItem:[NSMenuItem separatorItem]];
   mi(fileM,@"Open File…",@selector(openFile:),@"o",Cmd);
   mi(fileM,@"Open Location…",@selector(focusAddressBar:),@"l",Cmd);
+  // Cmd+K = Chrome alias for address-bar focus (Cmd+L is primary above)
+  [fileM addItemWithTitle:@"" action:@selector(focusAddressBar:) keyEquivalent:@"k"].keyEquivalentModifierMask=Cmd;
   [fileM addItem:[NSMenuItem separatorItem]];
   mi(fileM,@"Close Window",@selector(performClose:),@"w",Cmd|Shift);
   mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
@@ -2877,6 +2883,8 @@ static NSMutableArray *gBBWindowControllers;
   rcI.submenu=rcM;
   [histM addItem:[NSMenuItem separatorItem]];
   mi(histM,@"Show Full History",@selector(showHistory:),@"y",Cmd);
+  // Cmd+Shift+H = Chrome alias for history
+  [histM addItemWithTitle:@"" action:@selector(showHistory:) keyEquivalent:@"h"].keyEquivalentModifierMask=Cmd|Shift;
   [histM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧⌫ is already bound on the app menu's Clear Browsing Data.
   [histM addItemWithTitle:@"Clear Browsing Data…" action:@selector(clearHistory:) keyEquivalent:@""];
@@ -2886,6 +2894,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(bmM,@"Bookmark Manager",@selector(openBookmarkManager:),@"b",Cmd|Opt);
   [bmM addItem:[NSMenuItem separatorItem]];
   mi(bmM,@"Bookmark This Tab…",@selector(addBookmark:),@"d",Cmd);
+  mi(bmM,@"Bookmark All Tabs…",@selector(bookmarkAllTabs:),@"d",Cmd|Shift);
   [bmM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧B is already bound on View ▸ Always Show Bookmarks Bar.
   [bmM addItemWithTitle:@"Show Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
@@ -2903,6 +2912,7 @@ static NSMutableArray *gBBWindowControllers;
   NSMenu *tabM=submenu(@"Tab");
   mi(tabM,@"New Tab",@selector(newTab:),@"t",Cmd);
   [tabM addItemWithTitle:@"Duplicate Tab" action:@selector(duplicateCurrentTab:) keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Mute Tab" action:@selector(muteTab:) keyEquivalent:@""];
   [tabM addItem:[NSMenuItem separatorItem]];
   mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
   [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
@@ -4768,6 +4778,44 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
 }
 - (void)readAloud:(id)s           { [[BBVoice shared] readPage:self.webView]; }
+- (void)muteTab:(id)s {
+  BBTab *tab=self.activeTab; if (!tab) return;
+  tab.muted=!tab.muted;
+  BOOL muted=tab.muted;
+  [tab.webView evaluateJavaScript:
+    [NSString stringWithFormat:@"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",muted?@"true":@"false"]
+    completionHandler:nil];
+  [self reloadTabBar];
+}
+- (void)contextSaveImage:(id)sender {
+  NSMenuItem *mi=(NSMenuItem *)sender; NSString *urlStr=mi.representedObject;
+  if (!urlStr.length) return;
+  NSURL *src=[NSURL URLWithString:urlStr]; if (!src) return;
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=src.lastPathComponent.length?src.lastPathComponent:@"image";
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK) return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+      NSData *data=[NSData dataWithContentsOfURL:src];
+      if (data) [data writeToURL:sp.URL atomically:YES];
+    });
+  }];
+}
+- (void)bookmarkAllTabs:(id)s {
+  NSInteger added=0;
+  for (BBTab *t in self.tabs) {
+    NSString *url=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!url.length||[self isInternalURL:url]) continue;
+    if (![[BBBookmarksStore shared] isBookmarked:url]) {
+      [[BBBookmarksStore shared] addTitle:t.title.length?t.title:url url:url];
+      added++;
+    }
+  }
+  [[BBBookmarksStore shared] save];
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"%ld tab%@ bookmarked",(long)added,added==1?@"":@"s"];
+  [a addButtonWithTitle:@"OK"]; [a runModal];
+}
 
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
 - (void)addBookmark:(id)s {
@@ -5026,8 +5074,10 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSAlert *ok=[[NSAlert alloc]init];
   ok.messageText=[NSString stringWithFormat:@"%ld tab%@ added to \"%@\"", (long)added, added==1?@"":@"s", name];
   ok.informativeText=@"Open Research Sessions to review, annotate, or hand off to an agent.";
-  [ok addButtonWithTitle:@"Open Sessions"]; [ok addButtonWithTitle:@"Done"];
-  if ([ok runModal]==NSAlertFirstButtonReturn) [self openResearchManager:nil];
+  [ok addButtonWithTitle:@"Open Sessions"]; [ok addButtonWithTitle:@"Suspend Tabs"]; [ok addButtonWithTitle:@"Done"];
+  NSModalResponse rc=[ok runModal];
+  if (rc==NSAlertFirstButtonReturn) [self openResearchManager:nil];
+  else if (rc==NSAlertSecondButtonReturn) [self suspendInactiveTabs:nil]; // suspend all idle tabs now
 }
 - (void)openResearchManager:(id)s {
   CGFloat W=900, H=540;
@@ -5499,6 +5549,14 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   if (a==@selector(viewSource:))       return self.webView.URL!=nil;
   if (a==@selector(prevTab:)||a==@selector(nextTab:)) return self.tabs.count>1;
   if (a==@selector(focusAddressBar:))  return YES;
+  if (a==@selector(readAloud:)) {
+    item.title=[BBVoice shared].speaking?@"Stop Reading":@"Read Aloud";
+    return self.webView.URL!=nil;
+  }
+  if (a==@selector(muteTab:)) {
+    item.title=self.activeTab.muted?@"Unmute Tab":@"Mute Tab";
+    return self.webView.URL!=nil;
+  }
   return YES; // default enabled
 }
 - (void)goBack:(id)s    { if(self.webView.canGoBack)    [self.webView goBack]; }
@@ -5968,6 +6026,54 @@ static const NSInteger kDialogAbuseThreshold = 3;
 - (void)webView:(WKWebView *)wv navigationResponse:(WKNavigationResponse *)response didBecomeDownload:(WKDownload *)download {
   download.delegate=self;
 }
+// ── Navigation response policy — trigger download for Content-Disposition: attachment ────
+- (void)webView:(WKWebView *)wv decidePolicyForNavigationResponse:(WKNavigationResponse *)response
+    decisionHandler:(void(^)(WKNavigationResponsePolicy))decisionHandler {
+  NSHTTPURLResponse *http=(NSHTTPURLResponse *)response.response;
+  if ([http isKindOfClass:[NSHTTPURLResponse class]]) {
+    NSString *cd=http.allHeaderFields[@"Content-Disposition"]?:@"";
+    if ([cd hasPrefix:@"attachment"]) { decisionHandler(WKNavigationResponsePolicyDownload); return; }
+  }
+  decisionHandler(response.canShowMIMEType ? WKNavigationResponsePolicyAllow : WKNavigationResponsePolicyDownload);
+}
+// ── HTTP Basic / Digest auth challenge ────────────────────────────────────────
+- (void)webView:(WKWebView *)wv didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
+    completionHandler:(void(^)(NSURLSessionAuthChallengeDisposition,NSURLCredential*))done {
+  NSString *method=challenge.protectionSpace.authenticationMethod;
+  if ([method isEqualToString:NSURLAuthenticationMethodHTTPBasic] ||
+      [method isEqualToString:NSURLAuthenticationMethodHTTPDigest] ||
+      [method isEqualToString:NSURLAuthenticationMethodNTLM]) {
+    dispatch_async(dispatch_get_main_queue(),^{
+      NSAlert *a=[[NSAlert alloc]init];
+      a.messageText=[NSString stringWithFormat:@"Sign in to %@",challenge.protectionSpace.host];
+      a.informativeText=challenge.protectionSpace.realm.length?
+        [NSString stringWithFormat:@"Realm: %@",challenge.protectionSpace.realm]:@"";
+      NSTextField *user=[[NSTextField alloc]initWithFrame:NSMakeRect(0,30,260,22)];
+      user.placeholderString=@"Username";
+      NSSecureTextField *pass=[[NSSecureTextField alloc]initWithFrame:NSMakeRect(0,0,260,22)];
+      pass.placeholderString=@"Password";
+      NSView *acc=[[NSView alloc]initWithFrame:NSMakeRect(0,0,260,58)];
+      [acc addSubview:user]; [acc addSubview:pass];
+      a.accessoryView=acc;
+      [a addButtonWithTitle:@"Sign In"]; [a addButtonWithTitle:@"Cancel"];
+      [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+        if (rc==NSAlertFirstButtonReturn && user.stringValue.length) {
+          NSURLCredential *cred=[NSURLCredential credentialWithUser:user.stringValue
+            password:pass.stringValue persistence:NSURLCredentialPersistenceForSession];
+          done(NSURLSessionAuthChallengeUseCredential,cred);
+        } else {
+          done(NSURLSessionAuthChallengeCancelAuthenticationChallenge,nil);
+        }
+      }];
+    });
+    return;
+  }
+  // Server trust (HTTPS) — default WebKit handling
+  if ([method isEqualToString:NSURLAuthenticationMethodServerTrust])
+    done(NSURLSessionAuthChallengePerformDefaultHandling,nil);
+  else
+    done(NSURLSessionAuthChallengeCancelAuthenticationChallenge,nil);
+}
 // ── HTTPS upgrade + mixed-content guard ───────────────────────────────────────
 - (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)action
     decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
@@ -6158,6 +6264,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
         if (imgURL) {
           add(@"Open Image in New Tab",@selector(contextOpenLinkNewTab:),imgURL);
           add(@"Copy Image Address",@selector(contextCopyLink:),imgURL);
+          add(@"Save Image As…",@selector(contextSaveImage:),imgURL);
           [menu addItem:[NSMenuItem separatorItem]];
         }
         NSMenuItem *back=add(@"Back",@selector(goBack:),nil); back.enabled=s.webView.canGoBack;
