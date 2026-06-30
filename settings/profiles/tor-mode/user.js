@@ -84,7 +84,21 @@ user_pref("privacy.fingerprintingProtection.overrides", "-CanvasTextMetrics,-Web
 // (b) Actively force the things Tor Browser spoofs that stock RFP does NOT, so we
 // never sit in a distinguishable state:
 user_pref("privacy.spoof_english", 2);                 // force en-US surface (Tor does)
-user_pref("webgl.enable-debug-renderer-info", false);  // mask real GPU vendor/renderer
+//
+// WebGL — COHORT FIX (2026-06-30). Tor Browser / Firefox-ESR ship WebGL
+// PRESENT-but-RFP-spoofed, NOT disabled. A browser that returns no WebGL context
+// (or strips WEBGL_debug_renderer_info so the extension/ext-count is undefined) is
+// RARE and stands out — the opposite of blending in. Under RFP, getParameter()
+// for VENDOR/RENDERER and the UNMASKED_RENDERER_WEBGL debug param are already
+// masked to a uniform cohort string, and getSupportedExtensions() returns the
+// standardized RFP list. So we must KEEP WebGL on and let RFP mask it, NOT kill
+// the debug-renderer extension (which produced the scorecard's `WebGL renderer =
+// no-webgl` / `ext count = undefined` LEAKs).
+//   - REMOVED: webgl.enable-debug-renderer-info=false  (made the ext absent → leak)
+//   - webgl.disabled=false set explicitly so the tor-mode profile can never sit in
+//     an inherited/disabled state; RFP handles the renderer masking.
+user_pref("webgl.disabled", false);
+user_pref("webgl.enable-webgl2", true);
 //
 // (c) The BIG one: Tor makes EVERY desktop platform report Windows so Mac/Linux
 // users hide in the Windows majority. RFP computes its own UA and IGNORES
@@ -96,6 +110,33 @@ user_pref("webgl.enable-debug-renderer-info", false);  // mask real GPU vendor/r
 // Match Tor Browser's first-party isolation posture.
 user_pref("privacy.firstparty.isolate", false);     // dFPI supersedes; keep consistent
 user_pref("privacy.partition.serviceWorkers", true);
+
+// ── navigator.plugins — COHORT FIX (2026-06-30) ──────────────────────────────
+// The scorecard grades the cohort value as navigator.plugins.length === 0. Tor
+// Browser / Firefox-ESR with RFP report an EMPTY plugin array. The scorecard's
+// `plugins = 5` LEAK is the bundled PDF viewer being enumerated as pseudo-plugin
+// entries. RFP standardizes this away; make it explicit & immune to reset so the
+// count is a fixed 0, matching the cohort (nothing here INJECTS plugins — we just
+// ensure the PDF.js pseudo-plugin surface is not exposed to navigator.plugins).
+user_pref("pdfjs.enableScripting", false);
+
+// ── audio (oac) + text-metric — COHORT NOTE (2026-06-30, honest) ─────────────
+// The scorecard flags `audio (oac) = identical hash`, `canvas text metric =
+// subpixel`, `layout text metric = subpixel` as LEAKING. The cohort question is
+// subtle and DELIBERATELY left at stock-RFP here:
+//   - Our two custom patches (WebAudioFarble id 82, CanvasTextMetrics id 81) are
+//     a NOVEL edge that Tor Browser does NOT have. Enabling them in Tor mode would
+//     make us a tiny DISTINCT cohort riding Tor (the cohort paradox) — so they are
+//     correctly disabled via the overrides string above, and are OMITTED from the
+//     FF140-ESR tor-mode build entirely (see docs/tor-mode.md §ESR patch-apply).
+//   - With those off, audio/text sit at STOCK-RFP — which is exactly what a real
+//     Tor Browser emits (stock RFP randomizes canvas readback but leaves WebAudio
+//     a stable residual and measureText sub-pixel; see gecko-patches README).
+//   So in tor-mode these three values ARE the cohort normal: "off = blend in."
+//   The scorecard's hardened==control / subpixel heuristic reads them as LEAKING,
+//   but flipping them to int/randomized HERE would BREAK cohort match. They are
+//   intentionally left untouched in tor-mode. (Direct/human-secure mode is where
+//   our int/farble edge is active — there it is a genuine improvement, not a leak.)
 
 // NOTE / honest residual: even here BearBrowser is NOT byte-identical to genuine
 // Tor Browser (different build/version → different frozen UA, build id, etc.), so

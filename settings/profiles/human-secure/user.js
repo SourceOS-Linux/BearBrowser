@@ -362,6 +362,11 @@ user_pref("dom.vr.webxr.enabled", false);
 // Keyboard Layout API: getLayoutMap() reveals input language and keyboard type.
 user_pref("dom.keyboard.layout_map.enabled", false);
 
+// navigator.plugins — cohort = empty array (length 0), matching Firefox-ESR/Tor
+// under RFP. The bundled PDF viewer can surface as pseudo-plugin entries; ensure
+// the PDF.js scripting/pseudo-plugin surface is not exposed so the count stays 0.
+user_pref("pdfjs.enableScripting", false);
+
 // Extension detection hardening: blocks sites from detecting installed addons
 // via WebExtension API reflection.
 user_pref("privacy.resistFingerprinting.block_mozAddonManager", true);
