@@ -122,6 +122,124 @@ spec:
           bindAddress: 127.0.0.1
           requireEphemeralPort: true
           requireSessionToken: true
+  # ---------------------------------------------------------------------------
+  # agentActionContract — the enforcing action→class map consumed by
+  # scripts/agent-control-bridge.py. This is the machine-readable form of the
+  # mapping table in docs/agent-control-bridge.md §3. Every agent action the
+  # control bridge is asked to perform is classified here BEFORE execution:
+  #   allowed     → permit, attest a browser.<action> ReasoningEvent
+  #   gated       → permit ONLY with a valid per-action approval token, else DENY
+  #   prohibited  → DENY unconditionally (no approval path), attest a violation
+  # policyConditions re-classify an action based on planner-supplied params
+  # (e.g. a click the planner flags as a form submission → gated; a fill into a
+  # credential/payment/gov-id field → prohibited). This is the containment
+  # Gartner demands: the rogue/injected action is blocked at decision time.
+  # ---------------------------------------------------------------------------
+  agentActionContract:
+    policyRef: urn:srcos:policy:bearbrowser-agent-runtime
+    defaultDecision: deny       # any action not classified below is denied
+    actionClasses:
+      allowed:
+        - action: navigate
+          replayClass: exact
+          eventType: browser.navigate
+        - action: read-dom
+          replayClass: exact
+          eventType: browser.read-dom
+        - action: query-selector
+          replayClass: exact
+          eventType: browser.query-selector
+        - action: extract-text
+          replayClass: exact
+          eventType: browser.extract-text
+        - action: screenshot
+          replayClass: best-effort
+          eventType: browser.screenshot
+        - action: scroll
+          replayClass: exact
+          eventType: browser.scroll
+        - action: wait
+          replayClass: exact
+          eventType: browser.wait
+        - action: click
+          replayClass: best-effort
+          eventType: browser.click
+        - action: fill-form-field
+          replayClass: best-effort
+          eventType: browser.fill-form-field
+      gated:
+        - action: submit-form
+          replayClass: non-replayable-side-effect
+          eventType: browser.submit-form
+        - action: file-download
+          replayClass: non-replayable-side-effect
+          eventType: browser.file-download
+        - action: oauth-grant
+          replayClass: non-replayable-side-effect
+          eventType: browser.oauth-grant
+        - action: payment-autofill
+          replayClass: non-replayable-side-effect
+          eventType: browser.payment-autofill
+        - action: cross-origin-post
+          replayClass: non-replayable-side-effect
+          eventType: browser.cross-origin-post
+        - action: clipboard-write
+          replayClass: non-replayable-side-effect
+          eventType: browser.clipboard-write
+        - action: geolocation
+          replayClass: evidence-only
+          eventType: browser.geolocation
+        - action: camera-mic
+          replayClass: evidence-only
+          eventType: browser.camera-mic
+      prohibited:
+        - action: enter-credentials
+          eventType: browser.policy.violation
+        - action: enter-payment-details
+          eventType: browser.policy.violation
+        - action: enter-government-id
+          eventType: browser.policy.violation
+        - action: modify-access-controls
+          eventType: browser.policy.violation
+        - action: bypass-captcha
+          eventType: browser.policy.violation
+        - action: execute-trade-or-transfer
+          eventType: browser.policy.violation
+    # policyConditions re-classify a base action when planner-supplied params
+    # match. Evaluated in order; the FIRST match wins. `reclassifyTo` is the
+    # resulting class. The `when` block is a minimal jsonlogic-style predicate
+    # (a single operator over an action param) the bridge evaluates locally.
+    policyConditions:
+      - id: click-is-form-submission
+        description: A click the planner flagged as submitting a form is a gated submit-form.
+        appliesTo: click
+        when: { "==": [ { "var": "intent" }, "submit-form" ] }
+        reclassifyTo: gated
+        as: submit-form
+      - id: click-is-payment
+        description: A click the planner flagged as placing an order/trade is prohibited.
+        appliesTo: click
+        when: { "==": [ { "var": "intent" }, "execute-trade" ] }
+        reclassifyTo: prohibited
+        as: execute-trade-or-transfer
+      - id: fill-into-credential-field
+        description: A fill into a password/credential field is prohibited credential entry.
+        appliesTo: fill-form-field
+        when: { "in": [ { "var": "fieldType" }, [ "password", "credential", "username", "totp" ] ] }
+        reclassifyTo: prohibited
+        as: enter-credentials
+      - id: fill-into-payment-field
+        description: A fill into a card/cvv/payment field is prohibited payment entry.
+        appliesTo: fill-form-field
+        when: { "in": [ { "var": "fieldType" }, [ "card", "cardNumber", "cvv", "pan", "payment" ] ] }
+        reclassifyTo: prohibited
+        as: enter-payment-details
+      - id: fill-into-govid-field
+        description: A fill into an SSN/passport/gov-id field is prohibited gov-id entry.
+        appliesTo: fill-form-field
+        when: { "in": [ { "var": "fieldType" }, [ "ssn", "passport", "govId", "nationalId" ] ] }
+        reclassifyTo: prohibited
+        as: enter-government-id
   audit:
     requiredEvents:
       - browser.session.started

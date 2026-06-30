@@ -9,16 +9,30 @@ This is the moat. No other browser ships a spec-governed, evidence-emitting
 agent automation surface. The contract + bridge are the differentiating IP and
 are ready the moment the binary lands.
 
-> **Honesty note — runtime binding is pending the binary build.**
-> BearBrowser has no compiled binary yet (the LibreWolf compile lane is wired in
-> `scripts/bearbrowser-build-binary.sh` but has not been run). The control
-> endpoint described here is **not yet a live automation surface**. What is real
-> and ready today is (1) this bridge spec, (2) the governance contract, and (3)
-> the emission schema — which is **identical to TurtleTerm's** reasoning-event
-> family, so the evidence fabric is already unified across the two products. The
-> reference emitter is `TurtleTerm/assets/sourceos/bin/turtle-agentd`
+> **Status — the ENFORCING bridge is implemented; runtime binding is pending the binary.**
+> The control bridge is real and runnable today:
+> **`scripts/agent-control-bridge.py`**. Its enforcement + attestation layer is
+> **pure** — it classifies every agent action against the contract and BLOCKS
+> gated/prohibited (including injected) actions **at decision time**, attesting a
+> spec-conformant `ReasoningEvent` for each, *without needing a live browser*
+> (dry/enforce-only mode). Containment is proven by
+> **`scripts/tests/test_injection_containment.py`** (79 assertions, all passing):
+> an injected `enter-credentials` is denied + a `browser.policy.violation` is
+> attested; a `submit-form`/`cross-origin-post` without a per-action approval
+> token is denied; a `click` the planner flags as a submit, or a fill into a
+> credential/payment/gov-id field, is re-classified and blocked.
+>
+> What is still pending is the **live transport binding only**: BearBrowser has no
+> compiled binary yet (the LibreWolf compile lane is wired in
+> `scripts/bearbrowser-build-binary.sh` but has not been run), so `connect()` runs
+> against no endpoint and the bridge falls through to enforce-only mode. The
+> emission schema is **identical to TurtleTerm's** reasoning-event family, so the
+> evidence fabric is already unified across the two products. The reference
+> emitter is `TurtleTerm/assets/sourceos/bin/turtle-agentd`
 > (`_open_reasoning_run`, `_emit_reasoning_event`, `_close_reasoning_run`); the
-> browser bridge mirrors those exact shapes.
+> browser bridge mirrors those exact shapes. The machine-readable action→class
+> map + PolicyConditions the bridge loads live in
+> `policy/bearbrowser-contract.yaml` under `spec.agentActionContract`.
 
 ---
 
