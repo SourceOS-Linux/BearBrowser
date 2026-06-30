@@ -319,6 +319,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(assign) BOOL       pinned;          // pinned = fixed-width icon-only, no Cmd+W
 @property(assign) BOOL       isPlayingAudio;  // page has active audio (tab badge)
 @property(assign) BOOL       genpassOffered;  // password-generator prompt already shown for this page load
+@property(assign) BOOL       translateOffered;// translate prompt already shown for this page load
 @end
 @implementation BBTab
 - (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
@@ -3159,6 +3160,7 @@ static NSMutableArray *gBBWindowControllers;
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Downloads",@selector(toggleDownloadPanel:),@"j",Cmd|Shift);
   mi(viewM,@"Show Reader",@selector(toggleReader:),@"r",Cmd|Ctrl);
+  mi(viewM,@"Translate Page…",@selector(translatePage:),@"u",Cmd|Ctrl);
   mi(viewM,@"Read Aloud",@selector(readAloud:),@"r",Cmd|Opt);
   [viewM addItem:[NSMenuItem separatorItem]];
   NSMenuItem *devI=[viewM addItemWithTitle:@"Developer" action:nil keyEquivalent:@""];
@@ -5703,6 +5705,65 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 // Reader mode: extract the main article (best-effort, by paragraph density) and
 // render it in our OWN clean template, so the layout is fully under our control.
+// ── Translation ──────────────────────────────────────────────────────────────
+// We open Google Translate's web translator in a new tab with the page URL
+// as the source. No API key, no third-party SDK; user's browsing language
+// list governs whether we offer the prompt. Override the translator service
+// via the BBTranslateURL default (%@ = source URL).
+- (NSArray<NSString *> *)preferredLanguages {
+  NSArray *saved=[[NSUserDefaults standardUserDefaults] stringArrayForKey:@"BBTranslateNativeLangs"];
+  if (saved.count) return saved;
+  NSMutableArray *out=[NSMutableArray array];
+  for (NSString *l in [NSLocale preferredLanguages]) {
+    NSString *prefix=[l componentsSeparatedByString:@"-"].firstObject.lowercaseString;
+    if (prefix.length && ![out containsObject:prefix]) [out addObject:prefix];
+  }
+  if (!out.count) [out addObject:@"en"];
+  return out;
+}
+- (BOOL)isNativeLanguage:(NSString *)htmlLang {
+  if (!htmlLang.length) return YES;
+  NSString *prefix=[htmlLang componentsSeparatedByString:@"-"].firstObject.lowercaseString;
+  for (NSString *l in [self preferredLanguages]) if ([prefix isEqualToString:l]) return YES;
+  return NO;
+}
+- (void)maybeOfferTranslateForLang:(NSString *)lang tab:(BBTab *)tab {
+  if (!tab||tab.translateOffered) return;
+  if ([self isNativeLanguage:lang]) return;
+  // Per-host opt-out persists across sessions.
+  NSString *host=tab.webView.URL.host?:@"";
+  NSString *neverKey=[NSString stringWithFormat:@"BBTranslateNever_%@",host.lowercaseString];
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:neverKey]) return;
+  tab.translateOffered=YES;
+  dispatch_async(dispatch_get_main_queue(),^{
+    NSAlert *a=[[NSAlert alloc]init];
+    a.messageText=[NSString stringWithFormat:@"Translate this %@ page?",lang.uppercaseString];
+    a.informativeText=@"BearBrowser will open the page in your configured translation service. The page URL is sent to that service.";
+    [a addButtonWithTitle:@"Translate"];
+    [a addButtonWithTitle:@"Never for this site"];
+    [a addButtonWithTitle:@"Not now"];
+    [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+      if (rc==NSAlertFirstButtonReturn) [self translatePage:nil];
+      else if (rc==NSAlertSecondButtonReturn) [[NSUserDefaults standardUserDefaults] setBool:YES forKey:neverKey];
+    }];
+  });
+}
+- (void)translatePage:(id)s {
+  NSURL *u=self.webView.URL; if (!u) return;
+  NSString *fmt=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBTranslateURL"];
+  if (!fmt.length) fmt=@"https://translate.google.com/translate?sl=auto&tl=%1$@&u=%2$@";
+  NSString *target=[self preferredLanguages].firstObject?:@"en";
+  NSString *escaped=[u.absoluteString stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+  // Two-argument format: %1$@ = target lang, %2$@ = URL-escaped source URL.
+  NSString *finalURL=[NSString stringWithFormat:fmt,target,escaped];
+  NSURL *translateURL=[NSURL URLWithString:finalURL];
+  if (!translateURL) return;
+  NSInteger prev=self.activeTabIndex;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:translateURL]];
+  // Foreground the translated page — translation is the user's main intent here.
+  (void)prev;
+}
 - (void)toggleReader:(id)s {
   if (self.readerMode) {
     self.readerMode=NO;
@@ -6607,6 +6668,7 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
     return YES;
   }
   if (a==@selector(toggleReader:))     return self.webView.URL!=nil;
+  if (a==@selector(translatePage:))    return self.webView.URL!=nil && !([self isInternalURL:self.webView.URL.absoluteString]);
   if (a==@selector(toggleBookmarkCurrent:)) {
     NSString *url=self.webView.URL.absoluteString;
     BOOL isBookmarked=url.length&&[[BBBookmarksStore shared] isBookmarked:url];
@@ -7524,6 +7586,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
   BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
   tab.dialogCount=0; tab.dialogsSuppressed=NO; // reset per-page dialog abuse state
   tab.genpassOffered=NO;                       // re-arm the password-generator prompt
+  tab.translateOffered=NO;                     // re-arm the translate prompt
   tab.isLoading=YES;
   if (wv==self.webView) {
     self.progressBar.doubleValue=0; self.progressBar.hidden=NO;
@@ -7551,6 +7614,14 @@ static const NSInteger kDialogAbuseThreshold = 3;
   if (tab.muted) [wv evaluateJavaScript:
     @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=true;})"
     completionHandler:nil];
+  // Translate offer: peek <html lang>, suggest translation if not in user's prefs.
+  if (wv==self.webView && !tab.translateOffered) {
+    [wv evaluateJavaScript:@"document.documentElement.lang||document.documentElement.getAttribute('xml:lang')||''"
+      completionHandler:^(id r,NSError *e){
+        NSString *lang=[r isKindOfClass:[NSString class]]?(NSString*)r:@"";
+        if (lang.length) [self maybeOfferTranslateForLang:lang tab:tab];
+      }];
+  }
   NSString *url=wv.URL.absoluteString?:@"";
   if (wv==self.webView) {
     self.progressBar.hidden=YES;
