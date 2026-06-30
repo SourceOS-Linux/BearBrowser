@@ -247,6 +247,16 @@ done
 # 140; the LibreWolf stack itself applies cleanly — proven in CI).
 afp_dir="$repo_root/gecko-patches/anti-fingerprint"
 patches_txt="$workspace/source/assets/patches.txt"
+# msix.patch (Windows Store packaging) drifts on the 140 ESR tree (hunk #2 rejects)
+# and aborts the whole `make` for EVERY profile — and it's Windows-only, irrelevant
+# to a Linux/macOS build. Drop it UNCONDITIONALLY for all profiles. (Previously this
+# drop lived only in the tor-mode branch below, so the human-secure profile kept the
+# patch and failed the GCP build ~10x in a row. The tor-mode-only drop below is now
+# redundant but idempotent/harmless.)
+if [ -f "$patches_txt" ] && grep -q 'patches/msix\.patch' "$patches_txt"; then
+  grep -v 'patches/msix\.patch' "$patches_txt" > "$patches_txt.tmp" && mv "$patches_txt.tmp" "$patches_txt"
+  echo "feature-layer: dropped msix.patch for profile '$profile' (Windows-only; drifts on 140 ESR; aborts make)"
+fi
 if [ "$profile" = "tor-mode" ]; then
   echo "feature-layer: tor-mode omits the canvas/audio anti-fp patches (disabled to match cohort; see docs/tor-mode.md)"
   # Drop msix.patch (Windows Store packaging) from the tor-mode stack: it's
