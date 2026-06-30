@@ -2833,7 +2833,7 @@ static NSMutableArray *gBBWindowControllers;
   NSMenu *fileM=submenu(@"File");
   mi(fileM,@"New Tab",@selector(newTab:),@"t",Cmd);
   mi(fileM,@"New Window",@selector(newWindow:),@"n",Cmd);
-  mi(fileM,@"New Incognito Window",@selector(newPrivateTab:),@"n",Cmd|Shift);
+  mi(fileM,@"New Incognito Window",@selector(newPrivateWindow:),@"n",Cmd|Shift);
   mi(fileM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",Cmd|Shift);
   [fileM addItem:[NSMenuItem separatorItem]];
   mi(fileM,@"Open File…",@selector(openFile:),@"o",Cmd);
@@ -2935,6 +2935,8 @@ static NSMutableArray *gBBWindowControllers;
   [tabM addItem:[NSMenuItem separatorItem]];
   mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
   [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
+  [tabM addItemWithTitle:@"Move Tab Left"  action:@selector(moveTabLeft:)  keyEquivalent:@"["].keyEquivalentModifierMask=Ctrl|Shift;
+  [tabM addItemWithTitle:@"Move Tab Right" action:@selector(moveTabRight:) keyEquivalent:@"]"].keyEquivalentModifierMask=Ctrl|Shift;
   [tabM addItem:[NSMenuItem separatorItem]];
   for (NSInteger i=1;i<=9;i++) {
     NSMenuItem *ti=[tabM addItemWithTitle:[NSString stringWithFormat:@"Tab %ld",(long)i]
@@ -4706,6 +4708,9 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   add(tab.muted?@"Unmute Tab":@"Mute Tab", @selector(ctxToggleMuteTab:), YES);
   add(tab.suspended?@"Reload (Wake) Tab":@"Suspend Tab", @selector(ctxToggleSuspendTab:), YES);
   [m addItem:[NSMenuItem separatorItem]];
+  add(@"Move Tab Left", @selector(ctxMoveTabLeft:), i>0);
+  add(@"Move Tab Right",@selector(ctxMoveTabRight:),i<(NSInteger)self.tabs.count-1);
+  [m addItem:[NSMenuItem separatorItem]];
   add(@"New Tab to the Right",@selector(ctxNewTabRight:),YES);
   add(@"Duplicate Tab",@selector(ctxDuplicateTab:),YES);
   add(@"Add to Research Session…",@selector(addCurrentTabToSession:),YES);
@@ -4720,6 +4725,8 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   return m;
 }
 - (BOOL)validTabIndex:(NSInteger)i { return i>=0 && i<(NSInteger)self.tabs.count; }
+- (void)ctxMoveTabLeft:(id)s  { NSInteger i=[(NSMenuItem*)s tag]; if(i<=0||![self validTabIndex:i])return; [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i-1]; if(self.activeTabIndex==i)self.activeTabIndex=i-1; [self reloadTabBar]; }
+- (void)ctxMoveTabRight:(id)s { NSInteger i=[(NSMenuItem*)s tag]; if(i>=(NSInteger)self.tabs.count-1||![self validTabIndex:i])return; [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i+1]; if(self.activeTabIndex==i)self.activeTabIndex=i+1; [self reloadTabBar]; }
 - (void)ctxNewTabRight:(id)s   { NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return; [self insertTabAt:i+1 private:self.tabs[i].isPrivate url:nil]; }
 - (void)ctxDuplicateTab:(id)s  {
   NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return;
@@ -5336,6 +5343,22 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
   [w applicationDidFinishLaunching:dummy];
 }
+- (void)newPrivateWindow:(id)s {
+  BBDelegate *w=[[BBDelegate alloc]init];
+  NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+  [w applicationDidFinishLaunching:dummy];
+  [w addTabPrivate:YES];
+}
+- (void)moveTabLeft:(id)s {
+  NSInteger i=self.activeTabIndex; if (i<=0||self.tabs.count<2) return;
+  [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i-1];
+  self.activeTabIndex=i-1; [self reloadTabBar];
+}
+- (void)moveTabRight:(id)s {
+  NSInteger i=self.activeTabIndex; if (i>=(NSInteger)self.tabs.count-1||self.tabs.count<2) return;
+  [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i+1];
+  self.activeTabIndex=i+1; [self reloadTabBar];
+}
 
 // ── Tab Search (Cmd+Shift+A) ──────────────────────────────────────────────────
 - (void)openTabSearch:(id)s {
@@ -5626,6 +5649,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 - (void)prevTab:(id)s { NSInteger n=self.tabs.count; if(n<2)return; [self tabItemDidSelect:(self.activeTabIndex-1+n)%n]; }
 - (void)switchToTabByMenuItem:(NSMenuItem *)item {
   NSInteger idx=item.tag;
+  if (idx==8) idx=(NSInteger)self.tabs.count-1; // Cmd+9 = last tab (Chrome behavior)
   if (idx>=0&&idx<(NSInteger)self.tabs.count) [self tabItemDidSelect:idx];
 }
 - (void)focusAddressBar:(id)s { [self.window makeFirstResponder:self.address]; [self.address selectText:nil]; }
@@ -5750,6 +5774,9 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   if (a==@selector(printPage:))        return self.webView.URL!=nil;
   if (a==@selector(viewSource:))       return self.webView.URL!=nil;
   if (a==@selector(prevTab:)||a==@selector(nextTab:)) return self.tabs.count>1;
+  if (a==@selector(moveTabLeft:))  return self.activeTabIndex>0;
+  if (a==@selector(moveTabRight:)) return self.activeTabIndex<(NSInteger)self.tabs.count-1;
+  if (a==@selector(newPrivateWindow:)) return YES;
   if (a==@selector(focusAddressBar:))  return YES;
   if (a==@selector(readAloud:)) {
     item.title=[BBVoice shared].speaking?@"Stop Reading":@"Read Aloud";
