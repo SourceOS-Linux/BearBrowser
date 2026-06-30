@@ -1514,6 +1514,9 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 + (NSArray<NSDictionary*> *)engines;
 + (NSString *)engineName;
 + (NSString *)urlForQuery:(NSString *)q;
++ (NSString *)urlForKeywordQuery:(NSString *)raw;
++ (NSString *)keywordLabel:(NSString *)raw;
++ (NSString *)calculatorResultForQuery:(NSString *)q;
 @end
 @implementation BBSearch
 + (NSArray<NSDictionary*> *)engines {
@@ -1535,6 +1538,67 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   for (NSDictionary *e in [self engines])
     if ([e[@"id"] isEqualToString:eid]) return [NSString stringWithFormat:e[@"url"],enc];
   return [NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",enc];
+}
+// Type "wiki foo" / "yt foo" / "gh foo" / "ddg foo" / "kagi foo" → site-scoped search.
+// Returns nil if the input doesn't start with a recognised keyword + space.
++ (NSString *)urlForKeywordQuery:(NSString *)raw {
+  NSRange sp=[raw rangeOfString:@" "];
+  if (sp.location==NSNotFound||sp.location<1) return nil;
+  NSString *kw=[[raw substringToIndex:sp.location] lowercaseString];
+  NSString *rest=[[raw substringFromIndex:sp.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+  if (!rest.length) return nil;
+  NSString *enc=[rest stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  static NSDictionary *kws=nil; static dispatch_once_t o; dispatch_once(&o,^{
+    kws=@{@"wiki":@"https://en.wikipedia.org/w/index.php?search=%@",
+          @"yt":  @"https://www.youtube.com/results?search_query=%@",
+          @"gh":  @"https://github.com/search?q=%@",
+          @"npm": @"https://www.npmjs.com/search?q=%@",
+          @"so":  @"https://stackoverflow.com/search?q=%@",
+          @"mdn": @"https://developer.mozilla.org/en-US/search?q=%@",
+          @"ddg": @"https://duckduckgo.com/?q=%@",
+          @"kagi":@"https://kagi.com/search?q=%@",
+          @"g":   @"https://www.google.com/search?q=%@",
+          @"map": @"https://www.openstreetmap.org/search?query=%@",
+          @"amzn":@"https://www.amazon.com/s?k=%@",
+          @"hn":  @"https://hn.algolia.com/?q=%@"};
+  });
+  NSString *fmt=kws[kw]; if (!fmt) return nil;
+  return [NSString stringWithFormat:fmt,enc];
+}
++ (NSString *)keywordLabel:(NSString *)raw {
+  NSRange sp=[raw rangeOfString:@" "]; if (sp.location==NSNotFound) return nil;
+  NSString *kw=[[raw substringToIndex:sp.location] lowercaseString];
+  static NSDictionary *labels=nil; static dispatch_once_t o; dispatch_once(&o,^{
+    labels=@{@"wiki":@"Wikipedia",@"yt":@"YouTube",@"gh":@"GitHub",@"npm":@"npm",
+             @"so":@"Stack Overflow",@"mdn":@"MDN",@"ddg":@"DuckDuckGo",@"kagi":@"Kagi",
+             @"g":@"Google",@"map":@"OpenStreetMap",@"amzn":@"Amazon",@"hn":@"Hacker News"};
+  });
+  return labels[kw];
+}
+// Arithmetic-only expression → NSExpression-evaluated result; returns nil if it's
+// not a pure arithmetic input. Restricts the grammar to digits/operators/whitespace
+// to avoid mistaking URLs ("foo.com") for numeric exprs.
++ (NSString *)calculatorResultForQuery:(NSString *)q {
+  NSString *trimmed=[q stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (trimmed.length<3) return nil;
+  // Must contain at least one operator and only allowed characters.
+  NSCharacterSet *allowed=[NSCharacterSet characterSetWithCharactersInString:@"0123456789.+-*/%()^ "];
+  if ([trimmed rangeOfCharacterFromSet:allowed.invertedSet].location!=NSNotFound) return nil;
+  NSCharacterSet *ops=[NSCharacterSet characterSetWithCharactersInString:@"+-*/%^"];
+  if ([trimmed rangeOfCharacterFromSet:ops].location==NSNotFound) return nil;
+  // NSExpression treats "^" as XOR on integers — translate it to ** which works on doubles.
+  NSString *expr=[trimmed stringByReplacingOccurrencesOfString:@"^" withString:@"**"];
+  @try {
+    NSExpression *e=[NSExpression expressionWithFormat:expr];
+    id v=[e expressionValueWithObject:nil context:nil];
+    if ([v isKindOfClass:[NSNumber class]]) {
+      double d=[(NSNumber*)v doubleValue];
+      if (isnan(d)||isinf(d)) return nil;
+      if (d==floor(d) && fabs(d)<1e15) return [NSString stringWithFormat:@"%lld",(long long)d];
+      return [NSString stringWithFormat:@"%g",d];
+    }
+  } @catch(...) {}
+  return nil;
 }
 @end
 
@@ -1582,6 +1646,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @property(weak)   id<BBAddressDropdownDelegate> delegate;
 @property(strong) NSTimer *ddgTimer;
 @property(assign) BOOL remoteSuggestEnabled; // set per-keystroke by the owner (off in private / when disabled)
+@property(strong) NSArray<NSDictionary *> *openTabsSnapshot; // owner sets before each updateForQuery
 - (void)updateForQuery:(NSString *)q belowField:(NSTextField *)field inWindow:(NSWindow *)win;
 - (void)hide;
 - (BOOL)selectNext;
@@ -1613,6 +1678,36 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 - (void)updateForQuery:(NSString *)q belowField:(NSTextField *)field inWindow:(NSWindow *)win {
   [_suggestions removeAllObjects];
   if (!q.length) { [self hide]; return; }
+  // Calculator chip — pure arithmetic input renders the answer at the top of the dropdown.
+  NSString *calc=[BBSearch calculatorResultForQuery:q];
+  if (calc.length) {
+    BBAddressSuggestion *s=[BBAddressSuggestion new];
+    s.title=[NSString stringWithFormat:@"= %@",calc];
+    s.urlString=calc; // selecting copies the answer (handled by the delegate's URL-load fallback)
+    s.badge=@"∑"; [_suggestions addObject:s];
+  }
+  // Search-engine keywords: "wiki foo" → Wikipedia search row.
+  NSString *kwLabel=[BBSearch keywordLabel:q];
+  NSString *kwURL=kwLabel?[BBSearch urlForKeywordQuery:q]:nil;
+  if (kwURL.length) {
+    BBAddressSuggestion *s=[BBAddressSuggestion new];
+    NSString *q2=[q substringFromIndex:[q rangeOfString:@" "].location+1];
+    s.title=[NSString stringWithFormat:@"Search %@: %@",kwLabel,q2];
+    s.urlString=kwURL; s.badge=@"⌕"; [_suggestions addObject:s];
+  }
+  // "Switch to this tab" — when a typed query matches an already-open tab.
+  for (NSDictionary *t in self.openTabsSnapshot) {
+    NSString *title=[t[@"title"] isKindOfClass:[NSString class]]?t[@"title"]:@"";
+    NSString *url=[t[@"url"] isKindOfClass:[NSString class]]?t[@"url"]:@"";
+    if ([title.lowercaseString containsString:q.lowercaseString] ||
+        [url.lowercaseString   containsString:q.lowercaseString]) {
+      BBAddressSuggestion *s=[BBAddressSuggestion new];
+      s.title=[NSString stringWithFormat:@"Switch to tab: %@",title.length?title:url];
+      s.urlString=[NSString stringWithFormat:@"bb-switch-tab:%@",t[@"idx"]];
+      s.badge=@"⇄"; [_suggestions addObject:s];
+      if (_suggestions.count>=2) break;
+    }
+  }
   // Bookmarks first
   for (BBBookmark *b in [BBBookmarksStore shared].items) {
     if ([[b.urlString lowercaseString] containsString:q.lowercaseString]||
@@ -6250,6 +6345,22 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 - (void)dropdownSelectedURL:(NSString *)urlString {
   // Called by table click (mouse selection) — navigate immediately
   [self.addressDropdown hide];
+  // Switch-to-tab row: jump to the matched open tab in place of navigating.
+  if ([urlString hasPrefix:@"bb-switch-tab:"]) {
+    NSInteger idx=[[urlString substringFromIndex:14] integerValue];
+    if (idx>=0 && idx<(NSInteger)self.tabs.count) [self tabItemDidSelect:idx];
+    [self.window makeFirstResponder:self.webView];
+    return;
+  }
+  // Calculator row: NSExpression result has no scheme — copy to clipboard and bail.
+  if (urlString.length && [urlString rangeOfString:@"://"].location==NSNotFound &&
+      [urlString rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]].location==NSNotFound) {
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:urlString forType:NSPasteboardTypeString];
+    [self showStatus:[NSString stringWithFormat:@"Copied %@",urlString]];
+    [self.window makeFirstResponder:self.webView];
+    return;
+  }
   NSURL *u=[NSURL URLWithString:urlString]; if(!u) return;
   self.address.stringValue=urlString;
   [self.window makeFirstResponder:self.webView];
@@ -7417,6 +7528,15 @@ static NSString *kFaviconJS=@"(function(){"
   // send incognito keystrokes to the suggest endpoint.
   self.addressDropdown.remoteSuggestEnabled =
     [[NSUserDefaults standardUserDefaults] boolForKey:@"BBSearchSuggestions"] && !self.activeTab.isPrivate;
+  NSMutableArray *snap=[NSMutableArray array];
+  for (NSInteger k=0;k<(NSInteger)self.tabs.count;k++) {
+    if (k==self.activeTabIndex) continue;
+    BBTab *t=self.tabs[k];
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!u.length || [self isInternalURL:u]) continue;
+    [snap addObject:@{@"idx":@(k),@"title":t.title?:@"",@"url":u}];
+  }
+  self.addressDropdown.openTabsSnapshot=snap;
   if (q.length) [self.addressDropdown updateForQuery:q belowField:self.address inWindow:self.window];
   else [self.addressDropdown hide];
   // Inline autocomplete (default ON, disabled by user pref or private mode)
