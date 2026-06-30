@@ -8298,6 +8298,29 @@ static const NSInteger kDialogAbuseThreshold = 3;
   [self addTabPrivate:self.activeTab.isPrivate];
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
 }
+- (void)contextSpeakSelection:(NSMenuItem *)item {
+  NSString *t=item.representedObject; if (!t.length) return;
+  AVSpeechUtterance *u=[AVSpeechUtterance speechUtteranceWithString:t];
+  u.voice=[BBVoice preferredVoiceForGender:AVSpeechSynthesisVoiceGenderUnspecified];
+  u.rate=AVSpeechUtteranceDefaultSpeechRate;
+  [[BBVoice shared].synth speakUtterance:u];
+}
+- (void)contextEmailPage:(NSMenuItem *)item {
+  NSURL *url=self.webView.URL; if (!url) return;
+  NSString *subj=[(self.activeTab.title.length?self.activeTab.title:url.host?:@"BearBrowser") stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSString *body=[url.absoluteString stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *mailto=[NSURL URLWithString:[NSString stringWithFormat:@"mailto:?subject=%@&body=%@",subj,body]];
+  if (mailto) [[NSWorkspace sharedWorkspace] openURL:mailto];
+}
+- (void)contextEmailSelection:(NSMenuItem *)item {
+  NSString *sel=item.representedObject; if (!sel.length) return;
+  NSURL *pageURL=self.webView.URL;
+  NSString *subj=[(self.activeTab.title.length?self.activeTab.title:@"BearBrowser") stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSString *bodyRaw=pageURL?[NSString stringWithFormat:@"%@\n\n— from %@",sel,pageURL.absoluteString]:sel;
+  NSString *body=[bodyRaw stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *mailto=[NSURL URLWithString:[NSString stringWithFormat:@"mailto:?subject=%@&body=%@",subj,body]];
+  if (mailto) [[NSWorkspace sharedWorkspace] openURL:mailto];
+}
 // Install a right-click monitor so we can show our own Chrome-style context menu.
 - (void)installContextMenuMonitor {
   __weak BBDelegate *weak=self;
@@ -8340,6 +8363,8 @@ static const NSInteger kDialogAbuseThreshold = 3;
           add(@"Copy",@selector(contextCopySelection:),sel);
           NSString *shown=sel.length>24?[[sel substringToIndex:24] stringByAppendingString:@"…"]:sel;
           add([NSString stringWithFormat:@"Search for “%@”",shown],@selector(contextSearchSelection:),sel);
+          add(@"Speak Selection",@selector(contextSpeakSelection:),sel);
+          add(@"Email Selection…",@selector(contextEmailSelection:),sel);
           [menu addItem:[NSMenuItem separatorItem]];
         }
         if (linkURL) {
@@ -8365,6 +8390,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
         add(@"Reload",@selector(reloadOrStop:),nil);
         [menu addItem:[NSMenuItem separatorItem]];
         add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
+        add(@"Email Link to Page…",@selector(contextEmailPage:),nil);
         add(@"Add Page to Research Session…",@selector(addCurrentTabToSession:),nil);
         add(@"Add to Reading List",@selector(addToReadingList:),nil);
         add(@"Save Page As…",@selector(savePage:),nil);
@@ -8407,6 +8433,12 @@ static const NSInteger kDialogAbuseThreshold = 3;
   tab.dialogCount=0; tab.dialogsSuppressed=NO; // reset per-page dialog abuse state
   tab.genpassOffered=NO;                       // re-arm the password-generator prompt
   tab.translateOffered=NO;                     // re-arm the translate prompt
+  tab.editableFocus=NO;                        // a new page starts with no editable focus
+  // Auto-close the find bar on navigation — find state from the previous page is stale.
+  if (wv==self.webView && self.findBarVisible) {
+    self.findBarVisible=NO; self.findBar.hidden=YES; [self clearFind];
+    [self resizeWebViewForCurrentTab];
+  }
   tab.isLoading=YES;
   if (wv==self.webView) {
     self.progressBar.doubleValue=0; self.progressBar.hidden=NO;
