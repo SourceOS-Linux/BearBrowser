@@ -536,7 +536,13 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
     CGFloat w=(i==count-1)?MAX(kTabHardMinW-2,floor(totalW)-x-2):floor(tabW)-2;
     BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,0,w,clipH) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
-    [item setTabTitle:tab.title favicon:tab.favicon loading:tab.isLoading];
+    // Suspended tabs show a moon icon instead of their favicon
+    NSImage *fav=tab.favicon;
+    if (tab.suspended && !tab.isLoading) {
+      fav=[NSImage imageWithSystemSymbolName:@"moon.zzz" accessibilityDescription:@"Suspended"];
+      [fav setTemplate:YES];
+    }
+    [item setTabTitle:tab.title favicon:fav loading:tab.isLoading];
     [self.tabStrip addSubview:item]; [self.items addObject:item];
     if (i==active) activeItem=item;
   }
@@ -1375,6 +1381,30 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   if (n.object==_sessTV) [_itemTV reloadData];
 }
 - (BOOL)tableView:(NSTableView *)tv shouldEditTableColumn:(NSTableColumn *)c row:(NSInteger)r { return NO; }
+
+// Single-click: if the click landed on the status column, cycle that item's status
+- (void)itemTableClicked:(id)s {
+  NSInteger col=_itemTV.clickedColumn, row=_itemTV.clickedRow;
+  if (col!=0||row<0) return;
+  BBResearchSession *sess=[self currentSession]; if(!sess) return;
+  if (row>=(NSInteger)sess.items.count) return;
+  BBResearchItem *it=sess.items[row];
+  it.status=(BBResearchStatus)((it.status+1)%4);
+  [[BBResearchStore shared] save]; [_itemTV reloadData];
+}
+
+// Double-click any item row: open URL in a new tab and mark as Reading
+- (void)openItemDoubleClick:(id)s {
+  NSInteger row=_itemTV.clickedRow; if (row<0) return;
+  BBResearchSession *sess=[self currentSession]; if(!sess) return;
+  if (row>=(NSInteger)sess.items.count) return;
+  BBResearchItem *it=sess.items[row];
+  if (![NSURL URLWithString:it.urlString]) return;
+  it.status=BBResearchStatusReading; [[BBResearchStore shared] save]; [_itemTV reloadData];
+  [[NSNotificationCenter defaultCenter]
+    postNotificationName:@"BBResearchOpenURL" object:nil
+    userInfo:@{@"url":it.urlString}];
+}
 @end
 
 // ── BBConnectionRecord ────────────────────────────────────────────────────────
@@ -2971,6 +3001,8 @@ static NSMutableArray *gBBWindowControllers;
   if (useCenter) [self.window center]; else [self.window setFrame:contentFrame display:NO];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(windowWillClose:)
     name:NSWindowWillCloseNotification object:self.window];
+  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(researchURLNotification:)
+    name:@"BBResearchOpenURL" object:nil];
 
   self.root=[[NSView alloc]initWithFrame:self.window.contentView.bounds];
   self.root.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
@@ -4509,6 +4541,15 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   self.suspendTimer=[NSTimer scheduledTimerWithTimeInterval:60 target:self
     selector:@selector(suspendInactiveTabs:) userInfo:nil repeats:YES];
   self.suspendTimer.tolerance=30; // coalesce with other timers
+
+  // On memory pressure warnings, aggressively suspend idle tabs immediately
+  dispatch_source_t mp=dispatch_source_create(
+    DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+    DISPATCH_MEMORYPRESSURE_WARN|DISPATCH_MEMORYPRESSURE_CRITICAL,
+    dispatch_get_main_queue());
+  __weak typeof(self) wself=self;
+  dispatch_source_set_event_handler(mp,^{ [wself suspendInactiveTabs:nil]; });
+  dispatch_resume(mp);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 - (void)activateTab:(NSInteger)index {
@@ -4721,6 +4762,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   if (self.addrDismissMonitor) { [NSEvent removeMonitor:self.addrDismissMonitor]; self.addrDismissMonitor=nil; }
   if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
   if (self.middleClickMonitor) { [NSEvent removeMonitor:self.middleClickMonitor]; self.middleClickMonitor=nil; }
+  [self.suspendTimer invalidate]; self.suspendTimer=nil;
   // Release this window's controller. Deferred so we never dealloc self midway
   // through this very method (the removal can drop the last strong reference).
   dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
@@ -4988,7 +5030,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   if ([ok runModal]==NSAlertFirstButtonReturn) [self openResearchManager:nil];
 }
 - (void)openResearchManager:(id)s {
-  CGFloat W=800, H=540;
+  CGFloat W=900, H=540;
   NSWindow *rw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,H)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable)
     backing:NSBackingStoreBuffered defer:YES];
@@ -5003,11 +5045,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [sessTV addTableColumn:sc]; sessScroll.documentView=sessTV;
   [cv addSubview:sessScroll];
 
-  // Right: item list
+  // Right: item list (status col is clickable to cycle ☐→…→✓→✗)
   NSScrollView *itemScroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(200,48,W-200,H-48)];
   itemScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; itemScroll.hasVerticalScroller=YES;
   NSTableView *itemTV=[[NSTableView alloc]init]; itemTV.rowHeight=32; itemTV.usesAlternatingRowBackgroundColors=YES;
-  for (NSArray *col in @[@[@"status",@"S",@42],@[@"title",@"Title",@380],@[@"url",@"URL",@220]]) {
+  for (NSArray *col in @[@[@"status",@"S",@42],@[@"title",@"Title",@420],@[@"url",@"URL",@220]]) {
     NSTableColumn *c=[[NSTableColumn alloc]initWithIdentifier:col[0]];
     c.width=[col[2] doubleValue]; c.title=col[1];
     c.resizingMask=NSTableColumnUserResizingMask|NSTableColumnAutoresizingMask;
@@ -5015,26 +5057,31 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   }
   itemScroll.documentView=itemTV; [cv addSubview:itemScroll];
 
-  // Toolbar buttons at bottom
+  // Toolbar buttons at bottom — left: session ops; right: item ops
   void(^btn)(NSString*,NSRect,SEL)=^(NSString*t,NSRect r,SEL a){
     NSButton *b=[[NSButton alloc]initWithFrame:r]; b.title=t; b.bezelStyle=NSBezelStyleRounded;
     b.target=self; b.action=a; [cv addSubview:b];
   };
-  btn(@"New Session", NSMakeRect(8,10,120,28), @selector(researchNewSession:));
-  btn(@"Delete Session", NSMakeRect(136,10,120,28), @selector(researchDeleteSession:));
-  btn(@"Export Markdown", NSMakeRect(264,10,140,28), @selector(researchExportMarkdown:));
-  btn(@"Hand to Agent", NSMakeRect(412,10,130,28), @selector(researchHandToAgent:));
-  btn(@"Open Selected", NSMakeRect(W-140,10,130,28), @selector(researchOpenSelected:));
+  btn(@"New Session",     NSMakeRect(8,   10,110,28), @selector(researchNewSession:));
+  btn(@"Delete Session",  NSMakeRect(126, 10,110,28), @selector(researchDeleteSession:));
+  btn(@"Export Markdown", NSMakeRect(244, 10,130,28), @selector(researchExportMarkdown:));
+  btn(@"Hand to Agent",   NSMakeRect(382, 10,120,28), @selector(researchHandToAgent:));
+  btn(@"Dismiss",         NSMakeRect(510, 10,100,28), @selector(researchDismissItem:));
+  btn(@"Mark Done",       NSMakeRect(618, 10,100,28), @selector(researchMarkDone:));
+  btn(@"Open Selected",   NSMakeRect(726, 10,130,28), @selector(researchOpenSelected:));
 
   // Wiring via associated objects: store the two table views on the window so action handlers can reach them
   objc_setAssociatedObject(rw, "sessTV", sessTV, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   objc_setAssociatedObject(rw, "itemTV", itemTV, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   objc_setAssociatedObject(rw, "rw", rw, OBJC_ASSOCIATION_RETAIN_NONATOMIC); // keep rw alive
 
-  // Simple data source block — wire both tables with BBResearchManagerDS
   BBResearchManagerDS *ds=[[BBResearchManagerDS alloc] initWithWindow:rw delegate:self];
   sessTV.dataSource=ds; sessTV.delegate=ds;
   itemTV.dataSource=ds; itemTV.delegate=ds;
+  // Double-click any item row → open in new tab; single-click on status col → cycle status
+  itemTV.target=ds;
+  itemTV.doubleAction=@selector(openItemDoubleClick:);
+  itemTV.action=@selector(itemTableClicked:);
   objc_setAssociatedObject(rw, "ds", ds, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
   [rw makeKeyAndOrderFront:nil];
@@ -5104,6 +5151,36 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSURL *u=[NSURL URLWithString:it.urlString]; if(!u) return;
   it.status=BBResearchStatusReading; [[BBResearchStore shared] save]; [itemTV reloadData];
   [self addTabPrivate:NO]; [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)researchURLNotification:(NSNotification *)n {
+  NSString *urlStr=n.userInfo[@"url"]; if (!urlStr.length) return;
+  NSURL *u=[NSURL URLWithString:urlStr]; if (!u) return;
+  [self addTabPrivate:NO];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)researchMarkDone:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSTableView *itemTV=objc_getAssociatedObject(rw,"itemTV");
+  NSInteger srow=sessTV.selectedRow, irow=itemTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (srow<0||srow>=(NSInteger)sessions.count||irow<0) return;
+  BBResearchSession *sess=sessions[srow];
+  if (irow>=(NSInteger)sess.items.count) return;
+  sess.items[irow].status=BBResearchStatusDone;
+  [[BBResearchStore shared] save]; [itemTV reloadData];
+}
+- (void)researchDismissItem:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSTableView *itemTV=objc_getAssociatedObject(rw,"itemTV");
+  NSInteger srow=sessTV.selectedRow, irow=itemTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (srow<0||srow>=(NSInteger)sessions.count||irow<0) return;
+  BBResearchSession *sess=sessions[srow];
+  if (irow>=(NSInteger)sess.items.count) return;
+  sess.items[irow].status=BBResearchStatusDismissed;
+  [[BBResearchStore shared] save]; [itemTV reloadData];
 }
 
 - (void)newTab:(id)s              { [self addTabPrivate:NO]; }
