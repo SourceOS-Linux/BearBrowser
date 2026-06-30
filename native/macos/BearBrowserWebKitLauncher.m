@@ -3436,6 +3436,8 @@ static NSMutableArray *gBBWindowControllers;
   WKWebViewConfiguration *config=[[WKWebViewConfiguration alloc]init];
   if (priv) config.websiteDataStore=[WKWebsiteDataStore nonPersistentDataStore];
   [config.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+  // Enable HTML5 Fullscreen API so YouTube/Netflix "f" works (no public API; WebKit pref).
+  @try { [config.preferences setValue:@YES forKey:@"fullScreenEnabled"]; } @catch(...) {}
   // Allow inline video and picture-in-picture (required for YouTube/Netflix UX parity)
   config.allowsInlinePredictions=NO; // don't interfere with our own omnibox
   config.mediaTypesRequiringUserActionForPlayback=WKAudiovisualMediaTypeNone;
