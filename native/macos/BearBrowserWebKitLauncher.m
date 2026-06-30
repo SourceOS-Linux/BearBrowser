@@ -2857,6 +2857,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
   mi(fileM,@"Save Page As…",@selector(savePage:),@"s",Cmd);
   [fileM addItem:[NSMenuItem separatorItem]];
+  mi(fileM,@"Share…",@selector(sharePage:),@"",0);
   mi(fileM,@"Print…",@selector(printPage:),@"p",Cmd);
   [fileM addItemWithTitle:@"" action:@selector(printPage:) keyEquivalent:@"p"].keyEquivalentModifierMask=Cmd|Shift;
 
@@ -5808,6 +5809,7 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
     return self.webView.URL!=nil;
   }
   if (a==@selector(printPage:))        return self.webView.URL!=nil;
+  if (a==@selector(sharePage:))        return self.webView.URL!=nil;
   if (a==@selector(viewSource:))       return self.webView.URL!=nil;
   if (a==@selector(prevTab:)||a==@selector(nextTab:)) return self.tabs.count>1;
   if (a==@selector(moveTabLeft:))  return self.activeTabIndex>0;
@@ -5950,6 +5952,14 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
     if (rc==NSModalResponseOK&&p.URL)
       [self.webView loadFileURL:p.URL allowingReadAccessToURL:[p.URL URLByDeletingLastPathComponent]];
   }];
+}
+- (void)sharePage:(id)s {
+  NSURL *url=self.webView.URL; if (!url) return;
+  NSString *title=self.webView.title?:url.absoluteString;
+  NSSharingServicePicker *pick=[[NSSharingServicePicker alloc]initWithItems:@[url,title]];
+  // Show picker anchored to the ellipsis (bear panel) button if available, else center of toolbar
+  NSView *anchor=self.securityButton?:self.toolbarBg;
+  [pick showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMinY];
 }
 - (void)savePage:(id)s {
   NSSavePanel *p=[NSSavePanel savePanel];
@@ -6614,6 +6624,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
         add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
         add(@"Add Page to Research Session…",@selector(addCurrentTabToSession:),nil);
         add(@"Save Page As…",@selector(savePage:),nil);
+        add(@"Share Page…",@selector(sharePage:),nil);
         add(@"Print…",@selector(printPage:),nil);
         [menu addItem:[NSMenuItem separatorItem]];
         add(@"View Page Source",@selector(viewSource:),nil);
