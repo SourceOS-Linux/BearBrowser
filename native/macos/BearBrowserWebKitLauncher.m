@@ -320,6 +320,9 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(assign) BOOL       isPlayingAudio;  // page has active audio (tab badge)
 @property(assign) BOOL       genpassOffered;  // password-generator prompt already shown for this page load
 @property(assign) BOOL       translateOffered;// translate prompt already shown for this page load
+@property(copy)   NSString  *groupName;       // tab group label (nil/"" = no group)
+@property(assign) NSInteger  groupColorIdx;   // 0..7 color slot; only relevant when groupName set
+@property(assign) BOOL       collapsedInGroup;// when YES, render as a small group-color chip
 @end
 @implementation BBTab
 - (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
@@ -348,6 +351,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(strong) NSProgressIndicator *loadingSpinner;
 @property(strong) NSTextField *titleLabel;
 @property(strong) NSButton    *closeButton;
+@property(strong) NSColor    *groupColor;
 @property(weak)   id<BBTabItemDelegate> delegate;
 - (void)setTabTitle:(NSString *)title favicon:(NSImage *)favicon loading:(BOOL)loading;
 @end
@@ -436,6 +440,12 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   } else if (self.isHovered) {
     [[NSColor colorWithWhite:0.5 alpha:0.12] setFill];
     [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,1,1) xRadius:7 yRadius:7] fill];
+  }
+  // Tab-group indicator: 3px coloured bar at the bottom edge.
+  if (self.groupColor) {
+    [self.groupColor setFill];
+    NSRect bar=NSMakeRect(2,1,self.bounds.size.width-4,3);
+    [[NSBezierPath bezierPathWithRoundedRect:bar xRadius:1.5 yRadius:1.5] fill];
   }
 }
 - (void)mouseEntered:(NSEvent *)e {
@@ -578,6 +588,14 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
     }
     BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,0,w,clipH) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
+    if (tab.groupName.length) {
+      static NSArray<NSColor *> *_palette=nil; static dispatch_once_t _o; dispatch_once(&_o,^{
+        _palette=@[[NSColor systemBlueColor],[NSColor systemRedColor],[NSColor systemGreenColor],
+                   [NSColor systemOrangeColor],[NSColor systemPurpleColor],[NSColor systemTealColor],
+                   [NSColor systemPinkColor],[NSColor systemYellowColor]];
+      });
+      item.groupColor=_palette[((NSUInteger)tab.groupColorIdx)%_palette.count];
+    }
     if (isPinned) { item.compact=YES; item.closeButton.hidden=YES; } // pinned = icon-only, no close
     // Override favicon: 💤 suspended, 🔇 muted, 🔊 playing audio
     NSImage *fav=tab.favicon;
@@ -3662,6 +3680,11 @@ static NSMutableArray *gBBWindowControllers;
     NSURL *nsurl=[NSURL URLWithString:u]; if(!nsurl) continue;
     [self addTabPrivate:NO];
     BBTab *tab=self.activeTab; tab.pinned=pinned; tab.muted=muted;
+    if ([entry isKindOfClass:[NSDictionary class]]) {
+      NSString *g=entry[@"group"]; if ([g isKindOfClass:[NSString class]] && g.length) {
+        tab.groupName=g; tab.groupColorIdx=[entry[@"groupColor"] integerValue];
+      }
+    }
     // Eagerly restore title and favicon so pinned tabs look right before the page loads
     if ([entry isKindOfClass:[NSDictionary class]]) {
       NSString *savedTitle=entry[@"title"]; if (savedTitle.length) tab.title=savedTitle;
@@ -5179,7 +5202,8 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     NSString *u=tab.suspended?tab.suspendedURL:tab.webView.URL.absoluteString;
     if (!u.length || [self isInternalURL:u]) continue;
     NSMutableDictionary *d=[NSMutableDictionary dictionaryWithDictionary:
-      @{@"url":u,@"pinned":@(tab.pinned),@"muted":@(tab.muted),@"title":tab.title?:@""}];
+      @{@"url":u,@"pinned":@(tab.pinned),@"muted":@(tab.muted),@"title":tab.title?:@"",
+        @"group":tab.groupName?:@"",@"groupColor":@(tab.groupColorIdx)}];
     if (tab.favicon) {
       NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[tab.favicon TIFFRepresentation]];
       NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
@@ -5292,6 +5316,52 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   BBTab *tab=self.activeTab; if (!tab) return;
   tab.pinned=!tab.pinned; [self reloadTabBar];
 }
+// ── Tab groups ───────────────────────────────────────────────────────────────
+- (NSInteger)nextGroupColorIdx {
+  // Match an existing group's color when possible; otherwise pick the lowest unused slot.
+  NSMutableSet<NSNumber *> *used=[NSMutableSet set];
+  for (BBTab *t in self.tabs) if (t.groupName.length) [used addObject:@(t.groupColorIdx)];
+  for (NSInteger k=0;k<8;k++) if (![used containsObject:@(k)]) return k;
+  return 0;
+}
+- (void)ctxAddTabToGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  NSString *g=mi.representedObject; if (!g.length) return;
+  NSInteger colorIdx=0; BOOL found=NO;
+  for (BBTab *t in self.tabs) if ([t.groupName isEqualToString:g]) { colorIdx=t.groupColorIdx; found=YES; break; }
+  if (!found) colorIdx=[self nextGroupColorIdx];
+  self.tabs[i].groupName=g; self.tabs[i].groupColorIdx=colorIdx;
+  [self reloadTabBar];
+}
+- (void)ctxAddTabToNewGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"New Tab Group";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.placeholderString=@"Group name"; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Create"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *g=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!g.length) return;
+    self.tabs[i].groupName=g; self.tabs[i].groupColorIdx=[self nextGroupColorIdx];
+    [self reloadTabBar];
+  }];
+}
+- (void)ctxRemoveTabFromGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  self.tabs[i].groupName=nil; self.tabs[i].groupColorIdx=0; [self reloadTabBar];
+}
+- (void)ctxCloseGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  NSString *g=self.tabs[i].groupName; if (!g.length) return;
+  // Walk backwards so removals don't shift the indices in front of us.
+  for (NSInteger k=(NSInteger)self.tabs.count-1;k>=0;k--) {
+    if ([self.tabs[k].groupName isEqualToString:g] && !self.tabs[k].pinned) [self teardownTabAtIndex:k];
+  }
+  if (!self.tabs.count) { [self.window performClose:nil]; return; }
+  NSInteger newActive=MIN(self.activeTabIndex,(NSInteger)self.tabs.count-1);
+  self.activeTabIndex=newActive; [self activateTab:newActive]; [self reloadTabBar];
+}
 
 // Drag-to-reorder: move the tab and keep the same tab active.
 - (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to {
@@ -5387,6 +5457,29 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   add(tab.pinned?@"Unpin Tab":@"Pin Tab", @selector(ctxTogglePinTab:), YES);
   add(tab.muted?@"Unmute Tab":@"Mute Tab", @selector(ctxToggleMuteTab:), YES);
   add(tab.suspended?@"Reload (Wake) Tab":@"Suspend Tab", @selector(ctxToggleSuspendTab:), YES);
+  [m addItem:[NSMenuItem separatorItem]];
+  // Tab group submenu — list existing groups + "Add to New Group…" + (if grouped) Remove
+  NSMenuItem *grpRoot=[m addItemWithTitle:tab.groupName.length?[NSString stringWithFormat:@"Group: %@",tab.groupName]:@"Group"
+                                   action:nil keyEquivalent:@""];
+  NSMenu *grpM=[[NSMenu alloc]initWithTitle:@""];
+  NSMutableOrderedSet *existing=[NSMutableOrderedSet orderedSet];
+  for (BBTab *t in self.tabs) if (t.groupName.length) [existing addObject:t.groupName];
+  for (NSString *g in existing) {
+    NSMenuItem *gi=[grpM addItemWithTitle:g action:@selector(ctxAddTabToGroup:) keyEquivalent:@""];
+    gi.target=self; gi.tag=i; gi.representedObject=g;
+    if ([tab.groupName isEqualToString:g]) gi.state=NSControlStateValueOn;
+  }
+  if (existing.count) [grpM addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *newG=[grpM addItemWithTitle:@"New Group…" action:@selector(ctxAddTabToNewGroup:) keyEquivalent:@""];
+  newG.target=self; newG.tag=i;
+  if (tab.groupName.length) {
+    NSMenuItem *rm=[grpM addItemWithTitle:@"Remove from Group" action:@selector(ctxRemoveTabFromGroup:) keyEquivalent:@""];
+    rm.target=self; rm.tag=i;
+    NSMenuItem *closeG=[grpM addItemWithTitle:[NSString stringWithFormat:@"Close “%@” Group",tab.groupName]
+                                       action:@selector(ctxCloseGroup:) keyEquivalent:@""];
+    closeG.target=self; closeG.tag=i;
+  }
+  grpRoot.submenu=grpM;
   [m addItem:[NSMenuItem separatorItem]];
   add(@"Move Tab Left", @selector(ctxMoveTabLeft:), i>0);
   add(@"Move Tab Right",@selector(ctxMoveTabRight:),i<(NSInteger)self.tabs.count-1);
@@ -5572,7 +5665,8 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
     if (!u.length || [self isInternalURL:u]) continue;
     NSMutableDictionary *d=[NSMutableDictionary dictionaryWithDictionary:
-      @{@"url":u,@"pinned":@(t.pinned),@"muted":@(t.muted),@"title":t.title?:@""}];
+      @{@"url":u,@"pinned":@(t.pinned),@"muted":@(t.muted),@"title":t.title?:@"",
+        @"group":t.groupName?:@"",@"groupColor":@(t.groupColorIdx)}];
     if (t.favicon) {
       NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[t.favicon TIFFRepresentation]];
       NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
