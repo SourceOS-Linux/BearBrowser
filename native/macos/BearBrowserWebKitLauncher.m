@@ -2967,8 +2967,6 @@ static NSMutableArray *gBBWindowControllers;
   rcI.submenu=rcM;
   [histM addItem:[NSMenuItem separatorItem]];
   mi(histM,@"Show Full History",@selector(showHistory:),@"y",Cmd);
-  // Cmd+Shift+H = Chrome alias for history
-  [histM addItemWithTitle:@"" action:@selector(showHistory:) keyEquivalent:@"h"].keyEquivalentModifierMask=Cmd|Shift;
   [histM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧⌫ is already bound on the app menu's Clear Browsing Data.
   [histM addItemWithTitle:@"Clear Browsing Data…" action:@selector(clearHistory:) keyEquivalent:@""];
@@ -2999,6 +2997,8 @@ static NSMutableArray *gBBWindowControllers;
   [tabM addItemWithTitle:@"Duplicate Tab" action:@selector(duplicateCurrentTab:) keyEquivalent:@""];
   [tabM addItemWithTitle:@"Mute Tab" action:@selector(muteTab:) keyEquivalent:@""];
   [tabM addItemWithTitle:@"Pin Tab" action:@selector(pinCurrentTab:) keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Mute All Tabs"   action:@selector(muteAllTabs:)   keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Unmute All Tabs" action:@selector(unmuteAllTabs:) keyEquivalent:@""];
   [tabM addItem:[NSMenuItem separatorItem]];
   mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
   [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
@@ -5062,6 +5062,17 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     completionHandler:nil];
   [self reloadTabBar];
 }
+- (void)setAllTabsMuted:(BOOL)muted {
+  NSString *js=[NSString stringWithFormat:
+    @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",muted?@"true":@"false"];
+  for (BBTab *tab in self.tabs) {
+    tab.muted=muted;
+    [tab.webView evaluateJavaScript:js completionHandler:nil];
+  }
+  [self reloadTabBar];
+}
+- (void)muteAllTabs:(id)s   { [self setAllTabsMuted:YES]; }
+- (void)unmuteAllTabs:(id)s { [self setAllTabsMuted:NO];  }
 - (void)contextSaveImage:(id)sender {
   NSMenuItem *mi=(NSMenuItem *)sender; NSString *urlStr=mi.representedObject;
   if (!urlStr.length) return;
@@ -6923,6 +6934,10 @@ static const NSInteger kDialogAbuseThreshold = 3;
   tab.isLoading=NO;
   tab.title=wv.title.length?wv.title:@"New Tab";
   [self fetchFaviconForTab:tab];
+  // Re-apply mute across page navigations so a muted tab stays muted on a fresh URL.
+  if (tab.muted) [wv evaluateJavaScript:
+    @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=true;})"
+    completionHandler:nil];
   NSString *url=wv.URL.absoluteString?:@"";
   if (wv==self.webView) {
     self.progressBar.hidden=YES;
