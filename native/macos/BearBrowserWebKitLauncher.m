@@ -5116,16 +5116,50 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 - (void)reloadBookmarksBar {
   for (NSView *v in self.bookmarksBar.subviews.copy) [v removeFromSuperview];
   CGFloat x=8;
-  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+  CGFloat barW=self.bookmarksBar.bounds.size.width;
+  CGFloat overflowReserve=32; // leave room for the chevron when there's overflow
+  NSArray<BBBookmark *> *items=[BBBookmarksStore shared].items;
+  NSInteger shown=0;
+  for (BBBookmark *b in items) {
     NSButton *btn=[[NSButton alloc]initWithFrame:NSMakeRect(x,3,0,24)];
     btn.title=b.title.length?b.title:b.urlString;
     btn.font=[NSFont systemFontOfSize:11]; btn.bezelStyle=NSBezelStyleRoundRect;
     btn.target=self; btn.action=@selector(bookmarkButtonClicked:);
     [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+8,24);
-    btn.toolTip=b.urlString; [self.bookmarksBar addSubview:btn];
-    x+=btn.frame.size.width+4;
-    if(x>self.bookmarksBar.bounds.size.width-8) break;
+    btn.toolTip=b.urlString;
+    if (x+btn.frame.size.width > barW-overflowReserve) break;
+    [self.bookmarksBar addSubview:btn];
+    x+=btn.frame.size.width+4; shown++;
   }
+  if (shown<(NSInteger)items.count) {
+    NSButton *more=[[NSButton alloc]initWithFrame:NSMakeRect(barW-28,3,22,24)];
+    more.autoresizingMask=NSViewMinXMargin;
+    NSImage *ch=[NSImage imageWithSystemSymbolName:@"chevron.right.2" accessibilityDescription:@"More bookmarks"];
+    [ch setTemplate:YES]; more.image=ch; more.imagePosition=NSImageOnly;
+    more.bezelStyle=NSBezelStyleToolbar; more.bordered=NO;
+    more.toolTip=@"More bookmarks";
+    more.target=self; more.action=@selector(showBookmarksOverflow:);
+    more.tag=shown;
+    [self.bookmarksBar addSubview:more];
+  }
+}
+- (void)showBookmarksOverflow:(NSButton *)btn {
+  NSArray<BBBookmark *> *items=[BBBookmarksStore shared].items;
+  NSInteger startIdx=btn.tag;
+  if (startIdx<0||startIdx>=(NSInteger)items.count) return;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  for (NSInteger k=startIdx;k<(NSInteger)items.count;k++) {
+    BBBookmark *b=items[k];
+    NSMenuItem *mi=[m addItemWithTitle:b.title.length?b.title:b.urlString
+                                action:@selector(bookmarkOverflowSelected:) keyEquivalent:@""];
+    mi.target=self; mi.representedObject=b.urlString; mi.toolTip=b.urlString;
+  }
+  [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+}
+- (void)bookmarkOverflowSelected:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  NSURL *url=[NSURL URLWithString:u]; if (!url) return;
+  [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 - (void)bookmarkButtonClicked:(NSButton *)btn {
   NSString *url=btn.toolTip; if(!url) return;
