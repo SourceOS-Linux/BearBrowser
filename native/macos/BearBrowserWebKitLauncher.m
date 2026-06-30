@@ -3154,16 +3154,24 @@ static NSMutableArray *gBBWindowControllers;
   self.dnsBlockCache.countLimit=2000;
 
   self.tabs=[NSMutableArray array]; self.activeTabIndex=0;
-  // Session restore — reopen tabs from last session
-  NSArray<NSString*> *savedURLs=[[NSUserDefaults standardUserDefaults] arrayForKey:@"BBSessionURLs"];
+  // Session restore — reopen tabs from last session (supports old string array + new dict array)
+  NSArray *savedTabs=[[NSUserDefaults standardUserDefaults] arrayForKey:@"BBSessionURLs"];
   BOOL restored=NO;
-  if (savedURLs.count) {
-    for (NSString *u in savedURLs) {
-      if (!u.length) continue;
-      [self addTabPrivate:NO];
-      [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:u]]];
-      restored=YES;
+  for (id entry in savedTabs) {
+    NSString *u=nil; BOOL pinned=NO, muted=NO;
+    if ([entry isKindOfClass:[NSString class]]) {
+      u=entry; // legacy format
+    } else if ([entry isKindOfClass:[NSDictionary class]]) {
+      u=entry[@"url"]; pinned=[entry[@"pinned"] boolValue]; muted=[entry[@"muted"] boolValue];
     }
+    if (!u.length) continue;
+    [self addTabPrivate:NO];
+    BBTab *tab=self.activeTab; tab.pinned=pinned; tab.muted=muted;
+    [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:u]]];
+    if (muted) [self.webView evaluateJavaScript:
+      @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=true;})"
+      completionHandler:nil];
+    restored=YES;
   }
   if (!restored) [self addTabPrivate:NO];
   // Restore the bookmarks-bar preference (after the first tab exists so layout is valid).
@@ -4807,14 +4815,15 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)windowWillClose:(NSNotification *)n {
   [[NSUserDefaults standardUserDefaults] setObject:NSStringFromRect(self.window.frame) forKey:@"BBWindowFrame"];
-  // Persist non-private tab URLs for session restore
-  NSMutableArray<NSString*> *urls=[NSMutableArray array];
+  // Persist non-private tab metadata (url + pinned + muted) for session restore
+  NSMutableArray *tabDicts=[NSMutableArray array];
   for (BBTab *t in self.tabs) {
     if (t.isPrivate) continue;
-    NSString *u=t.webView.URL.absoluteString;
-    if (u.length && ![self isInternalURL:u]) [urls addObject:u];
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!u.length || [self isInternalURL:u]) continue;
+    [tabDicts addObject:@{@"url":u,@"pinned":@(t.pinned),@"muted":@(t.muted)}];
   }
-  [[NSUserDefaults standardUserDefaults] setObject:urls forKey:@"BBSessionURLs"];
+  [[NSUserDefaults standardUserDefaults] setObject:tabDicts forKey:@"BBSessionURLs"];
   // Tear down local event monitors so they stop firing against torn-down state.
   if (self.addrDismissMonitor) { [NSEvent removeMonitor:self.addrDismissMonitor]; self.addrDismissMonitor=nil; }
   if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
@@ -5288,7 +5297,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [w applicationDidFinishLaunching:dummy];
 }
 
-// ── Camera / Mic permission prompt ───────────────────────────────────────────
+// ── Camera / Mic permission prompt (with per-host persistence) ───────────────
 - (void)webView:(WKWebView *)wv
     requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     initiatedByFrame:(WKFrameInfo *)frame
@@ -5296,13 +5305,26 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     decisionHandler:(void (^)(WKPermissionDecision))decisionHandler {
   NSString *kind = (type==WKMediaCaptureTypeMicrophone)?@"microphone":
                    (type==WKMediaCaptureTypeCamera)?@"camera":@"camera & microphone";
+  // Check persisted decision for this host+kind
+  NSString *prefKey=[NSString stringWithFormat:@"BBMediaPerm_%@_%@",kind,origin.host];
+  NSString *saved=[[NSUserDefaults standardUserDefaults] stringForKey:prefKey];
+  if ([saved isEqualToString:@"allow"]) { decisionHandler(WKPermissionDecisionGrant); return; }
+  if ([saved isEqualToString:@"deny"])  { decisionHandler(WKPermissionDecisionDeny);  return; }
+  // First-time prompt
   NSAlert *a=[[NSAlert alloc]init];
   a.messageText=[NSString stringWithFormat:@"\"%@\" wants to use your %@", origin.host, kind];
-  a.informativeText=@"BearBrowser will ask once per site. You can revoke this in Preferences.";
+  a.informativeText=@"";
   [a addButtonWithTitle:@"Allow"]; [a addButtonWithTitle:@"Deny"];
+  // "Remember this decision" checkbox
+  NSButton *remember=[[NSButton alloc]initWithFrame:NSMakeRect(0,0,260,18)];
+  remember.buttonType=NSButtonTypeSwitch; remember.title=@"Remember for this site";
+  remember.state=NSControlStateValueOn; a.accessoryView=remember;
   a.alertStyle=NSAlertStyleWarning;
   [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse r){
-    decisionHandler(r==NSAlertFirstButtonReturn ? WKPermissionDecisionGrant : WKPermissionDecisionDeny);
+    BOOL granted=(r==NSAlertFirstButtonReturn);
+    if (remember.state==NSControlStateValueOn)
+      [[NSUserDefaults standardUserDefaults] setObject:granted?@"allow":@"deny" forKey:prefKey];
+    decisionHandler(granted ? WKPermissionDecisionGrant : WKPermissionDecisionDeny);
   }];
 }
 
