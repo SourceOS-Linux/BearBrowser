@@ -4676,19 +4676,26 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [self reloadTabBar];
 }
 
-// Right-click tab menu (Chrome's set).
+// Right-click tab menu (Chrome's set + BearBrowser extensions).
 - (NSMenu *)tabItemContextMenu:(NSInteger)i {
+  if (![self validTabIndex:i]) return nil;
+  BBTab *tab=self.tabs[i];
   NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
   void(^add)(NSString*,SEL,BOOL)=^(NSString*title,SEL sel,BOOL enabled){
     NSMenuItem *it=[m addItemWithTitle:title action:sel keyEquivalent:@""];
     it.target=self; it.tag=i; it.enabled=enabled;
   };
+  add(tab.pinned?@"Unpin Tab":@"Pin Tab", @selector(ctxTogglePinTab:), YES);
+  add(tab.muted?@"Unmute Tab":@"Mute Tab", @selector(ctxToggleMuteTab:), YES);
+  add(tab.suspended?@"Reload (Wake) Tab":@"Suspend Tab", @selector(ctxToggleSuspendTab:), YES);
+  [m addItem:[NSMenuItem separatorItem]];
   add(@"New Tab to the Right",@selector(ctxNewTabRight:),YES);
   add(@"Duplicate Tab",@selector(ctxDuplicateTab:),YES);
+  add(@"Add to Research Session…",@selector(addCurrentTabToSession:),YES);
   [m addItem:[NSMenuItem separatorItem]];
   add(@"Reload Tab",@selector(ctxReloadTab:),YES);
   [m addItem:[NSMenuItem separatorItem]];
-  add(@"Close Tab",@selector(ctxCloseTab:),YES);
+  add(@"Close Tab",@selector(ctxCloseTab:),!tab.pinned);
   add(@"Close Other Tabs",@selector(ctxCloseOthers:),self.tabs.count>1);
   add(@"Close Tabs to the Right",@selector(ctxCloseRight:),i<(NSInteger)self.tabs.count-1);
   [m addItem:[NSMenuItem separatorItem]];
