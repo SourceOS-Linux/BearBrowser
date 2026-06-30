@@ -3557,6 +3557,10 @@ static NSMutableArray *gBBWindowControllers;
   mi(viewM,@"Always Show Bookmarks Bar",@selector(toggleBookmarksBar:),@"b",Cmd|Shift);
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Reload This Page",@selector(reloadOrStop:),@"r",Cmd);
+  // F5 alias for Reload (Chrome/Win parity)
+  { unichar f5=NSF5FunctionKey;
+    [viewM addItemWithTitle:@"" action:@selector(reloadOrStop:)
+             keyEquivalent:[NSString stringWithCharacters:&f5 length:1]].keyEquivalentModifierMask=0; }
   mi(viewM,@"Force Reload This Page",@selector(hardReload:),@"r",Cmd|Shift);
   // Cmd+. = Stop loading (Chrome alias; works while a page is loading).
   [viewM addItemWithTitle:@"Stop Loading" action:@selector(stopLoading:) keyEquivalent:@"."].keyEquivalentModifierMask=Cmd;
@@ -3568,6 +3572,10 @@ static NSMutableArray *gBBWindowControllers;
   mi(viewM,@"Zoom Out",@selector(zoomOut:),@"-",Cmd);
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Enter Full Screen",@selector(toggleFullScreen:),@"f",Cmd|Ctrl);
+  // F11 alias for Full Screen (Chrome/Win parity)
+  { unichar f11=NSF11FunctionKey;
+    [viewM addItemWithTitle:@"" action:@selector(toggleFullScreen:)
+             keyEquivalent:[NSString stringWithCharacters:&f11 length:1]].keyEquivalentModifierMask=0; }
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Downloads",@selector(toggleDownloadPanel:),@"j",Cmd|Shift);
   mi(viewM,@"Show Reader",@selector(toggleReader:),@"r",Cmd|Ctrl);
@@ -3578,6 +3586,10 @@ static NSMutableArray *gBBWindowControllers;
   NSMenu *devM=[[NSMenu alloc]initWithTitle:@"Developer"]; devI.submenu=devM;
   mi(devM,@"View Source",@selector(viewSource:),@"u",Cmd|Opt);
   mi(devM,@"Developer Tools",@selector(openDevTools:),@"i",Cmd|Opt);
+  // F12 alias for Developer Tools (Chrome/Win parity)
+  { unichar f12=NSF12FunctionKey;
+    [devM addItemWithTitle:@"" action:@selector(openDevTools:)
+            keyEquivalent:[NSString stringWithCharacters:&f12 length:1]].keyEquivalentModifierMask=0; }
   mi(devM,@"Network Monitor",@selector(openNetworkMonitor:),@"m",Cmd|Shift);
 
   // ── History ──
@@ -6201,6 +6213,21 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     btn.target=self; btn.action=@selector(bookmarkButtonClicked:);
     [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+8,24);
     btn.toolTip=b.urlString;
+    // Build the right-click menu eagerly so NSButton's built-in
+    // contextual-menu trigger (right-click / control-click) picks it up.
+    NSMenu *menu=[[NSMenu alloc]initWithTitle:@""];
+    NSMenuItem *(^addItem)(NSString*,SEL)=^NSMenuItem*(NSString*t,SEL a){
+      NSMenuItem *it=[menu addItemWithTitle:t action:a keyEquivalent:@""];
+      it.target=self; it.representedObject=b.urlString; return it;
+    };
+    addItem(@"Open in New Tab",@selector(bookmarkOpenInNewTab:));
+    addItem(@"Open in New Window",@selector(bookmarkOpenInNewWindow:));
+    [menu addItem:[NSMenuItem separatorItem]];
+    addItem(@"Copy Link",@selector(bookmarkCopyLink:));
+    addItem(@"Move to Folder…",@selector(bookmarkMoveToFolder:));
+    [menu addItem:[NSMenuItem separatorItem]];
+    addItem(@"Delete",@selector(bookmarkDelete:));
+    btn.menu=menu;
     if (x+btn.frame.size.width > barW-overflowReserve) break;
     [self.bookmarksBar addSubview:btn];
     x+=btn.frame.size.width+4; shownRoot++;
@@ -6268,8 +6295,68 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)bookmarkButtonClicked:(NSButton *)btn {
   NSString *url=btn.toolTip; if(!url) return;
+  // Right-modifier-click → context menu (Chrome parity).
+  NSEvent *cur=NSApp.currentEvent;
+  if (cur && (cur.modifierFlags & NSEventModifierFlagControl)) { [self showBookmarkBarItemMenu:btn]; return; }
   NSURL *u=[NSURL URLWithString:url]; if(!u) return;
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)showBookmarkBarItemMenu:(NSButton *)btn {
+  NSString *url=btn.toolTip; if (!url) return;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *o=[m addItemWithTitle:@"Open in New Tab"   action:@selector(bookmarkOpenInNewTab:)    keyEquivalent:@""];
+  o.target=self; o.representedObject=url;
+  NSMenuItem *w=[m addItemWithTitle:@"Open in New Window" action:@selector(bookmarkOpenInNewWindow:) keyEquivalent:@""];
+  w.target=self; w.representedObject=url;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *c=[m addItemWithTitle:@"Copy Link" action:@selector(bookmarkCopyLink:) keyEquivalent:@""];
+  c.target=self; c.representedObject=url;
+  NSMenuItem *mv=[m addItemWithTitle:@"Move to Folder…" action:@selector(bookmarkMoveToFolder:) keyEquivalent:@""];
+  mv.target=self; mv.representedObject=url;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *rm=[m addItemWithTitle:@"Delete" action:@selector(bookmarkDelete:) keyEquivalent:@""];
+  rm.target=self; rm.representedObject=url;
+  [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+}
+- (void)bookmarkOpenInNewTab:(NSMenuItem *)mi {
+  NSURL *u=[NSURL URLWithString:mi.representedObject]; if (!u) return;
+  NSInteger prev=self.activeTabIndex;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  if (prev<self.activeTabIndex) [self tabItemDidSelect:prev]; // background like Chrome
+}
+- (void)bookmarkOpenInNewWindow:(NSMenuItem *)mi {
+  NSURL *u=[NSURL URLWithString:mi.representedObject]; if (!u) return;
+  BBDelegate *w=[[BBDelegate alloc]init];
+  NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+  [w applicationDidFinishLaunching:dummy];
+  [w.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)bookmarkCopyLink:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:u forType:NSPasteboardTypeString];
+}
+- (void)bookmarkDelete:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  [[BBBookmarksStore shared] removeURL:u];
+  [self reloadBookmarksBar]; [self updateStarButton];
+}
+- (void)bookmarkMoveToFolder:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Move to Folder";
+  a.informativeText=@"Leave blank for the bookmarks-bar root.";
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  cb.usesDataSource=NO; cb.completes=YES;
+  for (BBBookmark *b in [BBBookmarksStore shared].items) if ([b.urlString isEqualToString:u]) { cb.stringValue=b.folder?:@""; break; }
+  [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  a.accessoryView=cb;
+  [a addButtonWithTitle:@"Move"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSString *target=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  [[BBBookmarksStore shared] setFolder:target forURL:u];
+  [self reloadBookmarksBar];
 }
 
 // ── History panel ─────────────────────────────────────────────────────────────
