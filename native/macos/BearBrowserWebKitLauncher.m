@@ -977,6 +977,84 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 }
 @end
 
+// Datasource/delegate for the Settings → Site Data manager. Asynchronously
+// fetches all WKWebsiteDataRecords, groups by display name (domain), supports
+// case-insensitive filter, and deletes per-record on demand.
+@interface BBSiteDataDS : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSSearchFieldDelegate>
+@property(strong) NSMutableArray<WKWebsiteDataRecord *> *all, *shown;
+@property(weak) NSTableView *tv;
+@property(weak) NSSearchField *sf;
+- (instancetype)initWithTableView:(NSTableView *)tv searchField:(NSSearchField *)sf;
+- (void)reload;
+- (void)removeSelected;
+- (void)removeAll;
+@end
+@implementation BBSiteDataDS
+- (instancetype)initWithTableView:(NSTableView *)tv searchField:(NSSearchField *)sf {
+  self=[super init]; _tv=tv; _sf=sf; _all=[NSMutableArray array]; _shown=[NSMutableArray array]; return self;
+}
+- (void)reload {
+  NSSet *all=[WKWebsiteDataStore allWebsiteDataTypes];
+  [[WKWebsiteDataStore defaultDataStore] fetchDataRecordsOfTypes:all completionHandler:^(NSArray<WKWebsiteDataRecord *> *recs){
+    NSArray *sorted=[recs sortedArrayUsingComparator:^NSComparisonResult(WKWebsiteDataRecord *a,WKWebsiteDataRecord *b){
+      return [a.displayName caseInsensitiveCompare:b.displayName];
+    }];
+    self.all=[sorted mutableCopy];
+    [self applyFilter];
+  }];
+}
+- (void)applyFilter {
+  NSString *q=self.sf.stringValue.lowercaseString?:@"";
+  if (!q.length) { self.shown=[self.all mutableCopy]; }
+  else {
+    NSMutableArray *out=[NSMutableArray array];
+    for (WKWebsiteDataRecord *r in self.all) if ([r.displayName.lowercaseString containsString:q]) [out addObject:r];
+    self.shown=out;
+  }
+  [self.tv reloadData];
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return self.shown.count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  if (row<0||row>=(NSInteger)self.shown.count) return nil;
+  WKWebsiteDataRecord *r=self.shown[row];
+  if ([col.identifier isEqualToString:@"domain"]) {
+    NSTextField *f=[NSTextField labelWithString:r.displayName?:@""];
+    f.font=[NSFont systemFontOfSize:12]; return f;
+  }
+  // Summarise the type set (Cookies/Local Storage/IndexedDB/Cache).
+  NSMutableArray *parts=[NSMutableArray array];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeCookies])           [parts addObject:@"cookies"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeLocalStorage])      [parts addObject:@"local"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeIndexedDBDatabases])[parts addObject:@"indexedDB"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeDiskCache])         [parts addObject:@"cache"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeServiceWorkerRegistrations]) [parts addObject:@"sw"];
+  if (!parts.count) [parts addObject:@(r.dataTypes.count).stringValue];
+  NSTextField *f=[NSTextField labelWithString:[parts componentsJoinedByString:@", "]];
+  f.font=[NSFont systemFontOfSize:11]; f.textColor=[NSColor secondaryLabelColor];
+  return f;
+}
+- (void)searchFieldDidEndSearching:(NSSearchField *)sender { [self applyFilter]; }
+- (void)controlTextDidChange:(NSNotification *)n { if (n.object==self.sf) [self applyFilter]; }
+- (void)removeSelected {
+  NSInteger row=self.tv.selectedRow; if (row<0||row>=(NSInteger)self.shown.count) return;
+  WKWebsiteDataRecord *r=self.shown[row];
+  [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:r.dataTypes forDataRecords:@[r] completionHandler:^{
+    dispatch_async(dispatch_get_main_queue(),^{ [self reload]; });
+  }];
+}
+- (void)removeAll {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Remove all site data?";
+  a.informativeText=@"Cookies, local storage, IndexedDB, cache, and service workers for every site will be erased.";
+  [a addButtonWithTitle:@"Remove All"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSSet *all=[WKWebsiteDataStore allWebsiteDataTypes];
+  [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:all modifiedSince:[NSDate distantPast] completionHandler:^{
+    dispatch_async(dispatch_get_main_queue(),^{ [self reload]; });
+  }];
+}
+@end
+
 // Datasource/delegate for the Reading List sheet (defined here so it can see
 // BBReadingItem/BBReadingList declared just above).
 @interface BBReadingListDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
@@ -6391,6 +6469,38 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSTextField *lbl=(NSTextField *)objc_getAssociatedObject(self,"BBDLPathLabel");
   if (lbl) { NSString *shown=[path stringByAbbreviatingWithTildeInPath]; lbl.stringValue=shown; lbl.toolTip=shown; }
 }
+- (void)showSiteDataManager:(id)s {
+  CGFloat W=620,Hh=460;
+  NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  sw.releasedWhenClosed=NO; sw.title=@"Site Data & Cookies"; [sw center];
+  NSView *cv=sw.contentView;
+  NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,Hh-44,W-24,28)];
+  sf.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
+  sf.placeholderString=@"Filter by domain"; [cv addSubview:sf];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-100)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=24;
+  NSTableColumn *cd=[[NSTableColumn alloc]initWithIdentifier:@"domain"]; cd.title=@"Domain"; cd.width=380;
+  NSTableColumn *ct=[[NSTableColumn alloc]initWithIdentifier:@"types"];  ct.title=@"Stored data"; ct.width=216;
+  [tv addTableColumn:cd]; [tv addTableColumn:ct];
+  sv.documentView=tv; [cv addSubview:sv];
+  BBSiteDataDS *ds=[[BBSiteDataDS alloc]initWithTableView:tv searchField:sf];
+  tv.dataSource=ds; tv.delegate=ds; sf.delegate=ds;
+  objc_setAssociatedObject(sw,@"sds",ds,OBJC_ASSOCIATION_RETAIN);
+  [ds reload];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,160,30)];
+  rm.title=@"Remove Selected"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *rmAll=[[NSButton alloc]initWithFrame:NSMakeRect(180,10,140,30)];
+  rmAll.title=@"Remove All…"; rmAll.bezelStyle=NSBezelStyleRounded; rmAll.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rmAll.target=ds; rmAll.action=@selector(removeAll); [cv addSubview:rmAll];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=sw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:sw completionHandler:nil];
+}
 - (void)showProfileEditor:(id)s {
   BBProfile *p=[[BBProfileStore shared] profile];
   CGFloat W=460,Hh=440;
@@ -6476,7 +6586,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=500;
+  CGFloat W=470,Hh=540;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -6539,6 +6649,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *prBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
   prBtn.title=@"Edit Address Profile…"; prBtn.bezelStyle=NSBezelStyleRounded;
   prBtn.target=self; prBtn.action=@selector(showProfileEditor:); [cv addSubview:prBtn];
+  y-=38;
+  label(@"Site data:",y+4);
+  NSButton *sdBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  sdBtn.title=@"Manage Site Data & Cookies…"; sdBtn.bezelStyle=NSBezelStyleRounded;
+  sdBtn.target=self; sdBtn.action=@selector(showSiteDataManager:); [cv addSubview:sdBtn];
   NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
   save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
   save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
