@@ -334,6 +334,8 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 - (NSMenu *)tabItemContextMenu:(NSInteger)index;      // right-click tab menu
 - (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to; // drag-to-reorder
 - (void)tabBarDidDropURL:(NSString *)urlString;            // URL dragged onto tab strip
+- (void)tabItemDidHoverEnter:(NSInteger)index fromView:(NSView *)view;
+- (void)tabItemDidHoverExit:(NSInteger)index;
 @end
 
 @interface BBTabItemView : NSView
@@ -440,10 +442,14 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   self.isHovered=YES;  [self setNeedsDisplay:YES];
   // In compact mode reveal the close button (over the favicon) on hover.
   if (self.compact) { self.closeButton.hidden=NO; self.faviconView.hidden=YES; }
+  if ([self.delegate respondsToSelector:@selector(tabItemDidHoverEnter:fromView:)])
+    [self.delegate tabItemDidHoverEnter:self.index fromView:self];
 }
 - (void)mouseExited:(NSEvent *)e  {
   self.isHovered=NO;   [self setNeedsDisplay:YES];
   if (self.compact) { self.closeButton.hidden=YES; self.faviconView.hidden=NO; }
+  if ([self.delegate respondsToSelector:@selector(tabItemDidHoverExit:)])
+    [self.delegate tabItemDidHoverExit:self.index];
 }
 - (void)mouseDown:(NSEvent *)e {
   // Run a tracking loop on the live item FIRST (selecting up front would reload the
@@ -594,6 +600,14 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 }
 - (void)tabItemDidSelect:(NSInteger)i { [self.outerDelegate tabItemDidSelect:i]; }
 - (void)tabItemDidClose:(NSInteger)i  { [self.outerDelegate tabItemDidClose:i]; }
+- (void)tabItemDidHoverEnter:(NSInteger)i fromView:(NSView *)v {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemDidHoverEnter:fromView:)])
+    [self.outerDelegate tabItemDidHoverEnter:i fromView:v];
+}
+- (void)tabItemDidHoverExit:(NSInteger)i {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemDidHoverExit:)])
+    [self.outerDelegate tabItemDidHoverExit:i];
+}
 - (void)tabItemDidMiddleClick:(NSInteger)i {
   if ([self.outerDelegate respondsToSelector:@selector(tabItemDidMiddleClick:)]) [self.outerDelegate tabItemDidMiddleClick:i];
 }
@@ -3234,6 +3248,8 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(assign) BOOL    suppressInlineCompletion;
 @property(strong) NSTimer *suspendTimer;         // periodic tab suspension sweep
 @property(strong) NSTimer *sessionAutosaveTimer; // crash-safe periodic session flush
+@property(strong) NSTimer *tabHoverTimer;        // delayed thumbnail preview
+@property(strong) NSPanel *tabHoverPanel;        // borderless preview popover
 @end
 
 // Retains a controller for every open browser window. Both NSApplication.delegate
@@ -5291,6 +5307,61 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   self.activeTabIndex=act;
   [self reloadTabBar];
 }
+// ── Tab hover thumbnails ──────────────────────────────────────────────────────
+- (void)tabItemDidHoverEnter:(NSInteger)i fromView:(NSView *)v {
+  [self.tabHoverTimer invalidate];
+  if (i<0||i>=(NSInteger)self.tabs.count||!v) return;
+  if (i==self.activeTabIndex) return; // active tab already on screen
+  NSValue *vp=[NSValue valueWithPointer:(__bridge void *)v];
+  self.tabHoverTimer=[NSTimer scheduledTimerWithTimeInterval:0.45
+    target:self selector:@selector(showHoverThumbnail:) userInfo:@{@"idx":@(i),@"view":vp} repeats:NO];
+}
+- (void)tabItemDidHoverExit:(NSInteger)i {
+  [self.tabHoverTimer invalidate]; self.tabHoverTimer=nil;
+  [self.tabHoverPanel orderOut:nil];
+}
+- (void)showHoverThumbnail:(NSTimer *)t {
+  NSDictionary *info=t.userInfo;
+  NSInteger i=[info[@"idx"] integerValue];
+  NSView *v=(__bridge NSView *)[info[@"view"] pointerValue];
+  if (i<0||i>=(NSInteger)self.tabs.count||!v||!v.window) return;
+  BBTab *tab=self.tabs[i];
+  WKSnapshotConfiguration *cfg=[[WKSnapshotConfiguration alloc]init];
+  cfg.rect=CGRectMake(0,0,MIN(tab.webView.bounds.size.width,1200),MIN(tab.webView.bounds.size.height,800));
+  cfg.snapshotWidth=@(280);
+  [tab.webView takeSnapshotWithConfiguration:cfg completionHandler:^(NSImage *img,NSError *e){
+    if (!img||!v.window) return;
+    dispatch_async(dispatch_get_main_queue(),^{ [self displayHoverImage:img belowView:v title:tab.title]; });
+  }];
+}
+- (void)displayHoverImage:(NSImage *)img belowView:(NSView *)v title:(NSString *)title {
+  NSRect winRect=[v convertRect:v.bounds toView:nil];
+  NSRect scrRect=[v.window convertRectToScreen:winRect];
+  CGFloat thumbW=280, thumbH=MIN(180,thumbW*img.size.height/MAX(img.size.width,1));
+  CGFloat panelW=thumbW+16, panelH=thumbH+32;
+  NSRect panelFrame=NSMakeRect(scrRect.origin.x+(scrRect.size.width-panelW)/2,
+                               scrRect.origin.y-panelH-6, panelW, panelH);
+  if (!self.tabHoverPanel) {
+    self.tabHoverPanel=[[NSPanel alloc]initWithContentRect:panelFrame
+      styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    self.tabHoverPanel.opaque=NO; self.tabHoverPanel.backgroundColor=[NSColor clearColor];
+    self.tabHoverPanel.hasShadow=YES; self.tabHoverPanel.level=NSPopUpMenuWindowLevel;
+    self.tabHoverPanel.ignoresMouseEvents=YES;
+  }
+  [self.tabHoverPanel setFrame:panelFrame display:NO];
+  NSVisualEffectView *bg=[[NSVisualEffectView alloc]initWithFrame:NSMakeRect(0,0,panelW,panelH)];
+  bg.material=NSVisualEffectMaterialHUDWindow; bg.blendingMode=NSVisualEffectBlendingModeBehindWindow;
+  bg.wantsLayer=YES; bg.layer.cornerRadius=10;
+  NSImageView *iv=[[NSImageView alloc]initWithFrame:NSMakeRect(8,24,thumbW,thumbH)];
+  iv.image=img; iv.imageScaling=NSImageScaleProportionallyUpOrDown;
+  iv.wantsLayer=YES; iv.layer.cornerRadius=6; iv.layer.masksToBounds=YES;
+  [bg addSubview:iv];
+  NSTextField *t=[NSTextField labelWithString:title.length?title:@"Untitled"];
+  t.frame=NSMakeRect(10,4,panelW-20,18); t.font=[NSFont systemFontOfSize:11];
+  t.lineBreakMode=NSLineBreakByTruncatingTail; [bg addSubview:t];
+  self.tabHoverPanel.contentView=bg;
+  [self.tabHoverPanel orderFront:nil];
+}
 - (void)tabBarDidDropURL:(NSString *)dropped {
   // Resolve raw URL or fall back to search-engine query (matches address bar Enter behaviour).
   if (!dropped.length) return;
@@ -5517,6 +5588,8 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   if (self.ctrlScrollMonitor)  { [NSEvent removeMonitor:self.ctrlScrollMonitor];  self.ctrlScrollMonitor=nil; }
   [self.suspendTimer invalidate]; self.suspendTimer=nil;
   [self.sessionAutosaveTimer invalidate]; self.sessionAutosaveTimer=nil;
+  [self.tabHoverTimer invalidate]; self.tabHoverTimer=nil;
+  [self.tabHoverPanel close]; self.tabHoverPanel=nil;
   // Release this window's controller. Deferred so we never dealloc self midway
   // through this very method (the removal can drop the last strong reference).
   dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
