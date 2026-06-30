@@ -2874,6 +2874,8 @@ static NSMutableArray *gBBWindowControllers;
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Actual Size",@selector(zoomReset:),@"0",Cmd);
   mi(viewM,@"Zoom In",@selector(zoomIn:),@"+",Cmd);
+  // Cmd+= mirrors Cmd++ on US keyboard (no Shift required) — Chrome parity
+  [viewM addItemWithTitle:@"" action:@selector(zoomIn:) keyEquivalent:@"="].keyEquivalentModifierMask=Cmd;
   mi(viewM,@"Zoom Out",@selector(zoomOut:),@"-",Cmd);
   [viewM addItem:[NSMenuItem separatorItem]];
   mi(viewM,@"Enter Full Screen",@selector(toggleFullScreen:),@"f",Cmd|Ctrl);
@@ -4712,6 +4714,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   add(@"Move Tab Right",@selector(ctxMoveTabRight:),i<(NSInteger)self.tabs.count-1);
   [m addItem:[NSMenuItem separatorItem]];
   add(@"New Tab to the Right",@selector(ctxNewTabRight:),YES);
+  add(@"Move Tab to New Window",@selector(ctxMoveTabToNewWindow:),self.tabs.count>1);
   add(@"Duplicate Tab",@selector(ctxDuplicateTab:),YES);
   add(@"Add to Research Session…",@selector(addCurrentTabToSession:),YES);
   [m addItem:[NSMenuItem separatorItem]];
@@ -4725,6 +4728,23 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   return m;
 }
 - (BOOL)validTabIndex:(NSInteger)i { return i>=0 && i<(NSInteger)self.tabs.count; }
+- (void)ctxMoveTabToNewWindow:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]||self.tabs.count<2) return;
+  BBTab *tab=self.tabs[i];
+  // Remove from this window
+  if (self.activeTabIndex==i) {
+    NSInteger next=i>0?i-1:1;
+    [self tabItemDidSelect:next];
+  } else if (self.activeTabIndex>i) self.activeTabIndex--;
+  [self.tabs removeObjectAtIndex:i];
+  [self reloadTabBar];
+  // Open a new window carrying the tab's URL
+  BBDelegate *w=[[BBDelegate alloc]init];
+  NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+  [w applicationDidFinishLaunching:dummy];
+  NSURL *u=tab.suspended?[NSURL URLWithString:tab.suspendedURL]:tab.webView.URL;
+  if (u) [w.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
 - (void)ctxMoveTabLeft:(id)s  { NSInteger i=[(NSMenuItem*)s tag]; if(i<=0||![self validTabIndex:i])return; [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i-1]; if(self.activeTabIndex==i)self.activeTabIndex=i-1; [self reloadTabBar]; }
 - (void)ctxMoveTabRight:(id)s { NSInteger i=[(NSMenuItem*)s tag]; if(i>=(NSInteger)self.tabs.count-1||![self validTabIndex:i])return; [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i+1]; if(self.activeTabIndex==i)self.activeTabIndex=i+1; [self reloadTabBar]; }
 - (void)ctxNewTabRight:(id)s   { NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return; [self insertTabAt:i+1 private:self.tabs[i].isPrivate url:nil]; }
@@ -6091,6 +6111,29 @@ static NSString *kFaviconJS=@"(function(){"
   if (n.object==self.address) [self.addressDropdown hide];
 }
 - (BOOL)control:(NSControl *)ctrl textView:(NSTextView *)tv doCommandBySelector:(SEL)sel {
+  // Tab Search field — Enter confirms, Escape closes, arrows navigate the list
+  if ([ctrl isKindOfClass:[NSSearchField class]] && ((NSSearchField *)ctrl).tag==0xCAFE) {
+    NSPanel *p=(NSPanel *)objc_getAssociatedObject(self,"tabSearchPanel");
+    NSTableView *tsv=(NSTableView *)objc_getAssociatedObject(p,"tv");
+    if (sel==@selector(insertNewline:))   { [self tabSearchConfirm:nil]; return YES; }
+    if (sel==@selector(cancelOperation:)) {
+      [p orderOut:nil];
+      objc_setAssociatedObject(self,"tabSearchPanel",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      objc_setAssociatedObject(self,"tabSearchFiltered",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      return YES;
+    }
+    if (sel==@selector(moveDown:)) {
+      NSInteger row=tsv.selectedRow; NSInteger n=(NSInteger)tsv.numberOfRows;
+      if (n>0) { NSInteger nr=MIN(row+1,n-1); [tsv selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)nr] byExtendingSelection:NO]; [tsv scrollRowToVisible:nr]; }
+      return YES;
+    }
+    if (sel==@selector(moveUp:)) {
+      NSInteger row=tsv.selectedRow;
+      if (row>0) { NSInteger nr=row-1; [tsv selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)nr] byExtendingSelection:NO]; [tsv scrollRowToVisible:nr]; }
+      return YES;
+    }
+    return NO;
+  }
   if (ctrl==self.findBar.queryField) {
     if (sel==@selector(insertNewline:))   { [self findNext:nil]; return YES; }
     if (sel==@selector(cancelOperation:)) { [self closeFind:nil]; return YES; }
