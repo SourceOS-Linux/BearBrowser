@@ -685,6 +685,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @interface BBBookmark : NSObject
 @property(copy) NSString *title, *urlString;
 @property(strong) NSDate *addedAt;
+@property(copy) NSString *folder;  // nil/"" = bookmarks bar root; otherwise folder name (one level deep)
 @end
 @implementation BBBookmark
 @end
@@ -867,6 +868,9 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(strong) NSMutableArray<BBBookmark *> *items;
 + (instancetype)shared;
 - (void)addTitle:(NSString *)t url:(NSString *)u;
+- (void)addTitle:(NSString *)t url:(NSString *)u folder:(NSString *)f;
+- (NSArray<NSString *> *)folders;
+- (void)setFolder:(NSString *)f forURL:(NSString *)u;
 - (void)removeAtIndex:(NSInteger)i;
 - (void)removeURL:(NSString *)u;
 - (BOOL)isBookmarked:(NSString *)u;
@@ -880,13 +884,27 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   if (d) for (NSDictionary *r in [NSJSONSerialization JSONObjectWithData:d options:0 error:nil]) {
     BBBookmark *b=[BBBookmark new]; b.title=r[@"title"]?:@""; b.urlString=r[@"url"]?:@"";
     b.addedAt=[NSDate dateWithTimeIntervalSince1970:[r[@"t"] doubleValue]];
+    b.folder=r[@"folder"]?:@"";
     [_items addObject:b];
   }
   return self;
 }
 - (void)addTitle:(NSString *)t url:(NSString *)u {
+  [self addTitle:t url:u folder:nil];
+}
+- (void)addTitle:(NSString *)t url:(NSString *)u folder:(NSString *)f {
   BBBookmark *b=[BBBookmark new]; b.title=t?:@""; b.urlString=u?:@""; b.addedAt=[NSDate date];
+  b.folder=f?:@"";
   [self.items addObject:b]; [self save];
+}
+- (NSArray<NSString *> *)folders {
+  NSMutableOrderedSet *set=[NSMutableOrderedSet orderedSet];
+  for (BBBookmark *b in self.items) if (b.folder.length) [set addObject:b.folder];
+  return [set array];
+}
+- (void)setFolder:(NSString *)f forURL:(NSString *)u {
+  for (BBBookmark *b in self.items) if ([b.urlString isEqualToString:u]) b.folder=f?:@"";
+  [self save];
 }
 - (void)removeAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)self.items.count){[self.items removeObjectAtIndex:i];[self save];} }
 - (void)removeURL:(NSString *)u {
@@ -896,7 +914,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 - (BOOL)isBookmarked:(NSString *)u { for(BBBookmark *b in self.items) if([b.urlString isEqualToString:u]) return YES; return NO; }
 - (void)save {
   NSMutableArray *arr=[NSMutableArray array];
-  for (BBBookmark *b in self.items) [arr addObject:@{@"title":b.title,@"url":b.urlString,@"t":@(b.addedAt.timeIntervalSince1970)}];
+  for (BBBookmark *b in self.items) [arr addObject:@{@"title":b.title?:@"",@"url":b.urlString?:@"",@"t":@(b.addedAt.timeIntervalSince1970),@"folder":b.folder?:@""}];
   NSData *d=[NSJSONSerialization dataWithJSONObject:arr options:0 error:nil];
   [[NSFileManager defaultManager] createDirectoryAtPath:BBSupportDir() withIntermediateDirectories:YES attributes:nil error:nil];
   [d writeToFile:[BBSupportDir() stringByAppendingPathComponent:@"bookmarks.json"] atomically:YES];
@@ -1559,8 +1577,27 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
   if (row<0||row>=(NSInteger)items.count) { f.stringValue=@""; return f; }
   BBBookmark *b=items[row];
-  f.stringValue=[col.identifier isEqualToString:@"title"]?(b.title.length?b.title:b.urlString):b.urlString;
+  if ([col.identifier isEqualToString:@"title"])       f.stringValue=b.title.length?b.title:b.urlString;
+  else if ([col.identifier isEqualToString:@"folder"]) f.stringValue=b.folder?:@"";
+  else                                                  f.stringValue=b.urlString;
   return f;
+}
+- (void)moveSelectedToFolder {
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
+  if (row<0||row>=(NSInteger)items.count) return;
+  BBBookmark *b=items[row];
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Move to Folder";
+  a.informativeText=@"Leave blank for the bookmarks-bar root.";
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  cb.usesDataSource=NO; cb.completes=YES; cb.stringValue=b.folder?:@"";
+  [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  a.accessoryView=cb;
+  [a addButtonWithTitle:@"Move"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSString *target=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  [[BBBookmarksStore shared] setFolder:target forURL:b.urlString];
+  [self.tv reloadData];
 }
 - (void)openSelected {
   NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
@@ -5434,12 +5471,24 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSString *url=self.webView.URL.absoluteString; NSString *title=self.activeTab.title?:url;
   if (!url.length||[url hasPrefix:@"bearbrowser://"]) return;
   NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Add Bookmark";
-  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,300,24)];
-  tf.stringValue=title; tf.font=[NSFont systemFontOfSize:13]; a.accessoryView=tf;
+  NSView *acc=[[NSView alloc]initWithFrame:NSMakeRect(0,0,320,82)];
+  NSTextField *titleLbl=[NSTextField labelWithString:@"Name:"];
+  titleLbl.frame=NSMakeRect(0,52,60,20); titleLbl.alignment=NSTextAlignmentRight; [acc addSubview:titleLbl];
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(64,50,256,24)];
+  tf.stringValue=title; tf.font=[NSFont systemFontOfSize:13]; [acc addSubview:tf];
+  NSTextField *folderLbl=[NSTextField labelWithString:@"Folder:"];
+  folderLbl.frame=NSMakeRect(0,18,60,20); folderLbl.alignment=NSTextAlignmentRight; [acc addSubview:folderLbl];
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(64,16,256,24)];
+  cb.usesDataSource=NO; cb.completes=YES; cb.placeholderString=@"(bookmarks bar root)";
+  [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  [acc addSubview:cb];
+  a.accessoryView=acc;
   [a addButtonWithTitle:@"Add"]; [a addButtonWithTitle:@"Cancel"];
   [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
     if(rc!=NSAlertFirstButtonReturn) return;
-    [[BBBookmarksStore shared] addTitle:tf.stringValue?:title url:url];
+    NSString *folder=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [[BBBookmarksStore shared] addTitle:tf.stringValue?:title url:url folder:folder];
     [self reloadBookmarksBar];
   }];
 }
@@ -5454,10 +5503,29 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   for (NSView *v in self.bookmarksBar.subviews.copy) [v removeFromSuperview];
   CGFloat x=8;
   CGFloat barW=self.bookmarksBar.bounds.size.width;
-  CGFloat overflowReserve=32; // leave room for the chevron when there's overflow
-  NSArray<BBBookmark *> *items=[BBBookmarksStore shared].items;
-  NSInteger shown=0;
-  for (BBBookmark *b in items) {
+  CGFloat overflowReserve=32;
+  NSArray<BBBookmark *> *all=[BBBookmarksStore shared].items;
+  // Folder buttons first (alphabetical isn't ideal; use first-seen order from store).
+  NSArray<NSString *> *folders=[[BBBookmarksStore shared] folders];
+  NSMutableArray<NSString *> *overflowFolders=[NSMutableArray array];
+  for (NSString *f in folders) {
+    NSButton *btn=[[NSButton alloc]initWithFrame:NSMakeRect(x,3,0,24)];
+    NSImage *folderImg=[NSImage imageWithSystemSymbolName:@"folder" accessibilityDescription:@"Folder"];
+    [folderImg setTemplate:YES];
+    btn.image=folderImg; btn.imagePosition=NSImageLeft;
+    btn.title=f; btn.font=[NSFont systemFontOfSize:11]; btn.bezelStyle=NSBezelStyleRoundRect;
+    btn.target=self; btn.action=@selector(bookmarkFolderClicked:);
+    objc_setAssociatedObject(btn,"BBFolderName",f,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+10,24);
+    if (x+btn.frame.size.width > barW-overflowReserve) { [overflowFolders addObject:f]; continue; }
+    [self.bookmarksBar addSubview:btn];
+    x+=btn.frame.size.width+4;
+  }
+  // Root (no-folder) bookmarks next.
+  NSMutableArray<BBBookmark *> *root=[NSMutableArray array];
+  for (BBBookmark *b in all) if (!b.folder.length) [root addObject:b];
+  NSInteger shownRoot=0;
+  for (BBBookmark *b in root) {
     NSButton *btn=[[NSButton alloc]initWithFrame:NSMakeRect(x,3,0,24)];
     btn.title=b.title.length?b.title:b.urlString;
     btn.font=[NSFont systemFontOfSize:11]; btn.bezelStyle=NSBezelStyleRoundRect;
@@ -5466,9 +5534,10 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     btn.toolTip=b.urlString;
     if (x+btn.frame.size.width > barW-overflowReserve) break;
     [self.bookmarksBar addSubview:btn];
-    x+=btn.frame.size.width+4; shown++;
+    x+=btn.frame.size.width+4; shownRoot++;
   }
-  if (shown<(NSInteger)items.count) {
+  BOOL anyOverflow=(overflowFolders.count>0)||(shownRoot<(NSInteger)root.count);
+  if (anyOverflow) {
     NSButton *more=[[NSButton alloc]initWithFrame:NSMakeRect(barW-28,3,22,24)];
     more.autoresizingMask=NSViewMinXMargin;
     NSImage *ch=[NSImage imageWithSystemSymbolName:@"chevron.right.2" accessibilityDescription:@"More bookmarks"];
@@ -5476,17 +5545,47 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     more.bezelStyle=NSBezelStyleToolbar; more.bordered=NO;
     more.toolTip=@"More bookmarks";
     more.target=self; more.action=@selector(showBookmarksOverflow:);
-    more.tag=shown;
+    objc_setAssociatedObject(more,"BBOverflowFolders",overflowFolders,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    more.tag=shownRoot;
     [self.bookmarksBar addSubview:more];
   }
 }
+- (void)bookmarkFolderClicked:(NSButton *)btn {
+  NSString *folder=objc_getAssociatedObject(btn,"BBFolderName");
+  if (!folder.length) return;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:folder];
+  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+    if (![b.folder isEqualToString:folder]) continue;
+    NSMenuItem *mi=[m addItemWithTitle:b.title.length?b.title:b.urlString
+                                action:@selector(bookmarkOverflowSelected:) keyEquivalent:@""];
+    mi.target=self; mi.representedObject=b.urlString; mi.toolTip=b.urlString;
+  }
+  if (!m.itemArray.count)
+    [m addItemWithTitle:@"(empty)" action:nil keyEquivalent:@""].enabled=NO;
+  [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+}
 - (void)showBookmarksOverflow:(NSButton *)btn {
-  NSArray<BBBookmark *> *items=[BBBookmarksStore shared].items;
+  NSArray<BBBookmark *> *all=[BBBookmarksStore shared].items;
+  NSArray<NSString *> *overflowFolders=objc_getAssociatedObject(btn,"BBOverflowFolders")?:@[];
+  NSMutableArray<BBBookmark *> *root=[NSMutableArray array];
+  for (BBBookmark *b in all) if (!b.folder.length) [root addObject:b];
   NSInteger startIdx=btn.tag;
-  if (startIdx<0||startIdx>=(NSInteger)items.count) return;
   NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
-  for (NSInteger k=startIdx;k<(NSInteger)items.count;k++) {
-    BBBookmark *b=items[k];
+  // Hidden folders first as submenus, then overflowing root bookmarks.
+  for (NSString *f in overflowFolders) {
+    NSMenuItem *fi=[m addItemWithTitle:f action:nil keyEquivalent:@""];
+    NSMenu *sub=[[NSMenu alloc]initWithTitle:f];
+    for (BBBookmark *b in all) {
+      if (![b.folder isEqualToString:f]) continue;
+      NSMenuItem *mi=[sub addItemWithTitle:b.title.length?b.title:b.urlString
+                                    action:@selector(bookmarkOverflowSelected:) keyEquivalent:@""];
+      mi.target=self; mi.representedObject=b.urlString; mi.toolTip=b.urlString;
+    }
+    fi.submenu=sub;
+  }
+  if (overflowFolders.count && startIdx<(NSInteger)root.count) [m addItem:[NSMenuItem separatorItem]];
+  for (NSInteger k=startIdx;k<(NSInteger)root.count;k++) {
+    BBBookmark *b=root[k];
     NSMenuItem *mi=[m addItemWithTitle:b.title.length?b.title:b.urlString
                                 action:@selector(bookmarkOverflowSelected:) keyEquivalent:@""];
     mi.target=self; mi.representedObject=b.urlString; mi.toolTip=b.urlString;
@@ -5659,9 +5758,10 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-48)];
   sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
   NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=30;
-  NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"title"]; c1.title=@"Title"; c1.width=250;
-  NSTableColumn *c2=[[NSTableColumn alloc]initWithIdentifier:@"url"];   c2.title=@"URL";   c2.width=360;
-  [tv addTableColumn:c1]; [tv addTableColumn:c2];
+  NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"title"];  c1.title=@"Title";  c1.width=210;
+  NSTableColumn *cf=[[NSTableColumn alloc]initWithIdentifier:@"folder"]; cf.title=@"Folder"; cf.width=110;
+  NSTableColumn *c2=[[NSTableColumn alloc]initWithIdentifier:@"url"];    c2.title=@"URL";    c2.width=290;
+  [tv addTableColumn:c1]; [tv addTableColumn:cf]; [tv addTableColumn:c2];
   sv.documentView=tv; [cv addSubview:sv];
   BBBookmarksPanelDS *ds=[[BBBookmarksPanelDS alloc]init];
   ds.tv=tv; ds.win=bw; ds.webView=self.webView;
@@ -5674,6 +5774,9 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(108,10,90,30)];
   rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
   rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *mv=[[NSButton alloc]initWithFrame:NSMakeRect(204,10,130,30)];
+  mv.title=@"Move to Folder…"; mv.bezelStyle=NSBezelStyleRounded; mv.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  mv.target=ds; mv.action=@selector(moveSelectedToFolder); [cv addSubview:mv];
   NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
   done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
   done.target=bw; done.action=@selector(performClose:); [cv addSubview:done];
