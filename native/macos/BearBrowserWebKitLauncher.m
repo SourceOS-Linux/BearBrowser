@@ -320,6 +320,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(assign) BOOL       isPlayingAudio;  // page has active audio (tab badge)
 @property(assign) BOOL       genpassOffered;  // password-generator prompt already shown for this page load
 @property(assign) BOOL       translateOffered;// translate prompt already shown for this page load
+@property(assign) BOOL       editableFocus;   // last-known editable focus state (for native spell-check fallback)
 @property(copy)   NSString  *groupName;       // tab group label (nil/"" = no group)
 @property(assign) NSInteger  groupColorIdx;   // 0..7 color slot; only relevant when groupName set
 @property(assign) BOOL       collapsedInGroup;// when YES, render as a small group-color chip
@@ -1606,10 +1607,39 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @protocol BBAddressFieldDelegate <NSObject>
 - (void)addressFieldPasteAndGo:(NSString *)url;
 @end
-@interface BBAddressField : NSTextField
+@interface BBAddressField : NSTextField <NSDraggingSource>
 @property(weak) id<BBAddressFieldDelegate> pasteDelegate;
 @end
 @implementation BBAddressField
+- (NSDragOperation)draggingSession:(NSDraggingSession *)s sourceOperationMaskForDraggingContext:(NSDraggingContext)c {
+  return NSDragOperationCopy;
+}
+- (void)mouseDown:(NSEvent *)e {
+  // Only intercept when the field isn't currently being edited — preserve normal
+  // text-editing click-to-focus behavior otherwise.
+  if ([self.window firstResponder]==self || self.currentEditor) { [super mouseDown:e]; return; }
+  NSPoint start=e.locationInWindow;
+  // Walk events until drag threshold or release.
+  NSEvent *evt=e;
+  while (evt) {
+    evt=[self.window nextEventMatchingMask:NSEventMaskLeftMouseDragged|NSEventMaskLeftMouseUp];
+    if (evt.type==NSEventTypeLeftMouseUp) { [super mouseDown:e]; return; }
+    if (evt.type==NSEventTypeLeftMouseDragged) {
+      NSPoint p=evt.locationInWindow;
+      if (hypot(p.x-start.x,p.y-start.y)>6) break;
+    }
+  }
+  // Initiate a drag carrying the current URL.
+  NSString *url=self.stringValue;
+  if (!url.length || [url rangeOfString:@" "].location!=NSNotFound) { [super mouseDown:e]; return; }
+  NSPasteboardItem *pi=[[NSPasteboardItem alloc]init];
+  if ([url hasPrefix:@"http"]||[url hasPrefix:@"file://"]) [pi setString:url forType:NSPasteboardTypeURL];
+  [pi setString:url forType:NSPasteboardTypeString];
+  NSDraggingItem *di=[[NSDraggingItem alloc]initWithPasteboardWriter:pi];
+  NSImage *icon=[NSImage imageWithSystemSymbolName:@"link" accessibilityDescription:@"URL"];
+  [di setDraggingFrame:NSMakeRect(start.x-16,start.y-16,32,32) contents:icon];
+  [self beginDraggingSessionWithItems:@[di] event:e source:self];
+}
 - (NSMenu *)menuForEvent:(NSEvent *)event {
   NSMenu *m=[super menuForEvent:event];
   if (!m) m=[[NSMenu alloc]init];
@@ -3434,7 +3464,7 @@ static NSMutableArray *gBBWindowControllers;
   [fileM addItem:[NSMenuItem separatorItem]];
   mi(fileM,@"Share…",@selector(sharePage:),@"",0);
   mi(fileM,@"Print…",@selector(printPage:),@"p",Cmd);
-  [fileM addItemWithTitle:@"" action:@selector(printPage:) keyEquivalent:@"p"].keyEquivalentModifierMask=Cmd|Shift;
+  [fileM addItemWithTitle:@"Print Selection…" action:@selector(printSelection:) keyEquivalent:@"p"].keyEquivalentModifierMask=Cmd|Shift;
 
   // ── Edit ──
   NSMenu *editM=submenu(@"Edit");
@@ -3963,13 +3993,35 @@ static NSMutableArray *gBBWindowControllers;
       [info appendString:@"(Certificate details not available — navigate to a page to inspect)"];
     }
   }
-
+  // Show granted permissions for this host so the user can audit + reset them.
+  if (host.length) {
+    NSMutableArray *perms=[NSMutableArray array];
+    NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+    for (NSString *kind in @[@"camera",@"microphone",@"camera & microphone"]) {
+      NSString *key=[NSString stringWithFormat:@"BBMediaPerm_%@_%@",kind,host];
+      NSString *v=[ud stringForKey:key];
+      if ([v isEqualToString:@"allow"]) [perms addObject:[NSString stringWithFormat:@"%@: allowed",kind]];
+      else if ([v isEqualToString:@"deny"]) [perms addObject:[NSString stringWithFormat:@"%@: blocked",kind]];
+    }
+    if (perms.count) {
+      [info appendString:@"\nPermissions:\n  • "];
+      [info appendString:[perms componentsJoinedByString:@"\n  • "]];
+    }
+  }
   NSAlert *a=[[NSAlert alloc]init];
   a.messageText=host.length?host:@"BearBrowser";
   a.informativeText=info;
   a.alertStyle=isHTTPS?NSAlertStyleInformational:NSAlertStyleWarning;
   [a addButtonWithTitle:@"OK"];
-  [a beginSheetModalForWindow:self.window completionHandler:nil];
+  if (host.length) [a addButtonWithTitle:@"Reset Site Permissions"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc==NSAlertSecondButtonReturn && host.length) {
+      NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+      NSString *suffix=[NSString stringWithFormat:@"_%@",host];
+      for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
+        if ([key hasPrefix:@"BBMediaPerm_"] && [key hasSuffix:suffix]) [ud removeObjectForKey:key];
+    }
+  }];
 }
 
 // ── WebView factory ───────────────────────────────────────────────────────────
@@ -4077,6 +4129,11 @@ static NSMutableArray *gBBWindowControllers;
     @"return;}}catch(e){}}"
     @"window.__bbAutofill=applyCred;"
     @"window.__bbApplyGenPass=applyGenPass;"
+    @"function reportEdit(){var a=document.activeElement;"
+    @"var e=!!(a&&(a.isContentEditable||a.tagName==='INPUT'||a.tagName==='TEXTAREA'));"
+    @"post('editFocus',{e:e});}"
+    @"document.addEventListener('focusin',reportEdit,true);"
+    @"document.addEventListener('focusout',reportEdit,true);"
     @"function fieldKey(el){var a=(el.getAttribute('autocomplete')||'').toLowerCase();"
     @"if(a){if(a.indexOf('email')>=0)return'email';if(a.indexOf('tel')>=0)return'phone';"
     @"if(a==='name'||a==='cc-name')return'name';if(a==='given-name'||a==='additional-name'||a==='family-name')return'name';"
@@ -5724,6 +5781,26 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
+- (NSMenu *)applicationDockMenu:(NSApplication *)sender {
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  [m addItemWithTitle:@"New Tab"             action:@selector(newTab:)            keyEquivalent:@""].target=self;
+  [m addItemWithTitle:@"New Window"          action:@selector(newWindow:)         keyEquivalent:@""].target=self;
+  [m addItemWithTitle:@"New Incognito Window" action:@selector(newPrivateWindow:)  keyEquivalent:@""].target=self;
+  if (self.recentlyClosed.count) {
+    [m addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *rcRoot=[m addItemWithTitle:@"Recently Closed" action:nil keyEquivalent:@""];
+    NSMenu *sub=[[NSMenu alloc]initWithTitle:@""];
+    for (NSInteger k=(NSInteger)self.recentlyClosed.count-1;k>=0&&k>=(NSInteger)self.recentlyClosed.count-10;k--) {
+      NSDictionary *e=self.recentlyClosed[k];
+      NSString *t=e[@"title"]?:e[@"url"];
+      NSMenuItem *it=[sub addItemWithTitle:t.length>60?[[t substringToIndex:60] stringByAppendingString:@"…"]:t
+                                    action:@selector(reopenSpecificClosed:) keyEquivalent:@""];
+      it.target=self; it.tag=k;
+    }
+    rcRoot.submenu=sub;
+  }
+  return m;
+}
 - (void)applicationWillTerminate:(NSNotification *)n {
   if ([[NSUserDefaults standardUserDefaults] boolForKey:@"BBClearOnQuit"]) [[BBHistoryStore shared] clearAll];
 }
@@ -5886,6 +5963,24 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [self.webView startDownloadUsingRequest:req completionHandler:^(WKDownload *dl){
     dl.delegate=self;
   }];
+}
+- (void)contextSearchImageOnLens:(NSMenuItem *)item {
+  NSString *u=item.representedObject; if (![u isKindOfClass:[NSString class]]||!u.length) return;
+  NSString *enc=[u stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *lens=[NSURL URLWithString:[NSString stringWithFormat:@"https://lens.google.com/uploadbyurl?url=%@",enc]];
+  if (!lens) return;
+  NSInteger prev=self.activeTabIndex;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:lens]];
+  (void)prev;
+}
+- (void)contextSearchImageOnTinEye:(NSMenuItem *)item {
+  NSString *u=item.representedObject; if (![u isKindOfClass:[NSString class]]||!u.length) return;
+  NSString *enc=[u stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *tin=[NSURL URLWithString:[NSString stringWithFormat:@"https://tineye.com/search?url=%@",enc]];
+  if (!tin) return;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:tin]];
 }
 - (void)contextSaveImage:(id)sender {
   NSMenuItem *mi=(NSMenuItem *)sender; NSString *urlStr=mi.representedObject;
@@ -7167,6 +7262,9 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
       NSArray<BBPasswordEntry *> *existing=[[BBPasswordStore shared] entriesForHost:host];
       for (BBPasswordEntry *e in existing) if ([e.username isEqualToString:user]&&[e.password isEqualToString:pass]) return;
       dispatch_async(dispatch_get_main_queue(),^{ [self offerSaveLoginForHost:host username:user password:pass]; });
+    } else if ([kind isEqualToString:@"editFocus"]) {
+      BOOL e=[body[@"e"] boolValue];
+      if (tab) tab.editableFocus=e;
     } else if ([kind isEqualToString:@"profileLookup"]) {
       BBProfile *p=[[BBProfileStore shared] profile];
       if (p.isEmpty) return;
@@ -7326,6 +7424,29 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
 - (void)printPage:(id)s {
   NSPrintOperation *op=[self.webView printOperationWithPrintInfo:[NSPrintInfo sharedPrintInfo]];
   [op runOperationModalForWindow:self.window delegate:nil didRunSelector:nil contextInfo:nil];
+}
+- (void)printSelection:(id)s {
+  // Grab the page selection — fall back to the whole page when nothing's selected.
+  [self.webView evaluateJavaScript:
+    @"(function(){var s=window.getSelection?window.getSelection():null;if(!s||s.rangeCount==0)return '';"
+    @"var c=document.createElement('div');for(var i=0;i<s.rangeCount;i++){c.appendChild(s.getRangeAt(i).cloneContents());}return c.innerHTML;})()"
+    completionHandler:^(id r,NSError *e){
+      NSString *html=[r isKindOfClass:[NSString class]]?(NSString*)r:@"";
+      if (!html.length) {
+        [self printPage:nil]; return;
+      }
+      NSString *wrapped=[NSString stringWithFormat:
+        @"<!doctype html><html><head><meta charset=\"utf-8\"><style>body{font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;margin:24px;color:#000;}img{max-width:100%%;}</style></head><body>%@</body></html>",html];
+      WKWebView *temp=[[WKWebView alloc]initWithFrame:NSMakeRect(0,0,800,1100)];
+      [temp loadHTMLString:wrapped baseURL:self.webView.URL];
+      // Defer print until the temp view finishes loading.
+      objc_setAssociatedObject(self,"BBPrintTempWV",temp,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.4*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        NSPrintOperation *op=[temp printOperationWithPrintInfo:[NSPrintInfo sharedPrintInfo]];
+        [op runOperationModalForWindow:self.window delegate:nil didRunSelector:nil contextInfo:nil];
+        objc_setAssociatedObject(self,"BBPrintTempWV",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      });
+    }];
 }
 - (void)viewSource:(id)s {
   // Fetch source via JS to avoid loading the blocked view-source: scheme through nav policy.
@@ -8054,13 +8175,19 @@ static const NSInteger kDialogAbuseThreshold = 3;
     if (NSPointInRect(toolPt,s.forwardButton.frame)) { [s showNavHistoryMenu:NO   at:e.locationInWindow]; return nil; }
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if (!NSPointInRect(pt,s.webView.bounds)) return e;
-    // Probe the page at the click point for a link, an image, and any selection.
+    // If the focused element is editable (input/textarea/contentEditable), defer to
+    // the native WKWebView context menu so the OS spell-check items remain reachable.
+    if (s.activeTab.editableFocus) return e;
+    // Probe the page at the click point for a link, an image, any selection, AND
+    // whether the click target is an editable input (so native spell-check stays
+    // available on misspelled words in text fields).
     NSString *js=[NSString stringWithFormat:
-      @"(function(){var el=document.elementFromPoint(%f,%f);var link='',img='',n=el;"
+      @"(function(){var el=document.elementFromPoint(%f,%f);var link='',img='',n=el,edit=false;"
       @"while(n){if(n.tagName==='A'&&n.href){link=n.href;break;}n=n.parentElement;}"
       @"n=el;while(n){if(n.tagName==='IMG'&&n.src){img=n.src;break;}n=n.parentElement;}"
+      @"n=el;while(n){if(n.isContentEditable||n.tagName==='INPUT'||n.tagName==='TEXTAREA'){edit=true;break;}n=n.parentElement;}"
       @"var sel=(window.getSelection?String(window.getSelection()):'')||'';"
-      @"return {link:link,image:img,sel:sel};})();", pt.x, s.webView.bounds.size.height-pt.y];
+      @"return {link:link,image:img,sel:sel,edit:edit};})();", pt.x, s.webView.bounds.size.height-pt.y];
     [s.webView evaluateJavaScript:js completionHandler:^(id result,NSError *err){
       dispatch_async(dispatch_get_main_queue(),^{
         NSDictionary *r=[result isKindOfClass:[NSDictionary class]]?result:@{};
@@ -8095,6 +8222,8 @@ static const NSInteger kDialogAbuseThreshold = 3;
           add(@"Copy Image",@selector(contextCopyImage:),imgURL);
           add(@"Copy Image Address",@selector(contextCopyLink:),imgURL);
           add(@"Save Image As…",@selector(contextSaveImage:),imgURL);
+          add(@"Search Image on Google Lens",@selector(contextSearchImageOnLens:),imgURL);
+          add(@"Search Image on TinEye",@selector(contextSearchImageOnTinEye:),imgURL);
           [menu addItem:[NSMenuItem separatorItem]];
         }
         NSMenuItem *back=add(@"Back",@selector(goBack:),nil); back.enabled=s.webView.canGoBack;
