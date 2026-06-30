@@ -2928,6 +2928,7 @@ static NSMutableArray *gBBWindowControllers;
   // ── Tab ──
   NSMenu *tabM=submenu(@"Tab");
   mi(tabM,@"New Tab",@selector(newTab:),@"t",Cmd);
+  mi(tabM,@"Search Tabs…",@selector(openTabSearch:),@"a",Cmd|Shift);
   [tabM addItemWithTitle:@"Duplicate Tab" action:@selector(duplicateCurrentTab:) keyEquivalent:@""];
   [tabM addItemWithTitle:@"Mute Tab" action:@selector(muteTab:) keyEquivalent:@""];
   [tabM addItemWithTitle:@"Pin Tab" action:@selector(pinCurrentTab:) keyEquivalent:@""];
@@ -5336,6 +5337,85 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [w applicationDidFinishLaunching:dummy];
 }
 
+// ── Tab Search (Cmd+Shift+A) ──────────────────────────────────────────────────
+- (void)openTabSearch:(id)s {
+  NSPanel *p=[[NSPanel alloc]initWithContentRect:NSMakeRect(0,0,480,320)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskFullSizeContentView)
+    backing:NSBackingStoreBuffered defer:YES];
+  p.title=@"Search Tabs"; p.titlebarAppearsTransparent=YES; p.movableByWindowBackground=YES;
+  [p center]; p.releasedWhenClosed=NO;
+  NSView *cv=p.contentView;
+
+  NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,274,456,28)];
+  sf.placeholderString=@"Search open tabs…"; sf.autoresizingMask=NSViewWidthSizable;
+  [cv addSubview:sf];
+
+  NSScrollView *sc=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,0,480,268)];
+  sc.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sc.hasVerticalScroller=YES; sc.drawsBackground=NO;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.headerView=nil; tv.rowHeight=38; tv.selectionHighlightStyle=NSTableViewSelectionHighlightStyleSourceList;
+  NSTableColumn *tc=[[NSTableColumn alloc]initWithIdentifier:@"t"]; tc.width=458; [tv addTableColumn:tc];
+  sc.documentView=tv; [cv addSubview:sc];
+
+  NSMutableArray *filtered=[NSMutableArray arrayWithArray:self.tabs];
+  objc_setAssociatedObject(self,"tabSearchFiltered",filtered,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(self,"tabSearchPanel",p,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(p,"tv",tv,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+  tv.dataSource=(id<NSTableViewDataSource>)self;
+  tv.delegate=(id<NSTableViewDelegate>)self;
+  sf.delegate=(id<NSSearchFieldDelegate>)self;
+  tv.tag=0xCAFE; // sentinel to identify tab-search table
+  sf.tag=0xCAFE;
+  tv.doubleAction=@selector(tabSearchConfirm:); tv.target=self;
+  [p makeKeyAndOrderFront:nil];
+  [p makeFirstResponder:sf];
+}
+// Called when user presses Return or double-clicks a row in the tab search table
+- (void)tabSearchConfirm:(id)s {
+  NSPanel *p=(NSPanel *)objc_getAssociatedObject(self,"tabSearchPanel");
+  NSTableView *tv=objc_getAssociatedObject(p,"tv");
+  NSArray *filtered=objc_getAssociatedObject(self,"tabSearchFiltered");
+  NSInteger row=tv.selectedRow; if (row<0||(NSUInteger)row>=filtered.count) return;
+  BBTab *tab=filtered[row];
+  NSInteger idx=[self.tabs indexOfObject:tab];
+  if (idx!=NSNotFound) { [self activateTab:idx]; [self reloadTabBar]; }
+  [p orderOut:nil];
+  objc_setAssociatedObject(self,"tabSearchPanel",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(self,"tabSearchFiltered",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+// NSTableViewDataSource for tab search (detected via tag)
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv {
+  if (tv.tag==0xCAFE) {
+    NSArray *f=objc_getAssociatedObject(self,"tabSearchFiltered");
+    return (NSInteger)(f?f.count:0);
+  }
+  return 0;
+}
+// NSTableViewDelegate for tab search
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  if (tv.tag!=0xCAFE) return nil;
+  NSArray *filtered=objc_getAssociatedObject(self,"tabSearchFiltered");
+  if (row<0||(NSUInteger)row>=filtered.count) return nil;
+  BBTab *tab=filtered[row];
+  NSTableCellView *cell=[tv makeViewWithIdentifier:@"TSC" owner:nil];
+  if (!cell) {
+    cell=[[NSTableCellView alloc]initWithFrame:NSMakeRect(0,0,456,36)];
+    cell.identifier=@"TSC";
+    NSImageView *iv=[[NSImageView alloc]initWithFrame:NSMakeRect(8,10,16,16)];
+    iv.imageScaling=NSImageScaleProportionallyUpOrDown; iv.tag=1; [cell addSubview:iv];
+    NSTextField *title=[[NSTextField alloc]initWithFrame:NSMakeRect(32,17,410,16)];
+    title.bordered=NO; title.editable=NO; title.selectable=NO; title.backgroundColor=[NSColor clearColor];
+    title.font=[NSFont systemFontOfSize:13 weight:NSFontWeightMedium]; title.lineBreakMode=NSLineBreakByTruncatingTail; title.tag=2; [cell addSubview:title];
+    NSTextField *url=[[NSTextField alloc]initWithFrame:NSMakeRect(32,3,410,13)];
+    url.bordered=NO; url.editable=NO; url.selectable=NO; url.backgroundColor=[NSColor clearColor];
+    url.textColor=[NSColor secondaryLabelColor]; url.font=[NSFont systemFontOfSize:11]; url.lineBreakMode=NSLineBreakByTruncatingMiddle; url.tag=3; [cell addSubview:url];
+  }
+  ((NSImageView *)[cell viewWithTag:1]).image=tab.favicon;
+  ((NSTextField *)[cell viewWithTag:2]).stringValue=tab.title?:@"";
+  NSString *u=tab.suspended?tab.suspendedURL:tab.webView.URL.absoluteString;
+  ((NSTextField *)[cell viewWithTag:3]).stringValue=u?:@"";
+  return cell;
+}
 // ── Camera / Mic permission prompt (with per-host persistence) ───────────────
 - (void)webView:(WKWebView *)wv
     requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
@@ -5919,6 +5999,22 @@ static NSString *kFaviconJS=@"(function(){"
   return nil;
 }
 - (void)controlTextDidChange:(NSNotification *)n {
+  // Tab Search panel intercept — must be first so we return before the address-bar path
+  if ([n.object isKindOfClass:[NSSearchField class]] && ((NSSearchField*)n.object).tag==0xCAFE) {
+    NSString *q=((NSSearchField*)n.object).stringValue.lowercaseString;
+    NSMutableArray *filtered=[NSMutableArray array];
+    for (BBTab *t in self.tabs) {
+      NSString *title=(t.title?:@"").lowercaseString;
+      NSString *u=(t.suspended?t.suspendedURL:t.webView.URL.absoluteString)?:@"";
+      if (!q.length||[title containsString:q]||[u.lowercaseString containsString:q]) [filtered addObject:t];
+    }
+    objc_setAssociatedObject(self,"tabSearchFiltered",filtered,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSPanel *p=(NSPanel *)objc_getAssociatedObject(self,"tabSearchPanel");
+    NSTableView *tv2=(NSTableView *)objc_getAssociatedObject(p,"tv");
+    [tv2 reloadData];
+    if (filtered.count>0) [tv2 selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    return;
+  }
   if (n.object!=self.address) return;
   if (self.suppressInlineCompletion) return;
   NSString *q=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
