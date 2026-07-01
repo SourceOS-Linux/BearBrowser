@@ -677,6 +677,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @property(strong) NSTextField *queryField;
 @property(strong) NSTextField *resultLabel;
 @property(strong) NSButton *prevButton, *nextButton, *closeButton;
+@property(strong) NSButton *caseButton;    // toggles case sensitivity
 @end
 @implementation BBFindBar
 - (instancetype)initWithFrame:(NSRect)f {
@@ -705,6 +706,12 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   di=[di imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:11 weight:NSFontWeightMedium]];
   [di setTemplate:YES]; _nextButton.image=di; _nextButton.imagePosition=NSImageOnly;
   _nextButton.bezelStyle=NSBezelStyleToolbar; _nextButton.bordered=YES; [self addSubview:_nextButton];
+  _caseButton=[[NSButton alloc]initWithFrame:NSMakeRect(x,y,32,26)]; x+=38;
+  _caseButton.title=@"Aa"; _caseButton.font=[NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+  _caseButton.bezelStyle=NSBezelStyleToolbar; _caseButton.bordered=YES;
+  [_caseButton setButtonType:NSButtonTypePushOnPushOff];
+  _caseButton.toolTip=@"Match Case";
+  [self addSubview:_caseButton];
   _resultLabel=[[NSTextField alloc]initWithFrame:NSMakeRect(x,y+2,120,22)];
   _resultLabel.bordered=NO; _resultLabel.editable=NO; _resultLabel.selectable=NO;
   _resultLabel.backgroundColor=[NSColor clearColor]; _resultLabel.font=[NSFont systemFontOfSize:12];
@@ -3625,6 +3632,10 @@ static NSMutableArray *gBBWindowControllers;
   mi(bmM,@"Add to Reading List",@selector(addToReadingList:),@"d",Cmd|Opt);
   [bmM addItemWithTitle:@"Show Reading List…" action:@selector(showReadingList:) keyEquivalent:@""];
   [bmM addItem:[NSMenuItem separatorItem]];
+  [bmM addItemWithTitle:@"Save Tabs as Workspace…" action:@selector(saveTabsAsWorkspace:) keyEquivalent:@""];
+  NSMenuItem *wsRoot=[bmM addItemWithTitle:@"Open Workspace" action:nil keyEquivalent:@""];
+  NSMenu *wsM=[[NSMenu alloc]initWithTitle:@"Workspaces"]; wsM.delegate=self; wsRoot.submenu=wsM;
+  [bmM addItem:[NSMenuItem separatorItem]];
   // No key equivalent here — ⌘⇧B is already bound on View ▸ Always Show Bookmarks Bar.
   [bmM addItemWithTitle:@"Show Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
 
@@ -3857,6 +3868,7 @@ static NSMutableArray *gBBWindowControllers;
   self.findBar.closeButton.target=self; self.findBar.closeButton.action=@selector(closeFind:);
   self.findBar.prevButton.target=self;  self.findBar.prevButton.action=@selector(findPrev:);
   self.findBar.nextButton.target=self;  self.findBar.nextButton.action=@selector(findNext:);
+  self.findBar.caseButton.target=self;  self.findBar.caseButton.action=@selector(findToggleCase:);
   self.findBar.queryField.delegate=self;
   [self.root addSubview:self.findBar];
 
@@ -5550,6 +5562,26 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     completionHandler:nil];
   [self reloadTabBar];
 }
+- (void)ctxToggleMuteSite:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  BBTab *tab=self.tabs[i];
+  NSString *host=(tab.suspended?[NSURL URLWithString:tab.suspendedURL].host:tab.webView.URL.host)?:@"";
+  if (!host.length) { NSBeep(); return; }
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  NSString *key=[NSString stringWithFormat:@"BBMuteSite_%@",host.lowercaseString];
+  BOOL now=![ud boolForKey:key];
+  if (now) [ud setBool:YES forKey:key]; else [ud removeObjectForKey:key];
+  // Apply to every tab currently on this host.
+  for (BBTab *t in self.tabs) {
+    NSString *h=(t.suspended?[NSURL URLWithString:t.suspendedURL].host:t.webView.URL.host)?:@"";
+    if (![h.lowercaseString isEqualToString:host.lowercaseString]) continue;
+    t.muted=now;
+    [t.webView evaluateJavaScript:
+      [NSString stringWithFormat:@"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",now?@"true":@"false"]
+      completionHandler:nil];
+  }
+  [self reloadTabBar];
+}
 - (void)ctxToggleSuspendTab:(id)s {
   NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
   BBTab *tab=self.tabs[i];
@@ -5700,6 +5732,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   };
   add(tab.pinned?@"Unpin Tab":@"Pin Tab", @selector(ctxTogglePinTab:), YES);
   add(tab.muted?@"Unmute Tab":@"Mute Tab", @selector(ctxToggleMuteTab:), YES);
+  {
+    NSString *host=(tab.suspended?[NSURL URLWithString:tab.suspendedURL].host:tab.webView.URL.host)?:@"";
+    BOOL siteMuted=host.length && [[NSUserDefaults standardUserDefaults] boolForKey:[NSString stringWithFormat:@"BBMuteSite_%@",host.lowercaseString]];
+    if (host.length) add(siteMuted?@"Unmute Site":@"Mute Site", @selector(ctxToggleMuteSite:), YES);
+  }
   add(tab.suspended?@"Reload (Wake) Tab":@"Suspend Tab", @selector(ctxToggleSuspendTab:), YES);
   [m addItem:[NSMenuItem separatorItem]];
   // Tab group submenu — list existing groups + "Add to New Group…" + (if grouped) Remove
@@ -6089,6 +6126,46 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   }];
 }
 // ── Reading List ────────────────────────────────────────────────────────────
+// ── Saved workspaces (bookmarked tab sets) ────────────────────────────────────
+- (void)saveTabsAsWorkspace:(id)s {
+  NSMutableArray *urls=[NSMutableArray array];
+  for (BBTab *t in self.tabs) {
+    if (t.isPrivate) continue;
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (u.length && ![self isInternalURL:u]) [urls addObject:u];
+  }
+  if (!urls.count) { NSBeep(); return; }
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Save Workspace";
+  a.informativeText=[NSString stringWithFormat:@"Save %ld open tab%@ as a named workspace you can reopen later.",(long)urls.count,urls.count==1?@"":@"s"];
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.placeholderString=@"Workspace name"; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Save"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *name=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!name.length) return;
+    NSMutableDictionary *ws=[[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"]?:@{} mutableCopy];
+    ws[name]=urls;
+    [[NSUserDefaults standardUserDefaults] setObject:ws forKey:@"BBWorkspaces"];
+  }];
+}
+- (void)openWorkspaceByName:(NSMenuItem *)mi {
+  NSString *name=mi.representedObject; if (!name.length) return;
+  NSDictionary *ws=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"];
+  NSArray *urls=ws[name]; if (![urls isKindOfClass:[NSArray class]]||!urls.count) return;
+  BOOL priv=self.activeTab.isPrivate;
+  for (NSString *u in urls) {
+    NSURL *nu=[NSURL URLWithString:u]; if (!nu) continue;
+    [self addTabPrivate:priv];
+    [self.webView loadRequest:[NSURLRequest requestWithURL:nu]];
+  }
+}
+- (void)deleteWorkspaceByName:(NSMenuItem *)mi {
+  NSString *name=mi.representedObject; if (!name.length) return;
+  NSMutableDictionary *ws=[[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"]?:@{} mutableCopy];
+  [ws removeObjectForKey:name];
+  [[NSUserDefaults standardUserDefaults] setObject:ws forKey:@"BBWorkspaces"];
+}
 - (void)addToReadingList:(id)s {
   NSString *url=self.webView.URL.absoluteString; NSString *title=self.activeTab.title?:url;
   if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
@@ -7309,6 +7386,27 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     }
     return;
   }
+  if ([menu.title isEqualToString:@"Workspaces"]) {
+    [menu removeAllItems];
+    NSDictionary *ws=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"];
+    if (!ws.count) { [menu addItemWithTitle:@"No Saved Workspaces" action:nil keyEquivalent:@""].enabled=NO; return; }
+    NSArray *names=[ws.allKeys sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)];
+    for (NSString *name in names) {
+      NSMenuItem *it=[menu addItemWithTitle:name action:@selector(openWorkspaceByName:) keyEquivalent:@""];
+      it.target=self; it.representedObject=name;
+      NSInteger n=[ws[name] isKindOfClass:[NSArray class]]?[ws[name] count]:0;
+      it.toolTip=[NSString stringWithFormat:@"%ld tab%@",(long)n,n==1?@"":@"s"];
+    }
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *manage=[menu addItemWithTitle:@"Delete Workspace…" action:nil keyEquivalent:@""];
+    NSMenu *rmSub=[[NSMenu alloc]initWithTitle:@""];
+    for (NSString *name in names) {
+      NSMenuItem *ri=[rmSub addItemWithTitle:name action:@selector(deleteWorkspaceByName:) keyEquivalent:@""];
+      ri.target=self; ri.representedObject=name;
+    }
+    manage.submenu=rmSub;
+    return;
+  }
   if ([menu.title isEqualToString:@"Recent Pages"]) {
     [menu removeAllItems];
     // Deduplicate by URL so the same page revisited 5 times doesn't fill the list.
@@ -7791,7 +7889,8 @@ static NSString *kFaviconJS=@"(function(){"
 - (void)doFind:(BOOL)back {
   NSString *q=self.findBar.queryField.stringValue; if(!q.length){[self clearFind];return;}
   WKFindConfiguration *cfg=[[WKFindConfiguration alloc]init];
-  cfg.backwards=back; cfg.wraps=YES; cfg.caseSensitive=NO;
+  cfg.backwards=back; cfg.wraps=YES;
+  cfg.caseSensitive=(self.findBar.caseButton.state==NSControlStateValueOn);
   [self.webView findString:q withConfiguration:cfg completionHandler:^(WKFindResult *r){
     if (!r.matchFound) {
       self.findBar.resultLabel.stringValue=@"Not found";
@@ -7805,11 +7904,13 @@ static NSString *kFaviconJS=@"(function(){"
 // WKFindResult exposes no match count, so count occurrences in the page text.
 // Approximate (visible text only; excludes inputs/shadow DOM) but Chrome-like.
 - (void)updateFindCount:(NSString *)q {
+  BOOL cs=(self.findBar.caseButton.state==NSControlStateValueOn);
   NSString *js=[NSString stringWithFormat:
     @"(function(){try{var t=(document.body&&document.body.innerText)||'';"
-    @"var q=%@;if(!q)return 0;var n=0,i=0,ql=q.toLowerCase(),tl=t.toLowerCase();"
+    @"var q=%@;if(!q)return 0;var n=0,i=0,%@;"
     @"while((i=tl.indexOf(ql,i))!==-1){n++;i+=ql.length;}return n;}catch(e){return -1;}})();",
-    [self jsStringLiteral:q]];
+    [self jsStringLiteral:q],
+    cs?@"ql=q,tl=t":@"ql=q.toLowerCase(),tl=t.toLowerCase()"];
   [self.webView evaluateJavaScript:js completionHandler:^(id r,NSError *e){
     NSInteger n=[r isKindOfClass:[NSNumber class]]?[r integerValue]:-1;
     if (n<0) { self.findBar.resultLabel.stringValue=@""; return; }
@@ -7818,6 +7919,7 @@ static NSString *kFaviconJS=@"(function(){"
 }
 - (void)findNext:(id)s { [self doFind:NO]; }
 - (void)findPrev:(id)s { [self doFind:YES]; }
+- (void)findToggleCase:(id)s { if (self.findBar.queryField.stringValue.length) [self doFind:NO]; }
 - (void)clearFind {
   WKFindConfiguration *cfg=[[WKFindConfiguration alloc]init];
   [self.webView findString:@"" withConfiguration:cfg completionHandler:^(WKFindResult *r){}];
@@ -8392,6 +8494,11 @@ static const NSInteger kDialogAbuseThreshold = 3;
   u.rate=AVSpeechUtteranceDefaultSpeechRate;
   [[BBVoice shared].synth speakUtterance:u];
 }
+- (void)contextCopyPageTitle:(NSMenuItem *)item {
+  NSString *t=self.activeTab.title?:@""; if (!t.length) t=self.webView.URL.absoluteString?:@""; if (!t.length) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:t forType:NSPasteboardTypeString];
+}
 - (void)contextEmailPage:(NSMenuItem *)item {
   NSURL *url=self.webView.URL; if (!url) return;
   NSString *subj=[(self.activeTab.title.length?self.activeTab.title:url.host?:@"BearBrowser") stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
@@ -8477,6 +8584,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
         add(@"Reload",@selector(reloadOrStop:),nil);
         [menu addItem:[NSMenuItem separatorItem]];
         add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
+        add(@"Copy Page Title",@selector(contextCopyPageTitle:),nil);
         add(@"Email Link to Page…",@selector(contextEmailPage:),nil);
         add(@"Add Page to Research Session…",@selector(addCurrentTabToSession:),nil);
         add(@"Add to Reading List",@selector(addToReadingList:),nil);
@@ -8550,6 +8658,11 @@ static const NSInteger kDialogAbuseThreshold = 3;
   tab.title=wv.title.length?wv.title:@"New Tab";
   [self fetchFaviconForTab:tab];
   // Re-apply mute across page navigations so a muted tab stays muted on a fresh URL.
+  // Persistent per-site mute (BBMuteSite_<host>) also honored here.
+  NSString *hostForMute=wv.URL.host.lowercaseString?:@"";
+  BOOL siteMuted=hostForMute.length && [[NSUserDefaults standardUserDefaults] boolForKey:
+    [NSString stringWithFormat:@"BBMuteSite_%@",hostForMute]];
+  if (siteMuted && !tab.muted) { tab.muted=YES; [self reloadTabBar]; }
   if (tab.muted) [wv evaluateJavaScript:
     @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=true;})"
     completionHandler:nil];
