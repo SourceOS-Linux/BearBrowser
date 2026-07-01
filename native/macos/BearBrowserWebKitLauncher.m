@@ -912,6 +912,8 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 - (void)addTitle:(NSString *)t url:(NSString *)u folder:(NSString *)f;
 - (NSArray<NSString *> *)folders;
 - (void)setFolder:(NSString *)f forURL:(NSString *)u;
+- (void)renameFolder:(NSString *)from to:(NSString *)to;
+- (void)removeFolderAndBookmarks:(NSString *)folder;
 - (void)removeAtIndex:(NSInteger)i;
 - (void)removeURL:(NSString *)u;
 - (BOOL)isBookmarked:(NSString *)u;
@@ -945,6 +947,18 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 }
 - (void)setFolder:(NSString *)f forURL:(NSString *)u {
   for (BBBookmark *b in self.items) if ([b.urlString isEqualToString:u]) b.folder=f?:@"";
+  [self save];
+}
+- (void)renameFolder:(NSString *)from to:(NSString *)to {
+  if (!from.length) return;
+  for (BBBookmark *b in self.items) if ([b.folder isEqualToString:from]) b.folder=to?:@"";
+  [self save];
+}
+- (void)removeFolderAndBookmarks:(NSString *)folder {
+  if (!folder.length) return;
+  NSMutableIndexSet *idx=[NSMutableIndexSet indexSet];
+  for (NSInteger i=0;i<(NSInteger)self.items.count;i++) if ([self.items[i].folder isEqualToString:folder]) [idx addIndex:(NSUInteger)i];
+  [self.items removeObjectsAtIndexes:idx];
   [self save];
 }
 - (void)removeAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)self.items.count){[self.items removeObjectAtIndex:i];[self save];} }
@@ -3685,6 +3699,8 @@ static NSMutableArray *gBBWindowControllers;
   [bmM addItemWithTitle:@"Show Reading List…" action:@selector(showReadingList:) keyEquivalent:@""];
   [bmM addItem:[NSMenuItem separatorItem]];
   [bmM addItemWithTitle:@"Import Bookmarks (HTML)…" action:@selector(importBookmarksHTML:) keyEquivalent:@""];
+  [bmM addItemWithTitle:@"Import from Chrome" action:@selector(importBookmarksFromChrome:) keyEquivalent:@""];
+  [bmM addItemWithTitle:@"Import from Safari" action:@selector(importBookmarksFromSafari:) keyEquivalent:@""];
   [bmM addItemWithTitle:@"Export Bookmarks (HTML)…" action:@selector(exportBookmarksHTML:) keyEquivalent:@""];
   [bmM addItem:[NSMenuItem separatorItem]];
   [bmM addItemWithTitle:@"Save Tabs as Workspace…" action:@selector(saveTabsAsWorkspace:) keyEquivalent:@""];
@@ -6263,6 +6279,73 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     [self showToast:@"Bookmarks exported"];
   }];
 }
+- (NSInteger)importChromeBookmarkNode:(NSDictionary *)node folder:(NSString *)folder {
+  if (![node isKindOfClass:[NSDictionary class]]) return 0;
+  NSString *type=node[@"type"];
+  NSInteger added=0;
+  if ([type isEqualToString:@"url"]) {
+    NSString *u=node[@"url"], *t=node[@"name"];
+    if ([u isKindOfClass:[NSString class]] && u.length && ![[BBBookmarksStore shared] isBookmarked:u]) {
+      [[BBBookmarksStore shared] addTitle:t?:u url:u folder:folder];
+      added=1;
+    }
+  } else if ([type isEqualToString:@"folder"]) {
+    NSString *name=node[@"name"];
+    NSArray *children=node[@"children"];
+    // Flatten one level of nesting to fit our single-level model.
+    NSString *sub=[name isKindOfClass:[NSString class]]?name:folder;
+    for (NSDictionary *c in children) added+=[self importChromeBookmarkNode:c folder:sub];
+  }
+  return added;
+}
+- (void)importBookmarksFromChrome:(id)s {
+  NSString *path=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Google/Chrome/Default/Bookmarks"];
+  NSData *d=[NSData dataWithContentsOfFile:path];
+  if (!d.length) { [self showToast:@"No Chrome bookmarks file found"]; return; }
+  NSDictionary *root=[NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+  NSDictionary *roots=root[@"roots"]; if (![roots isKindOfClass:[NSDictionary class]]) { [self showToast:@"Unrecognised Chrome format"]; return; }
+  NSInteger added=0;
+  for (NSString *k in @[@"bookmark_bar",@"other",@"synced"]) {
+    NSDictionary *sec=roots[k]; if (![sec isKindOfClass:[NSDictionary class]]) continue;
+    added+=[self importChromeBookmarkNode:sec folder:@""];
+  }
+  [self reloadBookmarksBar];
+  [self showToast:[NSString stringWithFormat:@"Imported %ld from Chrome",(long)added]];
+}
+- (void)importBookmarksFromSafari:(id)s {
+  // Safari's Bookmarks.plist is protected by TCC (Full Disk Access) on modern
+  // macOS. Attempt to read; on permission error, tell the user to use HTML export.
+  NSString *path=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Safari/Bookmarks.plist"];
+  NSError *err=nil;
+  NSData *d=[NSData dataWithContentsOfFile:path options:0 error:&err];
+  if (!d.length) {
+    [self showToast:@"Safari bookmarks locked — File ▸ Export Bookmarks in Safari, then Import HTML"];
+    return;
+  }
+  NSDictionary *plist=[NSPropertyListSerialization propertyListWithData:d options:0 format:nil error:nil];
+  if (![plist isKindOfClass:[NSDictionary class]]) { [self showToast:@"Unrecognised Safari format"]; return; }
+  NSInteger added=[self importSafariNode:plist folder:@""];
+  [self reloadBookmarksBar];
+  [self showToast:[NSString stringWithFormat:@"Imported %ld from Safari",(long)added]];
+}
+- (NSInteger)importSafariNode:(NSDictionary *)node folder:(NSString *)folder {
+  if (![node isKindOfClass:[NSDictionary class]]) return 0;
+  NSString *type=node[@"WebBookmarkType"];
+  NSInteger added=0;
+  if ([type isEqualToString:@"WebBookmarkTypeLeaf"]) {
+    NSString *u=node[@"URLString"];
+    NSDictionary *uri=node[@"URIDictionary"];
+    NSString *t=[uri isKindOfClass:[NSDictionary class]]?uri[@"title"]:nil;
+    if (u.length && ![[BBBookmarksStore shared] isBookmarked:u]) {
+      [[BBBookmarksStore shared] addTitle:t?:u url:u folder:folder]; added=1;
+    }
+  } else if ([type isEqualToString:@"WebBookmarkTypeList"]) {
+    NSString *name=node[@"Title"];
+    NSString *sub=[name isKindOfClass:[NSString class]]&&name.length?name:folder;
+    for (NSDictionary *c in node[@"Children"]) added+=[self importSafariNode:c folder:sub];
+  }
+  return added;
+}
 - (void)importBookmarksHTML:(id)s {
   NSOpenPanel *op=[NSOpenPanel openPanel];
   op.allowedFileTypes=@[@"html",@"htm"];
@@ -6339,6 +6422,30 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [ws removeObjectForKey:name];
   [[NSUserDefaults standardUserDefaults] setObject:ws forKey:@"BBWorkspaces"];
 }
+- (void)exportReadingList:(id)s {
+  NSArray<BBReadingItem *> *items=[BBReadingList shared].items;
+  if (!items.count) { NSBeep(); return; }
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=@"bearbrowser-reading-list.html";
+  sp.allowedFileTypes=@[@"html"];
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!sp.URL) return;
+    NSMutableString *html=[NSMutableString stringWithString:
+      @"<!doctype html><meta charset=utf-8><title>Reading List</title>"
+       "<style>body{font:14px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;}"
+       "li{margin:.4em 0}a{text-decoration:none;color:#0a58ca}a:hover{text-decoration:underline}.read{color:#888;text-decoration:line-through}</style>"
+       "<h1>Reading List</h1><ul>\n"];
+    for (BBReadingItem *it in items) {
+      [html appendFormat:@"<li class=\"%@\"><a href=\"%@\">%@</a></li>\n",
+        it.read?@"read":@"",
+        [self htmlEscape:it.urlString],
+        [self htmlEscape:it.title.length?it.title:it.urlString]];
+    }
+    [html appendString:@"</ul>"];
+    [html writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self showToast:@"Reading list exported"];
+  }];
+}
 - (void)addToReadingList:(id)s {
   NSString *url=self.webView.URL.absoluteString; NSString *title=self.activeTab.title?:url;
   if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
@@ -6376,6 +6483,9 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(254,10,90,30)];
   rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
   rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *exp=[[NSButton alloc]initWithFrame:NSMakeRect(350,10,90,30)];
+  exp.title=@"Export…"; exp.bezelStyle=NSBezelStyleRounded; exp.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  exp.target=self; exp.action=@selector(exportReadingList:); [cv addSubview:exp];
   NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
   done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
   done.target=rw; done.action=@selector(performClose:); [cv addSubview:done];
@@ -6447,6 +6557,17 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     btn.title=f; btn.font=[NSFont systemFontOfSize:11]; btn.bezelStyle=NSBezelStyleRoundRect;
     btn.target=self; btn.action=@selector(bookmarkFolderClicked:);
     objc_setAssociatedObject(btn,"BBFolderName",f,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSMenu *fm=[[NSMenu alloc]initWithTitle:@""];
+    NSMenuItem *oa=[fm addItemWithTitle:@"Open All in New Tabs" action:@selector(bookmarkFolderOpenAll:) keyEquivalent:@""];
+    oa.target=self; oa.representedObject=f;
+    [fm addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *rn=[fm addItemWithTitle:@"Rename Folder…" action:@selector(bookmarkFolderRename:) keyEquivalent:@""];
+    rn.target=self; rn.representedObject=f;
+    NSMenuItem *dl=[fm addItemWithTitle:@"Delete Folder (remove bookmarks)" action:@selector(bookmarkFolderDelete:) keyEquivalent:@""];
+    dl.target=self; dl.representedObject=f;
+    NSMenuItem *ur=[fm addItemWithTitle:@"Unfile Folder (send to root)" action:@selector(bookmarkFolderUnfile:) keyEquivalent:@""];
+    ur.target=self; ur.representedObject=f;
+    btn.menu=fm;
     [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+10,24);
     if (x+btn.frame.size.width > barW-overflowReserve) { [overflowFolders addObject:f]; continue; }
     [self.bookmarksBar addSubview:btn];
@@ -6461,7 +6582,9 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     btn.title=b.title.length?b.title:b.urlString;
     btn.font=[NSFont systemFontOfSize:11]; btn.bezelStyle=NSBezelStyleRoundRect;
     btn.target=self; btn.action=@selector(bookmarkButtonClicked:);
-    [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+8,24);
+    NSImage *fav=[self faviconForBookmarkURL:b.urlString sync:NO];
+    if (fav) { [fav setSize:NSMakeSize(14,14)]; btn.image=fav; btn.imagePosition=NSImageLeft; }
+    [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+(fav?12:8),24);
     btn.toolTip=b.urlString;
     // Build the right-click menu eagerly so NSButton's built-in
     // contextual-menu trigger (right-click / control-click) picks it up.
@@ -6495,6 +6618,42 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     more.tag=shownRoot;
     [self.bookmarksBar addSubview:more];
   }
+}
+- (void)bookmarkFolderOpenAll:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  BOOL priv=self.activeTab.isPrivate;
+  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+    if (![b.folder isEqualToString:folder]) continue;
+    NSURL *u=[NSURL URLWithString:b.urlString]; if (!u) continue;
+    [self addTabPrivate:priv];
+    [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  }
+}
+- (void)bookmarkFolderRename:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Rename Folder";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.stringValue=folder; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Rename"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSString *newName=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (!newName.length||[newName isEqualToString:folder]) return;
+  [[BBBookmarksStore shared] renameFolder:folder to:newName];
+  [self reloadBookmarksBar];
+}
+- (void)bookmarkFolderDelete:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Delete folder “%@” and its bookmarks?",folder];
+  [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  [[BBBookmarksStore shared] removeFolderAndBookmarks:folder];
+  [self reloadBookmarksBar]; [self updateStarButton];
+}
+- (void)bookmarkFolderUnfile:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  [[BBBookmarksStore shared] renameFolder:folder to:@""]; // "" = root
+  [self reloadBookmarksBar];
 }
 - (void)bookmarkFolderClicked:(NSButton *)btn {
   NSString *folder=objc_getAssociatedObject(btn,"BBFolderName");
@@ -8062,6 +8221,40 @@ static NSString *kFaviconJS=@"(function(){"
   @"return (location.origin&&location.origin!=='null')?location.origin+'/favicon.ico':'';"
   @"})()";
 
+// Shared, host-keyed favicon cache used by the bookmarks bar / manager.
++ (NSCache<NSString *,NSImage *> *)faviconCache {
+  static NSCache *c; static dispatch_once_t o; dispatch_once(&o,^{
+    c=[NSCache new]; c.countLimit=200;
+  });
+  return c;
+}
+- (NSImage *)faviconForBookmarkURL:(NSString *)urlStr sync:(BOOL)sync {
+  NSURL *u=[NSURL URLWithString:urlStr]; if (!u.host.length) return nil;
+  NSString *host=u.host.lowercaseString;
+  NSImage *hit=[[BBDelegate faviconCache] objectForKey:host];
+  if (hit) return hit;
+  // Look for a cached tab favicon for this host so we don't refetch.
+  for (BBTab *t in self.tabs) {
+    NSString *th=t.webView.URL.host.lowercaseString?:@"";
+    if ([th isEqualToString:host] && t.favicon) {
+      [[BBDelegate faviconCache] setObject:t.favicon forKey:host];
+      return t.favicon;
+    }
+  }
+  if (sync) return nil;
+  // Async fetch /favicon.ico; UI can re-ask on reload.
+  NSURL *fav=[NSURL URLWithString:[NSString stringWithFormat:@"https://%@/favicon.ico",host]];
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+    NSData *d=[NSData dataWithContentsOfURL:fav];
+    NSImage *img=d?[[NSImage alloc]initWithData:d]:nil;
+    if (!img) return;
+    dispatch_async(dispatch_get_main_queue(),^{
+      [[BBDelegate faviconCache] setObject:img forKey:host];
+      if (self.bookmarksBarVisible) [self reloadBookmarksBar];
+    });
+  });
+  return nil;
+}
 - (void)fetchFaviconForTab:(BBTab *)tab {
   WKWebView *wv=tab.webView;
   [wv evaluateJavaScript:kFaviconJS completionHandler:^(id result,NSError *e) {
