@@ -1365,6 +1365,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @interface BBDownloadItem : NSObject
 @property(copy)   NSString *filename;
 @property(strong) NSURL    *destURL;
+@property(strong) NSURL    *sourceURL; // original URL the download came from
 @property(assign) long long  totalBytes, writtenBytes;
 @property(assign) BBDownloadState state;
 @property(copy)   NSString *errorMessage;
@@ -1521,6 +1522,20 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   BBDownloadRowView *row=[[BBDownloadRowView alloc]initWithFrame:NSZeroRect]; row.wantsLayer=YES;
   row.layer.backgroundColor=[NSColor controlBackgroundColor].CGColor;
   if (item.state==BBDownloadStateDone) row.fileURL=item.destURL;
+  // Right-click context menu on the row.
+  NSMenu *rm=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *cu=[rm addItemWithTitle:@"Copy Source URL" action:@selector(dlCopySourceURL:) keyEquivalent:@""];
+  cu.target=self; cu.representedObject=item.sourceURL;
+  NSMenuItem *rv=[rm addItemWithTitle:@"Show in Finder" action:@selector(dlContextReveal:) keyEquivalent:@""];
+  rv.target=self; rv.representedObject=item.destURL; rv.enabled=(item.destURL!=nil);
+  NSMenuItem *op=[rm addItemWithTitle:@"Open" action:@selector(dlContextOpen:) keyEquivalent:@""];
+  op.target=self; op.representedObject=item.destURL; op.enabled=(item.state==BBDownloadStateDone);
+  [rm addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *rf=[rm addItemWithTitle:@"Remove from List" action:@selector(dlRemoveFromList:) keyEquivalent:@""];
+  rf.target=self; rf.representedObject=item;
+  NSMenuItem *df=[rm addItemWithTitle:@"Delete File" action:@selector(dlDeleteFile:) keyEquivalent:@""];
+  df.target=self; df.representedObject=item; df.enabled=(item.destURL!=nil);
+  row.menu=rm;
   // Filename
   NSTextField *name=[[NSTextField alloc]initWithFrame:NSZeroRect];
   name.translatesAutoresizingMaskIntoConstraints=NO;
@@ -3881,6 +3896,11 @@ static NSMutableArray *gBBWindowControllers;
   self.homeButton   =[self navBtn:@"house.fill"      tip:@"Home"    sel:@selector(goHome:)       x:x y:btnY];
   if ([[NSUserDefaults standardUserDefaults] stringForKey:@"BBHomepage"].length) x+=34;
   else self.homeButton.hidden=YES;
+  { NSMenu *hm=[[NSMenu alloc]initWithTitle:@""];
+    [hm addItemWithTitle:@"Go Home" action:@selector(goHome:) keyEquivalent:@""].target=self;
+    [hm addItemWithTitle:@"Set Current Page as Home" action:@selector(setCurrentPageAsHome:) keyEquivalent:@""].target=self;
+    [hm addItemWithTitle:@"Change Homepage in Settings…" action:@selector(openSearchPreferences:) keyEquivalent:@""].target=self;
+    self.homeButton.menu=hm; }
   self.backButton.enabled=NO; self.forwardButton.enabled=NO;
   for (NSButton *b in @[self.backButton,self.forwardButton,self.reloadButton,self.homeButton])
     [self.toolbarBg addSubview:b];
@@ -4337,6 +4357,7 @@ static NSMutableArray *gBBWindowControllers;
   // values to native; native asks "Save?" then writes to Keychain. On DOMContent
   // we post the host so native can hand back stored credentials for offer-to-fill.
   [config.userContentController addScriptMessageHandler:self name:@"loginform"];
+  [config.userContentController addScriptMessageHandler:self name:@"ntpHide"];
   NSString *autofillHook=
     @"(function(){'use strict';"
     @"function post(name,body){try{window.webkit.messageHandlers.loginform.postMessage({k:name,b:body});}catch(e){}}"
@@ -5988,10 +6009,12 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 // Top sites by visit frequency for the New Tab Page (non-private history only).
 - (NSArray<NSDictionary*> *)topSitesLimit:(NSInteger)n {
+  NSSet *hidden=[NSSet setWithArray:([[NSUserDefaults standardUserDefaults] arrayForKey:@"BBHiddenTopSites"]?:@[])];
   NSMutableDictionary<NSString*,NSMutableDictionary*> *byHost=[NSMutableDictionary dictionary];
   for (BBHistoryEntry *e in [BBHistoryStore shared].entries) {
     NSURL *u=[NSURL URLWithString:e.urlString]; NSString *host=u.host; if(!host.length) continue;
     if([host hasPrefix:@"www."]) host=[host substringFromIndex:4];
+    if ([hidden containsObject:host]) continue;
     NSMutableDictionary *d=byHost[host];
     if(!d){ d=[@{@"count":@0} mutableCopy]; byHost[host]=d; }
     d[@"count"]=@([d[@"count"] integerValue]+1);
@@ -6015,16 +6038,24 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     // from sites the user has already visited, same as Chrome's top-sites favicons behaviour).
     NSString *faviconSrc=[NSString stringWithFormat:@"https://%@/favicon.ico",[self htmlEscape:host]];
     [html appendFormat:
-      @"<a class=\"shortcut\" href=\"%@\">"
+      @"<a class=\"shortcut\" href=\"%@\" data-host=\"%@\" style=\"position:relative\">"
+      @"<button type=\"button\" class=\"shortcut-x\" title=\"Remove\" onclick=\"event.preventDefault();event.stopPropagation();"
+      @"try{window.webkit.messageHandlers.ntpHide.postMessage(this.parentNode.getAttribute('data-host'));}catch(e){}"
+      @"this.parentNode.style.display='none';return false;\" "
+      @"style=\"position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%%;"
+      @"background:rgba(0,0,0,.55);color:#fff;border:none;cursor:pointer;font-size:11px;line-height:1;"
+      @"display:none;align-items:center;justify-content:center\">×</button>"
       @"<div class=\"shortcut-icon\" style=\"position:relative;overflow:hidden\">"
       @"<img src=\"%@\" width=\"32\" height=\"32\" style=\"object-fit:contain\" "
       @"onerror=\"this.style.display='none';this.nextElementSibling.style.display='flex'\">"
       @"<span style=\"display:none;width:100%%;height:100%%;align-items:center;justify-content:center;font-size:24px\">%@</span>"
       @"</div><span class=\"shortcut-label\">%@</span></a>",
-      [self htmlEscape:url], faviconSrc, [self htmlEscape:letter], [self htmlEscape:host]];
+      [self htmlEscape:url], [self htmlEscape:host], faviconSrc, [self htmlEscape:letter], [self htmlEscape:host]];
   }
   NSString *js=[NSString stringWithFormat:
-    @"(function(){var g=document.querySelector('.grid'); if(g) g.innerHTML=%@;})();",
+    @"(function(){var g=document.querySelector('.grid');if(!g)return;g.innerHTML=%@;"
+    @"if(!document.getElementById('bb-x-style')){var s=document.createElement('style');s.id='bb-x-style';"
+    @"s.textContent='.shortcut:hover .shortcut-x{display:flex!important}';document.head.appendChild(s);}})();",
     [self jsStringLiteral:html]];
   [wv evaluateJavaScript:js completionHandler:nil];
 }
@@ -6190,16 +6221,82 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   free(buf);
   return out;
 }
+- (NSString *)generatePassphrase:(NSInteger)words {
+  // 200-word EFF short-ish list; each word ≥ 4.5 bits of entropy. ~52 bits at 5 words.
+  static NSArray *lst=nil; static dispatch_once_t o; dispatch_once(&o,^{
+    lst=@[@"acorn",@"amber",@"anchor",@"apple",@"arrow",@"aspen",@"atlas",@"august",@"aurora",@"badge",
+          @"basil",@"beach",@"bison",@"bloom",@"boat",@"bold",@"brave",@"brick",@"bright",@"brook",
+          @"canvas",@"carbon",@"castle",@"cedar",@"chalk",@"cherry",@"cloud",@"clover",@"coast",@"cobalt",
+          @"comet",@"copper",@"coral",@"cosmos",@"crane",@"crest",@"crisp",@"cyan",@"daisy",@"dawn",
+          @"delta",@"denim",@"desert",@"diesel",@"dolphin",@"dome",@"drift",@"dune",@"echo",@"ember",
+          @"emerald",@"epic",@"ether",@"fable",@"falcon",@"fern",@"finch",@"flame",@"flint",@"forest",
+          @"fossil",@"frost",@"garnet",@"giant",@"glade",@"glass",@"glow",@"gold",@"gorge",@"grain",
+          @"grand",@"granite",@"grasp",@"grove",@"gulf",@"harbor",@"harvest",@"hawk",@"haze",@"heron",
+          @"hollow",@"honey",@"horizon",@"ivory",@"jade",@"jasper",@"jubilee",@"kite",@"knot",@"lagoon",
+          @"laurel",@"ledger",@"lemon",@"lily",@"linen",@"lion",@"lotus",@"lumen",@"lynx",@"maple",
+          @"marble",@"marine",@"meadow",@"melody",@"metal",@"midnight",@"mint",@"mist",@"moon",@"moss",
+          @"mountain",@"nectar",@"neon",@"nimbus",@"nova",@"oasis",@"ocean",@"olive",@"onyx",@"opal",
+          @"orbit",@"orchard",@"otter",@"oxide",@"pearl",@"pebble",@"phoenix",@"pine",@"pixel",@"planet",
+          @"plum",@"pond",@"poppy",@"prism",@"pulse",@"quartz",@"quill",@"quilt",@"quorum",@"rain",
+          @"ranger",@"raven",@"reef",@"relay",@"river",@"rocket",@"rune",@"sable",@"saffron",@"salt",
+          @"sapphire",@"scarlet",@"scout",@"seal",@"sequoia",@"shadow",@"shore",@"silver",@"skiff",@"sky",
+          @"slate",@"solar",@"solstice",@"sonic",@"sparrow",@"spire",@"spring",@"spruce",@"stellar",@"stone",
+          @"storm",@"summit",@"swan",@"sylph",@"talon",@"terra",@"thistle",@"thunder",@"tide",@"tiger",
+          @"timber",@"topaz",@"trellis",@"trout",@"tulip",@"tundra",@"turtle",@"umber",@"valley",@"vector",
+          @"velvet",@"venue",@"verde",@"violet",@"vortex",@"walnut",@"wander",@"warm",@"weave",@"whale",
+          @"willow",@"wind",@"wisp",@"wolf",@"woodland",@"wren",@"yarrow",@"yield",@"zenith",@"zephyr"];
+  });
+  if (words<3) words=5;
+  uint8_t *buf=(uint8_t *)malloc((size_t)words*2); if (!buf) return @"";
+  if (SecRandomCopyBytes(kSecRandomDefault,(size_t)words*2,buf)!=errSecSuccess) { free(buf); return @""; }
+  NSMutableArray *pick=[NSMutableArray array];
+  NSUInteger n=lst.count;
+  for (NSInteger i=0;i<words;i++) {
+    uint16_t idx=((uint16_t)buf[i*2]<<8)|buf[i*2+1];
+    [pick addObject:lst[idx%n]];
+  }
+  free(buf);
+  return [pick componentsJoinedByString:@"-"];
+}
+// Rough entropy estimate: bits = log2(charset^length). Buckets: <60 weak, <80 fair, ≥80 strong.
+- (NSString *)passwordStrengthLabel:(NSString *)pw {
+  NSInteger cs=0;
+  BOOL lo=NO,up=NO,dg=NO,sy=NO;
+  for (NSUInteger i=0;i<pw.length;i++) {
+    unichar c=[pw characterAtIndex:i];
+    if (c>='a'&&c<='z') lo=YES;
+    else if (c>='A'&&c<='Z') up=YES;
+    else if (c>='0'&&c<='9') dg=YES;
+    else sy=YES;
+  }
+  if (lo) cs+=26; if (up) cs+=26; if (dg) cs+=10; if (sy) cs+=32;
+  if (cs<2) cs=26;
+  double bits=(double)pw.length*log2((double)cs);
+  if (bits>=100) return @"Excellent";
+  if (bits>=80)  return @"Strong";
+  if (bits>=60)  return @"Fair";
+  return @"Weak";
+}
 - (void)offerGenPassForHost:(NSString *)host webView:(WKWebView *)wv {
   if (!wv) return;
-  NSString *pw=[self generateStrongPassword:20];
+  BOOL prefPassphrase=[[NSUserDefaults standardUserDefaults] boolForKey:@"BBGenPassphrase"];
+  NSString *pw=prefPassphrase?[self generatePassphrase:5]:[self generateStrongPassword:20];
   if (!pw.length) return;
   NSAlert *a=[[NSAlert alloc]init];
   a.messageText=@"Use a strong password?";
-  a.informativeText=[NSString stringWithFormat:@"%@\n\nBearBrowser will fill this 20-char password and offer to save it on submit.",pw];
-  [a addButtonWithTitle:@"Use Strong Password"];
+  a.informativeText=[NSString stringWithFormat:@"%@\n\nStrength: %@\nBearBrowser will fill this and offer to save on submit.",
+    pw, [self passwordStrengthLabel:pw]];
+  [a addButtonWithTitle:@"Use Password"];
+  [a addButtonWithTitle:prefPassphrase?@"Random Chars Instead":@"Passphrase Instead"];
   [a addButtonWithTitle:@"Not now"];
   [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc==NSAlertSecondButtonReturn) {
+      // Toggle preference and re-offer with the alternate style.
+      [[NSUserDefaults standardUserDefaults] setBool:!prefPassphrase forKey:@"BBGenPassphrase"];
+      self.activeTab.genpassOffered=NO;
+      [self offerGenPassForHost:host webView:wv];
+      return;
+    }
     if (rc!=NSAlertFirstButtonReturn) return;
     NSString *js=[NSString stringWithFormat:
       @"if(typeof window.__bbApplyGenPass==='function')window.__bbApplyGenPass(%@);",
@@ -6862,6 +6959,13 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:all modifiedSince:[NSDate distantPast] completionHandler:^{}];
   }];
 }
+- (void)setCurrentPageAsHome:(id)s {
+  NSURL *u=self.webView.URL;
+  if (!u||[self isInternalURL:u.absoluteString]) { [self showToast:@"Cannot use this page as home"]; return; }
+  [[NSUserDefaults standardUserDefaults] setObject:u.absoluteString forKey:@"BBHomepage"];
+  for (BBDelegate *w in gBBWindowControllers) w.homeButton.hidden=NO;
+  [self showToast:[NSString stringWithFormat:@"Home set to %@",u.host?:u.absoluteString]];
+}
 - (void)goHome:(id)s {
   NSString *hp=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBHomepage"];
   if (hp.length) {
@@ -7076,6 +7180,33 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
+- (void)dlContextOpen:(NSMenuItem *)mi {
+  NSURL *u=mi.representedObject; if ([u isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] openURL:u];
+}
+- (void)dlContextReveal:(NSMenuItem *)mi {
+  NSURL *u=mi.representedObject; if ([u isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[u]];
+}
+- (void)dlCopySourceURL:(NSMenuItem *)mi {
+  NSURL *u=mi.representedObject; if (![u isKindOfClass:[NSURL class]]) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:u.absoluteString forType:NSPasteboardTypeString];
+}
+- (void)dlRemoveFromList:(NSMenuItem *)mi {
+  BBDownloadItem *item=mi.representedObject; if (!item) return;
+  [self.downloadPanel.items removeObject:item];
+  [self.downloadPanel refresh];
+}
+- (void)dlDeleteFile:(NSMenuItem *)mi {
+  BBDownloadItem *item=mi.representedObject; if (!item) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Delete “%@”?",item.filename?:@"file"];
+  a.informativeText=@"The file will be moved to the Trash and removed from the download list.";
+  [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  if (item.destURL) [[NSFileManager defaultManager] trashItemAtURL:item.destURL resultingItemURL:nil error:nil];
+  [self.downloadPanel.items removeObject:item];
+  [self.downloadPanel refresh];
+}
 - (void)toggleDownloadPanel:(id)s {
   self.downloadPanel.hidden=!self.downloadPanel.hidden;
 }
@@ -8077,6 +8208,12 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
       tab.isPlayingAudio=playing;
       dispatch_async(dispatch_get_main_queue(),^{ [self reloadTabBar]; });
     }
+  } else if ([msg.name isEqualToString:@"ntpHide"]) {
+    NSString *host=[msg.body isKindOfClass:[NSString class]]?(NSString*)msg.body:@"";
+    if (!host.length) return;
+    NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+    NSMutableArray *hidden=[[ud arrayForKey:@"BBHiddenTopSites"]?:@[] mutableCopy];
+    if (![hidden containsObject:host]) { [hidden addObject:host]; [ud setObject:hidden forKey:@"BBHiddenTopSites"]; }
   } else if ([msg.name isEqualToString:@"loginform"]) {
     NSDictionary *m=[msg.body isKindOfClass:[NSDictionary class]]?(NSDictionary *)msg.body:@{};
     NSString *kind=m[@"k"]; NSDictionary *body=m[@"b"]; WKWebView *wv=msg.webView;
@@ -9433,6 +9570,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
   // Register in download panel
   BBDownloadItem *item=[BBDownloadItem new];
   item.filename=dest.lastPathComponent; item.destURL=dest; item.download=download;
+  item.sourceURL=response.URL?:download.originalRequest.URL;
   item.state=BBDownloadStateActive; item.startedAt=[NSDate date];
   item.totalBytes=response.expectedContentLength>0?response.expectedContentLength:0;
   dispatch_async(dispatch_get_main_queue(),^{ [self.downloadPanel addItem:item]; });
