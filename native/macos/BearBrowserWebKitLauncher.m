@@ -3942,6 +3942,12 @@ static NSMutableArray *gBBWindowControllers;
   self.backButton   =[self navBtn:@"chevron.left"    tip:@"Back"    sel:@selector(goBack:)       x:x y:btnY]; x+=34;
   self.forwardButton=[self navBtn:@"chevron.right"   tip:@"Forward" sel:@selector(goForward:)    x:x y:btnY]; x+=34;
   self.reloadButton =[self navBtn:@"arrow.clockwise" tip:@"Reload"  sel:@selector(reloadOrStop:) x:x y:btnY]; x+=40;
+  { NSMenu *rm=[[NSMenu alloc]initWithTitle:@""];
+    [rm addItemWithTitle:@"Normal Reload" action:@selector(reloadOrStop:) keyEquivalent:@""].target=self;
+    [rm addItemWithTitle:@"Hard Reload (bypass cache)" action:@selector(hardReload:) keyEquivalent:@""].target=self;
+    [rm addItem:[NSMenuItem separatorItem]];
+    [rm addItemWithTitle:@"Empty Cache and Hard Reload" action:@selector(emptyCacheAndHardReload:) keyEquivalent:@""].target=self;
+    self.reloadButton.menu=rm; }
   // Home button — visible only when the user has set a Homepage in Settings.
   self.homeButton   =[self navBtn:@"house.fill"      tip:@"Home"    sel:@selector(goHome:)       x:x y:btnY];
   if ([[NSUserDefaults standardUserDefaults] stringForKey:@"BBHomepage"].length) x+=34;
@@ -3981,6 +3987,10 @@ static NSMutableArray *gBBWindowControllers;
   self.starButton.autoresizingMask=NSViewMinXMargin;
   self.starButton.bezelStyle=NSBezelStyleToolbar; self.starButton.bordered=NO;
   self.starButton.target=self; self.starButton.action=@selector(toggleBookmarkCurrent:);
+  { NSMenu *sm=[[NSMenu alloc]initWithTitle:@""];
+    [sm addItemWithTitle:@"Bookmark This Page" action:@selector(toggleBookmarkCurrent:) keyEquivalent:@""].target=self;
+    [sm addItemWithTitle:@"Edit Bookmark…" action:@selector(editCurrentBookmark:) keyEquivalent:@""].target=self;
+    self.starButton.menu=sm; }
   [self updateStarButton]; [self.toolbarBg addSubview:self.starButton];
   // Zoom-level chip — sits just left of the star, visible only when zoom != 100%.
   self.zoomChip=[[NSButton alloc]initWithFrame:NSMakeRect(starX-46,btnY+5,42,20)];
@@ -4220,6 +4230,36 @@ static NSMutableArray *gBBWindowControllers;
   if ([[BBBookmarksStore shared] isBookmarked:url]) [[BBBookmarksStore shared] removeURL:url];
   else [[BBBookmarksStore shared] addTitle:(self.activeTab.title.length?self.activeTab.title:url) url:url];
   [self updateStarButton]; [self reloadBookmarksBar];
+}
+- (void)editCurrentBookmark:(id)s {
+  NSString *url=self.webView.URL.absoluteString;
+  if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
+  BBBookmark *existing=nil;
+  for (BBBookmark *b in [BBBookmarksStore shared].items) if ([b.urlString isEqualToString:url]) { existing=b; break; }
+  if (!existing) { [self addBookmark:s]; return; }
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Edit Bookmark";
+  NSView *acc=[[NSView alloc]initWithFrame:NSMakeRect(0,0,340,120)];
+  NSTextField *lblT=[NSTextField labelWithString:@"Name:"]; lblT.frame=NSMakeRect(0,90,64,20); lblT.alignment=NSTextAlignmentRight; [acc addSubview:lblT];
+  NSTextField *tfT=[[NSTextField alloc]initWithFrame:NSMakeRect(68,88,268,24)]; tfT.stringValue=existing.title?:@""; [acc addSubview:tfT];
+  NSTextField *lblU=[NSTextField labelWithString:@"URL:"]; lblU.frame=NSMakeRect(0,58,64,20); lblU.alignment=NSTextAlignmentRight; [acc addSubview:lblU];
+  NSTextField *tfU=[[NSTextField alloc]initWithFrame:NSMakeRect(68,56,268,24)]; tfU.stringValue=existing.urlString?:@""; [acc addSubview:tfU];
+  NSTextField *lblF=[NSTextField labelWithString:@"Folder:"]; lblF.frame=NSMakeRect(0,26,64,20); lblF.alignment=NSTextAlignmentRight; [acc addSubview:lblF];
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(68,24,268,24)];
+  cb.usesDataSource=NO; cb.completes=YES; cb.stringValue=existing.folder?:@""; [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  [acc addSubview:cb];
+  a.accessoryView=acc;
+  [a addButtonWithTitle:@"Save"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *newURL=[tfU.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *newTitle=tfT.stringValue;
+    NSString *newFolder=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    existing.title=newTitle; existing.folder=newFolder?:@"";
+    if (newURL.length && ![newURL isEqualToString:existing.urlString]) existing.urlString=newURL;
+    [[BBBookmarksStore shared] save];
+    [self updateStarButton]; [self reloadBookmarksBar];
+  }];
 }
 // ── Hovered-link status bubble ────────────────────────────────────────────────
 // Brief transient toast bottom-right of the window (in-window; doesn't need
@@ -6925,10 +6965,26 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)bookmarkButtonClicked:(NSButton *)btn {
   NSString *url=btn.toolTip; if(!url) return;
-  // Right-modifier-click → context menu (Chrome parity).
   NSEvent *cur=NSApp.currentEvent;
-  if (cur && (cur.modifierFlags & NSEventModifierFlagControl)) { [self showBookmarkBarItemMenu:btn]; return; }
+  NSEventModifierFlags m=cur.modifierFlags;
+  // Right-modifier-click → context menu (Chrome parity).
+  if (cur && (m & NSEventModifierFlagControl)) { [self showBookmarkBarItemMenu:btn]; return; }
   NSURL *u=[NSURL URLWithString:url]; if(!u) return;
+  // ⌘-click / ⌘⇧-click open in new tab (background / foreground) like link clicks.
+  if (cur && (m & NSEventModifierFlagCommand)) {
+    NSInteger prev=self.activeTabIndex;
+    [self addTabPrivate:self.activeTab.isPrivate];
+    [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+    if (!(m & NSEventModifierFlagShift)) [self tabItemDidSelect:prev];
+    return;
+  }
+  if (cur && (m & NSEventModifierFlagShift)) {
+    BBDelegate *w=[[BBDelegate alloc]init];
+    NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+    [w applicationDidFinishLaunching:dummy];
+    [w.webView loadRequest:[NSURLRequest requestWithURL:u]];
+    return;
+  }
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
 }
 - (void)showBookmarkBarItemMenu:(NSButton *)btn {
@@ -8474,6 +8530,21 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   req.cachePolicy=NSURLRequestReloadIgnoringLocalAndRemoteCacheData;
   [self.webView loadRequest:req];
 }
+- (void)emptyCacheAndHardReload:(id)s {
+  if (!self.webView.URL) return;
+  NSString *host=self.webView.URL.host?:@"";
+  // Wipe every WKWebsiteData record whose display name matches the host, then hard-reload.
+  NSSet *types=[WKWebsiteDataStore allWebsiteDataTypes];
+  [[WKWebsiteDataStore defaultDataStore] fetchDataRecordsOfTypes:types completionHandler:^(NSArray<WKWebsiteDataRecord *> *recs){
+    NSMutableArray *drop=[NSMutableArray array];
+    for (WKWebsiteDataRecord *r in recs)
+      if ([r.displayName caseInsensitiveCompare:host]==NSOrderedSame ||
+          [host hasSuffix:[NSString stringWithFormat:@".%@",r.displayName]]) [drop addObject:r];
+    [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:types forDataRecords:drop completionHandler:^{
+      dispatch_async(dispatch_get_main_queue(),^{ [self hardReload:nil]; });
+    }];
+  }];
+}
 - (void)pasteAndGo:(id)s {
   NSString *text=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
   if (!text.length) return;
@@ -9560,12 +9631,27 @@ static const NSInteger kDialogAbuseThreshold = 3;
     if (e.buttonNumber!=2) return e;
     BBDelegate *s=weak; if(!s||e.window!=s.window) return e;
     // Middle-click on a bookmark-bar button → open bookmark in a new background tab.
+    // Middle-click on a folder → open every bookmark in that folder in background tabs.
     if (s.bookmarksBarVisible) {
       NSPoint barPt=[s.bookmarksBar convertPoint:e.locationInWindow fromView:nil];
       if (NSPointInRect(barPt,s.bookmarksBar.bounds)) {
         for (NSView *v in s.bookmarksBar.subviews) {
           if (![v isKindOfClass:[NSButton class]]) continue;
           if (!NSPointInRect(barPt,v.frame)) continue;
+          NSString *folder=objc_getAssociatedObject(v,"BBFolderName");
+          if (folder.length) {
+            NSInteger prev=s.activeTabIndex;
+            BOOL priv=s.activeTab.isPrivate;
+            for (BBBookmark *b in [BBBookmarksStore shared].items) {
+              if (![b.folder isEqualToString:folder]) continue;
+              if ([b.urlString hasPrefix:@"bearbrowser://folder-placeholder/"]) continue;
+              NSURL *u=[NSURL URLWithString:b.urlString]; if (!u) continue;
+              [s addTabPrivate:priv];
+              [s.webView loadRequest:[NSURLRequest requestWithURL:u]];
+            }
+            [s tabItemDidSelect:prev];
+            return (NSEvent *)nil;
+          }
           NSString *url=((NSButton*)v).toolTip;
           NSURL *u=url?[NSURL URLWithString:url]:nil;
           if (u) {
