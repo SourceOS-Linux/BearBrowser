@@ -56,6 +56,21 @@ from pathlib import Path
 from typing import Any, Optional
 
 # ---------------------------------------------------------------------------
+# Live WebDriver-BiDi transport (loaded from lib/bidi_transport.py). This is the
+# wire UNDER the enforcement gate — it is only ever reached after
+# evaluate_action returns permit. Import is guarded so enforce-only mode works
+# even if the module (or its optional websocket dep) is unavailable.
+# ---------------------------------------------------------------------------
+_BIDI: Any = None
+try:
+    _repo_root = Path(__file__).resolve().parent.parent
+    if str(_repo_root) not in sys.path:
+        sys.path.insert(0, str(_repo_root))
+    from lib import bidi_transport as _BIDI  # type: ignore
+except Exception:
+    _BIDI = None
+
+# ---------------------------------------------------------------------------
 # Constants — mirror the sourceos-spec reasoning family + turtle-agentd shapes
 # ---------------------------------------------------------------------------
 
@@ -402,6 +417,7 @@ class ControlBridge:
         self.connected = False
         self.bidi_url: Optional[str] = None
         self._weakest_replay = "exact"
+        self._client: Any = None  # live BidiClient once connect() succeeds
 
     # -- session run (mirrors turtle-agentd._open_reasoning_run) --
     def _open_run(self, task_summary: str) -> dict[str, Any]:
@@ -532,10 +548,14 @@ class ControlBridge:
 
     # -- live transport (graceful) --
     def connect(self, bidi_url: str, token: str, timeout: float = 0.5) -> bool:
-        """Would attach to the live BearBrowser binary over WebDriver-BiDi
-        (loopback + session token). Returns True if a control endpoint is
-        reachable. The bridge ENFORCES regardless — if unreachable it runs in
-        dry/enforce-only mode so containment is provable on any machine."""
+        """Attach to the live BearBrowser binary over WebDriver-BiDi (loopback +
+        session token). Opens the WebSocket and completes the BiDi `session.new`
+        handshake. Returns True iff a control endpoint is reachable AND the
+        handshake succeeds. The bridge ENFORCES regardless — if unreachable it
+        runs in dry/enforce-only mode so containment is provable on any machine.
+
+        A non-loopback bidi_url is REFUSED (no socket is opened).
+        """
         self.bidi_url = bidi_url
         host, port = self._parse_loopback(bidi_url)
         if host is None:
@@ -544,12 +564,29 @@ class ControlBridge:
         if host not in ("127.0.0.1", "localhost", "::1"):
             # the spec mandates loopback-only; refuse non-loopback control endpoints
             self.connected = False
+            self._client = None
             return False
+
+        # Prefer the real BiDi client (WebSocket + session.new). If the transport
+        # module is unavailable, or the browser is not reachable, fall back to a
+        # bare TCP probe so callers still get a truthful reachable/not signal —
+        # but without a live client we stay enforce-only (no commands sent).
+        if _BIDI is not None:
+            try:
+                self._client = _BIDI.BidiClient(bidi_url, token, timeout=timeout)
+                self.connected = True
+                return True
+            except Exception:
+                self._client = None
+                self.connected = False
+                return False
+
         try:
             with socket.create_connection((host, port), timeout=timeout):
                 self.connected = True
         except OSError:
             self.connected = False
+        self._client = None
         return self.connected
 
     @staticmethod
@@ -561,9 +598,70 @@ class ControlBridge:
         except Exception:
             return None, 0
 
+    # -- THE REAL ENTRY POINT: gate FIRST, then (only on permit) touch the wire --
+    def dispatch(self, action: str, params: Optional[dict[str, Any]] = None,
+                 approval_token: Optional[str] = None) -> Decision:
+        """Evaluate the action against policy FIRST. If denied, attest and return
+        WITHOUT emitting any BiDi command — the browser is never touched. If
+        permitted, map the action to its BiDi command and send it over the live
+        client (or, with no browser connected, stay enforce-only "would-permit").
+
+        The enforcement gate sits strictly BEFORE transport: a denied/injected
+        action can NEVER put a frame on the wire. This is the containment
+        boundary, and it holds at the transport edge, not just in policy.
+        """
+        params = params or {}
+        decision = self.evaluate_action(action, params, approval_token)
+
+        # GATE: a non-permitted decision emits NO BiDi command. Full stop.
+        if not decision.permitted:
+            return decision
+
+        # Permitted. If we have no live client, stay enforce-only: the decision
+        # stands (would-permit) but nothing goes on a wire that doesn't exist.
+        if not self.connected or self._client is None or _BIDI is None:
+            return decision
+
+        # Map the PERMITTED action to a BiDi command. Gated/prohibited map to
+        # None even here (defense in depth); permitted allowed-class actions map
+        # to a real command.
+        mapped = _BIDI.build_bidi_command(decision.action, params)
+        if mapped is None:
+            # No command for this action (e.g. a permitted action with no wire
+            # form). Nothing to send; the permit + attestation already stand.
+            return decision
+
+        method, bidi_params = mapped
+        try:
+            result = self._client.send_command(method, bidi_params)
+            summary = _BIDI.summarize_result(method, result)
+            self._attest(
+                "browser.transport.dispatched",
+                f"{decision.action} dispatched over BiDi: {summary}",
+                {"decision": "permit", "policyRef": self.policy.policyRef_safe(),
+                 "actionClass": decision.action_class, "bidiMethod": method,
+                 "transport": "live-bidi"},
+            )
+        except Exception as exc:  # transport error — record, do not crash the gate
+            self._attest(
+                "browser.transport.error",
+                f"{decision.action} BiDi dispatch failed: {type(exc).__name__}",
+                {"decision": "permit", "policyRef": self.policy.policyRef_safe(),
+                 "actionClass": decision.action_class, "bidiMethod": method,
+                 "transport": "live-bidi", "error": type(exc).__name__},
+            )
+        return decision
+
     def close(self, status: str = "completed") -> dict[str, Any]:
         """Close the run with a ReasoningReceipt. replayClass = weakest of all
         actions in the session."""
+        if self._client is not None:
+            try:
+                self._client.close()
+            except Exception:
+                pass
+            self._client = None
+            self.connected = False
         run_hex = _run_hex(self.run["id"])
         digest = hashlib.sha256(
             "\n".join(self.run.get("eventRefs", [])).encode("utf-8", errors="replace")
@@ -649,11 +747,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # graceful live transport: try to attach, but enforce regardless
     transport = "dry/enforce-only"
+    connected = False
     if args.bidi_url:
-        ok = bridge.connect(args.bidi_url, args.bidi_token)
-        transport = "live-bidi" if ok else "dry/enforce-only (no browser reachable)"
+        connected = bridge.connect(args.bidi_url, args.bidi_token)
+        transport = "live-bidi" if connected else "no browser -> enforce-only"
 
-    decision = bridge.evaluate_action(args.action, params, args.approval_token)
+    # dispatch() gates FIRST, then drives the wire only on permit; when no
+    # browser is connected it degrades to enforce-only automatically.
+    decision = bridge.dispatch(args.action, params, args.approval_token)
 
     out = decision.to_dict()
     out["transport"] = transport
