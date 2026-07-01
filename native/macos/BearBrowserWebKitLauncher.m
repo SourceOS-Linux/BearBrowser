@@ -5986,6 +5986,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 // Replace the start page's curated grid with the user's most-visited sites.
 - (void)injectTopSitesInto:(WKWebView *)wv {
+  [self injectReadingListInto:wv];
   NSArray *sites=[self topSitesLimit:8];
   if (sites.count<4) return; // not enough history yet — keep the curated defaults
   NSMutableString *html=[NSMutableString string];
@@ -6008,6 +6009,26 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     @"(function(){var g=document.querySelector('.grid'); if(g) g.innerHTML=%@;})();",
     [self jsStringLiteral:html]];
   [wv evaluateJavaScript:js completionHandler:nil];
+}
+- (void)injectReadingListInto:(WKWebView *)wv {
+  NSMutableArray *unread=[NSMutableArray array];
+  for (BBReadingItem *it in [BBReadingList shared].items.reverseObjectEnumerator) {
+    if (it.read) continue; if (unread.count>=6) break; [unread addObject:it];
+  }
+  if (!unread.count) return;
+  NSMutableString *rlHtml=[NSMutableString string];
+  [rlHtml appendString:@"<div style=\"max-width:520px;margin:8px auto 0;padding:12px 16px;border-radius:14px;background:var(--surface);border:1px solid var(--border);\">"
+                        "<div style=\"font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;font-weight:600\">Reading List</div>"
+                        "<ul style=\"list-style:none;margin:0;padding:0\">"];
+  for (BBReadingItem *it in unread) {
+    [rlHtml appendFormat:@"<li style=\"margin:.35em 0\"><a href=\"%@\" style=\"color:var(--text);text-decoration:none\">%@</a></li>",
+      [self htmlEscape:it.urlString],[self htmlEscape:it.title.length?it.title:it.urlString]];
+  }
+  [rlHtml appendString:@"</ul></div>"];
+  NSString *rlJs=[NSString stringWithFormat:
+    @"(function(){var g=document.querySelector('.grid'),c=%@;if(g&&!document.getElementById('bb-rl')){var d=document.createElement('div');d.id='bb-rl';d.innerHTML=c;g.parentNode.insertBefore(d,g.nextSibling);}})();",
+    [self jsStringLiteral:rlHtml]];
+  [wv evaluateJavaScript:rlJs completionHandler:nil];
 }
 
 - (NSString *)windowTitleForTab:(BBTab *)tab {
@@ -7024,6 +7045,12 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *mv=[[NSButton alloc]initWithFrame:NSMakeRect(204,10,130,30)];
   mv.title=@"Move to Folder…"; mv.bezelStyle=NSBezelStyleRounded; mv.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
   mv.target=ds; mv.action=@selector(moveSelectedToFolder); [cv addSubview:mv];
+  NSPopUpButton *sort=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(340,12,150,26) pullsDown:NO];
+  [sort addItemsWithTitles:@[@"Sort: Custom",@"Sort: Title A→Z",@"Sort: Newest first"]];
+  sort.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  sort.target=self; sort.action=@selector(bookmarkSortChanged:);
+  objc_setAssociatedObject(sort,"BBSortTV",tv,OBJC_ASSOCIATION_ASSIGN);
+  [cv addSubview:sort];
   NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
   done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
   done.target=bw; done.action=@selector(performClose:); [cv addSubview:done];
@@ -7479,6 +7506,19 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
   done.target=sw; done.action=@selector(performClose:); [cv addSubview:done];
   [self.window beginSheet:sw completionHandler:nil];
+}
+- (void)bookmarkSortChanged:(NSPopUpButton *)sender {
+  NSMutableArray<BBBookmark *> *items=[[BBBookmarksStore shared].items mutableCopy];
+  if (sender.indexOfSelectedItem==1)
+    [items sortUsingComparator:^NSComparisonResult(BBBookmark *a,BBBookmark *b){ return [a.title caseInsensitiveCompare:b.title]; }];
+  else if (sender.indexOfSelectedItem==2)
+    [items sortUsingComparator:^NSComparisonResult(BBBookmark *a,BBBookmark *b){ return [b.addedAt compare:a.addedAt]; }];
+  else return; // Custom = current insertion order, no-op
+  [BBBookmarksStore shared].items=items;
+  [[BBBookmarksStore shared] save];
+  NSTableView *tv=objc_getAssociatedObject(sender,"BBSortTV");
+  [tv reloadData];
+  [self reloadBookmarksBar];
 }
 - (void)showProfileEditor:(id)s {
   BBProfile *p=[[BBProfileStore shared] profile];
@@ -8908,6 +8948,16 @@ static const NSInteger kDialogAbuseThreshold = 3;
   [[NSPasteboard generalPasteboard] clearContents];
   [[NSPasteboard generalPasteboard] setString:t forType:NSPasteboardTypeString];
 }
+- (void)contextCopyPageAsMarkdown:(NSMenuItem *)item {
+  NSString *u=self.webView.URL.absoluteString?:@""; if (!u.length) return;
+  NSString *t=self.activeTab.title.length?self.activeTab.title:u;
+  // Escape any ] in the title so it doesn't break the link syntax.
+  t=[t stringByReplacingOccurrencesOfString:@"]" withString:@"\\]"];
+  NSString *md=[NSString stringWithFormat:@"[%@](%@)",t,u];
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:md forType:NSPasteboardTypeString];
+  [self showToast:@"Copied as Markdown"];
+}
 - (void)contextEmailPage:(NSMenuItem *)item {
   NSURL *url=self.webView.URL; if (!url) return;
   NSString *subj=[(self.activeTab.title.length?self.activeTab.title:url.host?:@"BearBrowser") stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
@@ -9022,6 +9072,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
         [menu addItem:[NSMenuItem separatorItem]];
         add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
         add(@"Copy Page Title",@selector(contextCopyPageTitle:),nil);
+        add(@"Copy Page as Markdown Link",@selector(contextCopyPageAsMarkdown:),nil);
         add(@"Email Link to Page…",@selector(contextEmailPage:),nil);
         add(@"Add Page to Research Session…",@selector(addCurrentTabToSession:),nil);
         add(@"Add to Reading List",@selector(addToReadingList:),nil);
