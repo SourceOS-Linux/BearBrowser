@@ -3684,6 +3684,9 @@ static NSMutableArray *gBBWindowControllers;
   mi(bmM,@"Add to Reading List",@selector(addToReadingList:),@"d",Cmd|Opt);
   [bmM addItemWithTitle:@"Show Reading List…" action:@selector(showReadingList:) keyEquivalent:@""];
   [bmM addItem:[NSMenuItem separatorItem]];
+  [bmM addItemWithTitle:@"Import Bookmarks (HTML)…" action:@selector(importBookmarksHTML:) keyEquivalent:@""];
+  [bmM addItemWithTitle:@"Export Bookmarks (HTML)…" action:@selector(exportBookmarksHTML:) keyEquivalent:@""];
+  [bmM addItem:[NSMenuItem separatorItem]];
   [bmM addItemWithTitle:@"Save Tabs as Workspace…" action:@selector(saveTabsAsWorkspace:) keyEquivalent:@""];
   NSMenuItem *wsRoot=[bmM addItemWithTitle:@"Open Workspace" action:nil keyEquivalent:@""];
   NSMenu *wsM=[[NSMenu alloc]initWithTitle:@"Workspaces"]; wsM.delegate=self; wsRoot.submenu=wsM;
@@ -3956,8 +3959,11 @@ static NSMutableArray *gBBWindowControllers;
   self.dnsBlockCache.countLimit=2000;
 
   self.tabs=[NSMutableArray array]; self.activeTabIndex=0;
-  // Session restore — reopen tabs from last session (supports old string array + new dict array)
-  NSArray *savedTabs=[[NSUserDefaults standardUserDefaults] arrayForKey:@"BBSessionURLs"];
+  // Session restore — reopen tabs from last session (supports old string array + new dict array).
+  // Skipped entirely when the user set BBRestoreSession=NO in Settings.
+  NSUserDefaults *ud0=[NSUserDefaults standardUserDefaults];
+  BOOL restoreEnabled=([ud0 objectForKey:@"BBRestoreSession"]==nil||[ud0 boolForKey:@"BBRestoreSession"]);
+  NSArray *savedTabs=restoreEnabled?[ud0 arrayForKey:@"BBSessionURLs"]:@[];
   BOOL restored=NO;
   for (id entry in savedTabs) {
     NSString *u=nil; BOOL pinned=NO, muted=NO;
@@ -6217,6 +6223,83 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 // ── Reading List ────────────────────────────────────────────────────────────
 // ── Saved workspaces (bookmarked tab sets) ────────────────────────────────────
+// ── Bookmarks HTML import/export (Netscape Bookmark File Format) ─────────────
+- (void)exportBookmarksHTML:(id)s {
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=@"bearbrowser-bookmarks.html";
+  sp.allowedFileTypes=@[@"html"];
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!sp.URL) return;
+    NSMutableString *html=[NSMutableString stringWithString:
+      @"<!DOCTYPE NETSCAPE-Bookmark-file-1>\n"
+       "<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n"
+       "<TITLE>BearBrowser Bookmarks</TITLE>\n"
+       "<H1>Bookmarks</H1>\n<DL><p>\n"];
+    // Group by folder (root first, then named folders).
+    NSMutableArray *root=[NSMutableArray array];
+    NSMutableDictionary<NSString *,NSMutableArray<BBBookmark *> *> *byFolder=[NSMutableDictionary dictionary];
+    for (BBBookmark *b in [BBBookmarksStore shared].items) {
+      if (b.folder.length) {
+        NSMutableArray *arr=byFolder[b.folder]; if (!arr) { arr=[NSMutableArray array]; byFolder[b.folder]=arr; }
+        [arr addObject:b];
+      } else [root addObject:b];
+    }
+    for (BBBookmark *b in root) {
+      [html appendFormat:@"  <DT><A HREF=\"%@\" ADD_DATE=\"%lld\">%@</A>\n",
+        [self htmlEscape:b.urlString], (long long)b.addedAt.timeIntervalSince1970,
+        [self htmlEscape:b.title.length?b.title:b.urlString]];
+    }
+    for (NSString *f in byFolder) {
+      [html appendFormat:@"  <DT><H3>%@</H3>\n  <DL><p>\n",[self htmlEscape:f]];
+      for (BBBookmark *b in byFolder[f]) {
+        [html appendFormat:@"    <DT><A HREF=\"%@\" ADD_DATE=\"%lld\">%@</A>\n",
+          [self htmlEscape:b.urlString], (long long)b.addedAt.timeIntervalSince1970,
+          [self htmlEscape:b.title.length?b.title:b.urlString]];
+      }
+      [html appendString:@"  </DL><p>\n"];
+    }
+    [html appendString:@"</DL><p>\n"];
+    [html writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self showToast:@"Bookmarks exported"];
+  }];
+}
+- (void)importBookmarksHTML:(id)s {
+  NSOpenPanel *op=[NSOpenPanel openPanel];
+  op.allowedFileTypes=@[@"html",@"htm"];
+  op.canChooseFiles=YES; op.canChooseDirectories=NO;
+  [op beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!op.URL) return;
+    NSString *html=[NSString stringWithContentsOfURL:op.URL encoding:NSUTF8StringEncoding error:nil];
+    if (!html.length) { [self showToast:@"Import failed"]; return; }
+    // Extract <H3>Folder</H3> blocks and <A HREF>links</A>. Regex is intentionally
+    // loose — Chrome and Firefox both emit slightly different attribute orders.
+    NSRegularExpression *rxA=[NSRegularExpression regularExpressionWithPattern:@"<a\\s+[^>]*href=\"([^\"]+)\"[^>]*>([^<]*)</a>" options:NSRegularExpressionCaseInsensitive error:nil];
+    NSRegularExpression *rxH=[NSRegularExpression regularExpressionWithPattern:@"<h3[^>]*>([^<]*)</h3>" options:NSRegularExpressionCaseInsensitive error:nil];
+    NSArray *lines=[html componentsSeparatedByString:@"\n"];
+    NSString *curFolder=@"Imported"; NSInteger added=0;
+    for (NSString *line in lines) {
+      NSTextCheckingResult *hm=[rxH firstMatchInString:line options:0 range:NSMakeRange(0,line.length)];
+      if (hm) {
+        NSString *f=[[line substringWithRange:[hm rangeAtIndex:1]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (f.length) curFolder=f;
+        continue;
+      }
+      NSTextCheckingResult *am=[rxA firstMatchInString:line options:0 range:NSMakeRange(0,line.length)];
+      if (am) {
+        NSString *u=[line substringWithRange:[am rangeAtIndex:1]];
+        NSString *t=[line substringWithRange:[am rangeAtIndex:2]];
+        u=[u stringByReplacingOccurrencesOfString:@"&amp;" withString:@"&"];
+        t=[t stringByReplacingOccurrencesOfString:@"&amp;" withString:@"&"];
+        if (!u.length) continue;
+        if ([[BBBookmarksStore shared] isBookmarked:u]) continue;
+        [[BBBookmarksStore shared] addTitle:t?:u url:u folder:curFolder];
+        added++;
+      }
+    }
+    [self reloadBookmarksBar];
+    [self showToast:[NSString stringWithFormat:@"Imported %ld bookmark%@",(long)added,added==1?@"":@"s"]];
+  }];
+}
 - (void)saveTabsAsWorkspace:(id)s {
   NSMutableArray *urls=[NSMutableArray array];
   for (BBTab *t in self.tabs) {
@@ -7357,7 +7440,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [cv addSubview:sug]; y-=28;
   NSButton *clr=[NSButton checkboxWithTitle:@"Clear history when quitting" target:nil action:nil];
   clr.frame=NSMakeRect(192,y,260,20); clr.state=[ud boolForKey:@"BBClearOnQuit"]?NSControlStateValueOn:NSControlStateValueOff;
-  [cv addSubview:clr]; y-=40;
+  [cv addSubview:clr]; y-=28;
+  NSButton *rst=[NSButton checkboxWithTitle:@"Restore last session on launch" target:nil action:nil];
+  rst.frame=NSMakeRect(192,y,280,20);
+  rst.state=([ud objectForKey:@"BBRestoreSession"]==nil||[ud boolForKey:@"BBRestoreSession"])?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:rst]; y-=40;
   // Download folder picker (Chrome-style)
   label(@"Downloads folder:",y+4);
   NSString *curDL=[ud stringForKey:@"BBDownloadDir"];
@@ -7408,6 +7495,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [ud setBool:(inline_ac.state==NSControlStateValueOn) forKey:@"BBInlineAutocomplete"];
   [ud setBool:(sug.state==NSControlStateValueOn) forKey:@"BBSearchSuggestions"];
   [ud setBool:(clr.state==NSControlStateValueOn) forKey:@"BBClearOnQuit"];
+  [ud setBool:(rst.state==NSControlStateValueOn) forKey:@"BBRestoreSession"];
   // Apply the bookmarks-bar choice immediately.
   self.bookmarksBarVisible=(bmBar.state==NSControlStateValueOn);
   self.bookmarksBar.hidden=!self.bookmarksBarVisible;
@@ -8644,6 +8732,23 @@ static const NSInteger kDialogAbuseThreshold = 3;
   if (mailto) [[NSWorkspace sharedWorkspace] openURL:mailto];
 }
 // Install a right-click monitor so we can show our own Chrome-style context menu.
+- (void)showTabBarContextMenuAt:(NSPoint)winLoc {
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *nt=[m addItemWithTitle:@"New Tab" action:@selector(newTab:) keyEquivalent:@""];
+  nt.target=self;
+  NSMenuItem *rc=[m addItemWithTitle:@"Reopen Closed Tab" action:@selector(reopenClosedTab:) keyEquivalent:@""];
+  rc.target=self; rc.enabled=(self.recentlyClosed.count>0);
+  if (self.recentlyClosed.count) {
+    NSMenuItem *sub=[m addItemWithTitle:@"Recently Closed" action:nil keyEquivalent:@""];
+    NSMenu *subM=[[NSMenu alloc]initWithTitle:@"Recently Closed"]; subM.delegate=self; sub.submenu=subM;
+  }
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *bmAll=[m addItemWithTitle:@"Bookmark All Tabs…" action:@selector(bookmarkAllTabs:) keyEquivalent:@""];
+  bmAll.target=self;
+  NSMenuItem *sw=[m addItemWithTitle:@"Save Tabs as Workspace…" action:@selector(saveTabsAsWorkspace:) keyEquivalent:@""];
+  sw.target=self;
+  [m popUpMenuPositioningItem:nil atLocation:winLoc inView:nil];
+}
 - (void)installContextMenuMonitor {
   __weak BBDelegate *weak=self;
   self.contextMenuMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent *e){
@@ -8652,6 +8757,17 @@ static const NSInteger kDialogAbuseThreshold = 3;
     NSPoint toolPt=[s.toolbarBg convertPoint:e.locationInWindow fromView:nil];
     if (NSPointInRect(toolPt,s.backButton.frame))    { [s showNavHistoryMenu:YES  at:e.locationInWindow]; return nil; }
     if (NSPointInRect(toolPt,s.forwardButton.frame)) { [s showNavHistoryMenu:NO   at:e.locationInWindow]; return nil; }
+    // Right-click on the tab bar itself (empty area or the "+" button) shows a
+    // small menu with New Tab / Reopen Closed / Recent Closed submenu.
+    NSPoint tabBarPt=[s.tabBarView convertPoint:e.locationInWindow fromView:nil];
+    if (NSPointInRect(tabBarPt,s.tabBarView.bounds)) {
+      BOOL onItem=NO;
+      for (NSView *v in s.tabBarView.tabStrip.subviews) {
+        if ([v isKindOfClass:[BBTabItemView class]] &&
+            NSPointInRect([s.tabBarView.tabStrip convertPoint:e.locationInWindow fromView:nil],v.frame)) { onItem=YES; break; }
+      }
+      if (!onItem) { [s showTabBarContextMenuAt:e.locationInWindow]; return nil; }
+    }
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if (!NSPointInRect(pt,s.webView.bounds)) return e;
     // If the focused element is editable (input/textarea/contentEditable), defer to
