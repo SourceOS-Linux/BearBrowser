@@ -880,7 +880,7 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
 @end
 
 // Datasource/delegate for the Saved Passwords table in Settings → Manage Saved Passwords.
-@interface BBSavedPasswordsDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@interface BBSavedPasswordsDS : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSSearchFieldDelegate>
 @property(strong) NSMutableArray<BBPasswordEntry *> *entries;
 @property(weak)   NSTableView *tv;
 - (instancetype)initWithEntries:(NSMutableArray<BBPasswordEntry *> *)e tableView:(NSTableView *)tv;
@@ -902,6 +902,25 @@ static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its ti
   BBPasswordEntry *e=_entries[row];
   [[BBPasswordStore shared] removeHost:e.host username:e.username];
   [_entries removeObjectAtIndex:row]; [_tv reloadData];
+}
+- (void)copyPasswordSelected:(id)sender {
+  NSInteger row=_tv.selectedRow; if (row<0||row>=(NSInteger)_entries.count) { NSBeep(); return; }
+  BBPasswordEntry *e=_entries[row];
+  NSArray<BBPasswordEntry *> *full=[[BBPasswordStore shared] entriesForHost:e.host];
+  for (BBPasswordEntry *p in full) {
+    if ([p.username isEqualToString:e.username]) {
+      [[NSPasteboard generalPasteboard] clearContents];
+      [[NSPasteboard generalPasteboard] setString:p.password forType:NSPasteboardTypeString];
+      // Auto-clear the clipboard after 30 seconds so a copied password doesn't
+      // linger indefinitely in whatever the user pastes into next.
+      NSString *snapshot=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(30*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        NSString *cur=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+        if ([cur isEqualToString:snapshot]) [[NSPasteboard generalPasteboard] clearContents];
+      });
+      return;
+    }
+  }
 }
 @end
 
@@ -3616,6 +3635,7 @@ static NSMutableArray *gBBWindowControllers;
   [appM addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"].keyEquivalentModifierMask=Cmd|Opt;
   [appM addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
   [appM addItem:[NSMenuItem separatorItem]];
+  [appM addItemWithTitle:@"Restart BearBrowser" action:@selector(restartApp:) keyEquivalent:@""];
   mi(appM,@"Quit BearBrowser",@selector(terminate:),@"q",Cmd);
 
   // ── File ──
@@ -3634,6 +3654,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
   mi(fileM,@"Save Page As…",@selector(savePage:),@"s",Cmd);
   [fileM addItemWithTitle:@"Save Page as PDF…" action:@selector(savePageAsPDF:) keyEquivalent:@"s"].keyEquivalentModifierMask=Cmd|Opt;
+  [fileM addItemWithTitle:@"Take Page Screenshot…" action:@selector(takePageScreenshot:) keyEquivalent:@"s"].keyEquivalentModifierMask=Cmd|Ctrl;
   [fileM addItem:[NSMenuItem separatorItem]];
   mi(fileM,@"Share…",@selector(sharePage:),@"",0);
   mi(fileM,@"Print…",@selector(printPage:),@"p",Cmd);
@@ -6121,6 +6142,18 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
+- (void)restartApp:(id)s {
+  NSString *appPath=[[NSBundle mainBundle] bundlePath];
+  if (!appPath.length) return;
+  NSTask *t=[NSTask new];
+  t.launchPath=@"/usr/bin/open";
+  t.arguments=@[@"-n",appPath]; // -n = new instance
+  @try { [t launch]; } @catch(NSException *e) { NSBeep(); return; }
+  // Give /usr/bin/open a moment to spawn before we exit.
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.3*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    [NSApp terminate:nil];
+  });
+}
 - (NSMenu *)applicationDockMenu:(NSApplication *)sender {
   NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
   [m addItemWithTitle:@"New Tab"             action:@selector(newTab:)            keyEquivalent:@""].target=self;
@@ -7800,14 +7833,17 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   BBSavedPasswordsDS *ds=[[BBSavedPasswordsDS alloc]initWithEntries:[entries mutableCopy] tableView:tv];
   tv.dataSource=ds; tv.delegate=ds;
   objc_setAssociatedObject(pw,@"ds",ds,OBJC_ASSOCIATION_RETAIN);
-  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,8,90,28)];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,8,80,28)];
   rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded;
   rm.target=ds; rm.action=@selector(removeSelected:); [cv addSubview:rm];
-  NSButton *imp=[[NSButton alloc]initWithFrame:NSMakeRect(108,8,110,28)];
-  imp.title=@"Import CSV…"; imp.bezelStyle=NSBezelStyleRounded;
+  NSButton *cp=[[NSButton alloc]initWithFrame:NSMakeRect(98,8,120,28)];
+  cp.title=@"Copy Password"; cp.bezelStyle=NSBezelStyleRounded;
+  cp.target=ds; cp.action=@selector(copyPasswordSelected:); [cv addSubview:cp];
+  NSButton *imp=[[NSButton alloc]initWithFrame:NSMakeRect(224,8,90,28)];
+  imp.title=@"Import CSV"; imp.bezelStyle=NSBezelStyleRounded;
   imp.target=self; imp.action=@selector(importPasswordsCSV:); [cv addSubview:imp];
-  NSButton *exp=[[NSButton alloc]initWithFrame:NSMakeRect(224,8,110,28)];
-  exp.title=@"Export CSV…"; exp.bezelStyle=NSBezelStyleRounded;
+  NSButton *exp=[[NSButton alloc]initWithFrame:NSMakeRect(320,8,90,28)];
+  exp.title=@"Export CSV"; exp.bezelStyle=NSBezelStyleRounded;
   exp.target=self; exp.action=@selector(exportPasswordsCSV:); [cv addSubview:exp];
   NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(420,8,90,28)];
   done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r";
@@ -8559,6 +8595,28 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   // Show picker anchored to the ellipsis (bear panel) button if available, else center of toolbar
   NSView *anchor=self.securityButton?:self.toolbarBg;
   [pick showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMinY];
+}
+- (void)takePageScreenshot:(id)s {
+  NSSavePanel *p=[NSSavePanel savePanel];
+  p.nameFieldStringValue=[self.webView.title?:@"screenshot" stringByAppendingString:@".png"];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  p.allowedFileTypes=@[@"png"];
+#pragma clang diagnostic pop
+  [p beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!p.URL) return;
+    WKSnapshotConfiguration *cfg=[[WKSnapshotConfiguration alloc]init];
+    // Full visible area at 2x for retina; leave rect at CGRectZero to capture the current viewport.
+    cfg.snapshotWidth=@(self.webView.bounds.size.width*2);
+    [self.webView takeSnapshotWithConfiguration:cfg completionHandler:^(NSImage *img,NSError *e){
+      if (e||!img) { [self showToast:@"Screenshot failed"]; return; }
+      NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[img TIFFRepresentation]];
+      NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (!png) { [self showToast:@"Screenshot failed"]; return; }
+      [png writeToURL:p.URL atomically:YES];
+      [self showToast:@"Screenshot saved"];
+    }];
+  }];
 }
 - (void)savePageAsPDF:(id)s {
   NSSavePanel *p=[NSSavePanel savePanel];
