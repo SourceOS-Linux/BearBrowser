@@ -1646,8 +1646,10 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   return [NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",enc];
 }
 // Type "wiki foo" / "yt foo" / "gh foo" / "ddg foo" / "kagi foo" → site-scoped search.
+// A leading "!" is also accepted for DuckDuckGo-style bang syntax: "!wiki foo".
 // Returns nil if the input doesn't start with a recognised keyword + space.
 + (NSString *)urlForKeywordQuery:(NSString *)raw {
+  if ([raw hasPrefix:@"!"]) raw=[raw substringFromIndex:1];
   NSRange sp=[raw rangeOfString:@" "];
   if (sp.location==NSNotFound||sp.location<1) return nil;
   NSString *kw=[[raw substringToIndex:sp.location] lowercaseString];
@@ -1672,6 +1674,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   return [NSString stringWithFormat:fmt,enc];
 }
 + (NSString *)keywordLabel:(NSString *)raw {
+  if ([raw hasPrefix:@"!"]) raw=[raw substringFromIndex:1];
   NSRange sp=[raw rangeOfString:@" "]; if (sp.location==NSNotFound) return nil;
   NSString *kw=[[raw substringToIndex:sp.location] lowercaseString];
   static NSDictionary *labels=nil; static dispatch_once_t o; dispatch_once(&o,^{
@@ -3506,7 +3509,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) NSView *toolbarBg;
 @property(strong) BBTabBarView *tabBarView;
 @property(strong) BBAddressField *address;
-@property(strong) NSButton *backButton, *forwardButton, *reloadButton, *securityButton;
+@property(strong) NSButton *backButton, *forwardButton, *reloadButton, *homeButton, *securityButton;
 @property(strong) NSProgressIndicator *progressBar;
 @property(strong) BBFindBar *findBar;
 @property(assign) BOOL findBarVisible;
@@ -3670,6 +3673,11 @@ static NSMutableArray *gBBWindowControllers;
   mi(histM,@"Home",@selector(goHome:),@"h",Cmd|Shift);
   mi(histM,@"Back",@selector(goBack:),@"[",Cmd);
   mi(histM,@"Forward",@selector(goForward:),@"]",Cmd);
+  { unichar aL=NSLeftArrowFunctionKey, aR=NSRightArrowFunctionKey;
+    [histM addItemWithTitle:@"" action:@selector(goBack:)
+             keyEquivalent:[NSString stringWithCharacters:&aL length:1]].keyEquivalentModifierMask=Cmd;
+    [histM addItemWithTitle:@"" action:@selector(goForward:)
+             keyEquivalent:[NSString stringWithCharacters:&aR length:1]].keyEquivalentModifierMask=Cmd; }
   [histM addItem:[NSMenuItem separatorItem]];
   mi(histM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",Cmd|Shift);
   NSMenuItem *rcI=[histM addItemWithTitle:@"Recently Closed" action:nil keyEquivalent:@""];
@@ -3736,6 +3744,12 @@ static NSMutableArray *gBBWindowControllers;
   [tabM addItemWithTitle:@"" action:@selector(prevTab:) keyEquivalent:@""].keyEquivalentModifierMask=Cmd|Opt;
   [tabM addItemWithTitle:@"Move Tab Left"  action:@selector(moveTabLeft:)  keyEquivalent:@"["].keyEquivalentModifierMask=Ctrl|Shift;
   [tabM addItemWithTitle:@"Move Tab Right" action:@selector(moveTabRight:) keyEquivalent:@"]"].keyEquivalentModifierMask=Ctrl|Shift;
+  // Ctrl+PgUp / Ctrl+PgDn — Chrome/Windows aliases for prev/next tab.
+  { unichar pgUp=NSPageUpFunctionKey, pgDn=NSPageDownFunctionKey;
+    [tabM addItemWithTitle:@"" action:@selector(prevTab:)
+             keyEquivalent:[NSString stringWithCharacters:&pgUp length:1]].keyEquivalentModifierMask=Ctrl;
+    [tabM addItemWithTitle:@"" action:@selector(nextTab:)
+             keyEquivalent:[NSString stringWithCharacters:&pgDn length:1]].keyEquivalentModifierMask=Ctrl; }
   [tabM addItem:[NSMenuItem separatorItem]];
   for (NSInteger i=1;i<=9;i++) {
     NSMenuItem *ti=[tabM addItemWithTitle:[NSString stringWithFormat:@"Tab %ld",(long)i]
@@ -3863,8 +3877,12 @@ static NSMutableArray *gBBWindowControllers;
   self.backButton   =[self navBtn:@"chevron.left"    tip:@"Back"    sel:@selector(goBack:)       x:x y:btnY]; x+=34;
   self.forwardButton=[self navBtn:@"chevron.right"   tip:@"Forward" sel:@selector(goForward:)    x:x y:btnY]; x+=34;
   self.reloadButton =[self navBtn:@"arrow.clockwise" tip:@"Reload"  sel:@selector(reloadOrStop:) x:x y:btnY]; x+=40;
+  // Home button — visible only when the user has set a Homepage in Settings.
+  self.homeButton   =[self navBtn:@"house.fill"      tip:@"Home"    sel:@selector(goHome:)       x:x y:btnY];
+  if ([[NSUserDefaults standardUserDefaults] stringForKey:@"BBHomepage"].length) x+=34;
+  else self.homeButton.hidden=YES;
   self.backButton.enabled=NO; self.forwardButton.enabled=NO;
-  for (NSButton *b in @[self.backButton,self.forwardButton,self.reloadButton])
+  for (NSButton *b in @[self.backButton,self.forwardButton,self.reloadButton,self.homeButton])
     [self.toolbarBg addSubview:b];
 
   // Security indicator
@@ -7586,13 +7604,109 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   BBSavedPasswordsDS *ds=[[BBSavedPasswordsDS alloc]initWithEntries:[entries mutableCopy] tableView:tv];
   tv.dataSource=ds; tv.delegate=ds;
   objc_setAssociatedObject(pw,@"ds",ds,OBJC_ASSOCIATION_RETAIN);
-  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,8,100,28)];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,8,90,28)];
   rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded;
   rm.target=ds; rm.action=@selector(removeSelected:); [cv addSubview:rm];
+  NSButton *imp=[[NSButton alloc]initWithFrame:NSMakeRect(108,8,110,28)];
+  imp.title=@"Import CSV…"; imp.bezelStyle=NSBezelStyleRounded;
+  imp.target=self; imp.action=@selector(importPasswordsCSV:); [cv addSubview:imp];
+  NSButton *exp=[[NSButton alloc]initWithFrame:NSMakeRect(224,8,110,28)];
+  exp.title=@"Export CSV…"; exp.bezelStyle=NSBezelStyleRounded;
+  exp.target=self; exp.action=@selector(exportPasswordsCSV:); [cv addSubview:exp];
   NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(420,8,90,28)];
   done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r";
   done.target=pw; done.action=@selector(performClose:); [cv addSubview:done];
   [self.window beginSheet:pw completionHandler:nil];
+}
+- (NSString *)csvEscape:(NSString *)v {
+  if (!v.length) return @"";
+  BOOL needQuote=[v containsString:@","]||[v containsString:@"\""]||[v containsString:@"\n"];
+  NSString *out=[v stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""];
+  return needQuote?[NSString stringWithFormat:@"\"%@\"",out]:out;
+}
+- (NSArray<NSString *> *)csvParseLine:(NSString *)line {
+  NSMutableArray *fields=[NSMutableArray array];
+  NSMutableString *cur=[NSMutableString string];
+  BOOL inQ=NO;
+  for (NSUInteger i=0;i<line.length;i++) {
+    unichar c=[line characterAtIndex:i];
+    if (inQ) {
+      if (c=='"') {
+        if (i+1<line.length && [line characterAtIndex:i+1]=='"') { [cur appendString:@"\""]; i++; }
+        else inQ=NO;
+      } else [cur appendFormat:@"%C",c];
+    } else {
+      if (c==',') { [fields addObject:[cur copy]]; [cur setString:@""]; }
+      else if (c=='"' && cur.length==0) inQ=YES;
+      else [cur appendFormat:@"%C",c];
+    }
+  }
+  [fields addObject:[cur copy]];
+  return fields;
+}
+- (void)exportPasswordsCSV:(id)s {
+  NSAlert *warn=[[NSAlert alloc]init];
+  warn.messageText=@"Export passwords in plain text?";
+  warn.informativeText=@"The CSV file will contain your passwords unencrypted. Store it somewhere safe and delete it after import.";
+  [warn addButtonWithTitle:@"Continue"]; [warn addButtonWithTitle:@"Cancel"];
+  if ([warn runModal]!=NSAlertFirstButtonReturn) return;
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=@"bearbrowser-passwords.csv";
+  sp.allowedFileTypes=@[@"csv"];
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!sp.URL) return;
+    NSMutableString *csv=[NSMutableString stringWithString:@"name,url,username,password,note\n"];
+    NSArray<BBPasswordEntry *> *all=[[BBPasswordStore shared] allEntries];
+    // allEntries returns entries without passwords (to avoid bulk Keychain prompts);
+    // re-fetch each host once to include the value.
+    for (BBPasswordEntry *e in all) {
+      NSArray<BBPasswordEntry *> *withPw=[[BBPasswordStore shared] entriesForHost:e.host];
+      for (BBPasswordEntry *p in withPw) {
+        [csv appendFormat:@"%@,%@,%@,%@,\n",
+          [self csvEscape:p.host],
+          [self csvEscape:[NSString stringWithFormat:@"https://%@/",p.host]],
+          [self csvEscape:p.username],
+          [self csvEscape:p.password]];
+      }
+    }
+    [csv writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self showToast:@"Passwords exported (delete the file after import)"];
+  }];
+}
+- (void)importPasswordsCSV:(id)s {
+  NSOpenPanel *op=[NSOpenPanel openPanel];
+  op.allowedFileTypes=@[@"csv"];
+  op.canChooseFiles=YES; op.canChooseDirectories=NO;
+  [op beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!op.URL) return;
+    NSString *body=[NSString stringWithContentsOfURL:op.URL encoding:NSUTF8StringEncoding error:nil];
+    if (!body.length) { [self showToast:@"Import failed"]; return; }
+    NSArray *lines=[body componentsSeparatedByString:@"\n"];
+    if (lines.count<2) { [self showToast:@"Empty CSV"]; return; }
+    NSArray *header=[self csvParseLine:[lines firstObject]];
+    NSInteger urlIdx=-1,userIdx=-1,passIdx=-1;
+    for (NSInteger i=0;i<(NSInteger)header.count;i++) {
+      NSString *h=[header[i] lowercaseString];
+      if ([h isEqualToString:@"url"]||[h isEqualToString:@"login_uri"]||[h isEqualToString:@"origin"]) urlIdx=i;
+      else if ([h isEqualToString:@"username"]||[h isEqualToString:@"login_username"]||[h isEqualToString:@"login"]) userIdx=i;
+      else if ([h isEqualToString:@"password"]||[h isEqualToString:@"login_password"]) passIdx=i;
+    }
+    if (urlIdx<0||userIdx<0||passIdx<0) { [self showToast:@"Missing url/username/password columns"]; return; }
+    NSInteger added=0;
+    for (NSInteger i=1;i<(NSInteger)lines.count;i++) {
+      NSString *line=lines[i]; if (!line.length) continue;
+      NSArray *fields=[self csvParseLine:line];
+      if ((NSInteger)fields.count<=MAX(MAX(urlIdx,userIdx),passIdx)) continue;
+      NSString *urlStr=fields[urlIdx];
+      NSString *user=fields[userIdx];
+      NSString *pass=fields[passIdx];
+      NSURL *u=[NSURL URLWithString:urlStr];
+      NSString *host=u.host?:urlStr;
+      if (!host.length||!user.length||!pass.length) continue;
+      if ([[BBPasswordStore shared] saveHost:host username:user password:pass]) added++;
+    }
+    [self showToast:[NSString stringWithFormat:@"Imported %ld password%@",(long)added,added==1?@"":@"s"]];
+  }];
 }
 - (void)clearMediaPermissions:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
@@ -7690,6 +7804,8 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSString *eid=pop.selectedItem.representedObject; if(eid)[ud setObject:eid forKey:@"BBSearchEngine"];
   NSString *hp=[home.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
   if (hp.length) [ud setObject:hp forKey:@"BBHomepage"]; else [ud removeObjectForKey:@"BBHomepage"];
+  // Toggle the home-button visibility in every open window so the change is immediate.
+  for (BBDelegate *w in gBBWindowControllers) w.homeButton.hidden=(hp.length==0);
   [ud setBool:(bmBar.state==NSControlStateValueOn) forKey:@"BBShowBookmarksBar"];
   [ud setBool:(inline_ac.state==NSControlStateValueOn) forKey:@"BBInlineAutocomplete"];
   [ud setBool:(sug.state==NSControlStateValueOn) forKey:@"BBSearchSuggestions"];
