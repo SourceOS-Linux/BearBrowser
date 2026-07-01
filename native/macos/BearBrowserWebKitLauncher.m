@@ -3633,6 +3633,7 @@ static NSMutableArray *gBBWindowControllers;
   mi(fileM,@"Close Window",@selector(performClose:),@"w",Cmd|Shift);
   mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
   mi(fileM,@"Save Page As…",@selector(savePage:),@"s",Cmd);
+  [fileM addItemWithTitle:@"Save Page as PDF…" action:@selector(savePageAsPDF:) keyEquivalent:@"s"].keyEquivalentModifierMask=Cmd|Opt;
   [fileM addItem:[NSMenuItem separatorItem]];
   mi(fileM,@"Share…",@selector(sharePage:),@"",0);
   mi(fileM,@"Print…",@selector(printPage:),@"p",Cmd);
@@ -3728,6 +3729,8 @@ static NSMutableArray *gBBWindowControllers;
   // ── Bookmarks ──
   NSMenu *bmM=submenu(@"Bookmarks");
   mi(bmM,@"Bookmark Manager",@selector(openBookmarkManager:),@"b",Cmd|Opt);
+  // Cmd+Shift+O — Chrome/macOS alias for Bookmark Manager
+  [bmM addItemWithTitle:@"" action:@selector(openBookmarkManager:) keyEquivalent:@"o"].keyEquivalentModifierMask=Cmd|Shift;
   [bmM addItem:[NSMenuItem separatorItem]];
   mi(bmM,@"Bookmark This Tab…",@selector(addBookmark:),@"d",Cmd);
   mi(bmM,@"Bookmark All Tabs…",@selector(bookmarkAllTabs:),@"d",Cmd|Shift);
@@ -8556,6 +8559,22 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   // Show picker anchored to the ellipsis (bear panel) button if available, else center of toolbar
   NSView *anchor=self.securityButton?:self.toolbarBg;
   [pick showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMinY];
+}
+- (void)savePageAsPDF:(id)s {
+  NSSavePanel *p=[NSSavePanel savePanel];
+  p.nameFieldStringValue=[self.webView.title?:@"page" stringByAppendingString:@".pdf"];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  p.allowedFileTypes=@[@"pdf"];
+#pragma clang diagnostic pop
+  [p beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!p.URL) return;
+    [self.webView createPDFWithConfiguration:nil completionHandler:^(NSData *d,NSError *e){
+      if (e||!d.length) { [self showToast:@"PDF save failed"]; return; }
+      [d writeToURL:p.URL atomically:YES];
+      [self showToast:@"Saved as PDF"];
+    }];
+  }];
 }
 - (void)savePage:(id)s {
   NSSavePanel *p=[NSSavePanel savePanel];
