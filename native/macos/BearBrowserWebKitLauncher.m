@@ -4040,6 +4040,34 @@ static NSMutableArray *gBBWindowControllers;
   [self updateStarButton]; [self reloadBookmarksBar];
 }
 // ── Hovered-link status bubble ────────────────────────────────────────────────
+// Brief transient toast bottom-right of the window (in-window; doesn't need
+// NSUserNotificationCenter permissions or entitlements).
+- (void)showToast:(NSString *)text {
+  if (!text.length||!self.window) return;
+  NSView *cv=self.window.contentView;
+  NSTextField *tf=[NSTextField labelWithString:text];
+  tf.font=[NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+  tf.textColor=[NSColor whiteColor]; tf.alignment=NSTextAlignmentCenter;
+  [tf sizeToFit];
+  CGFloat w=MIN(cv.bounds.size.width-40,MAX(160,tf.frame.size.width+28)),h=32;
+  NSView *toast=[[NSView alloc]initWithFrame:NSMakeRect(cv.bounds.size.width-w-16,20,w,h)];
+  toast.wantsLayer=YES; toast.layer.cornerRadius=8;
+  toast.layer.backgroundColor=[NSColor colorWithWhite:0.12 alpha:0.9].CGColor;
+  toast.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  tf.frame=NSMakeRect(14,(h-tf.frame.size.height)/2,w-28,tf.frame.size.height);
+  [toast addSubview:tf];
+  toast.alphaValue=0;
+  [cv addSubview:toast];
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx){
+    ctx.duration=0.18; toast.animator.alphaValue=1.0;
+  } completionHandler:^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(1.7*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+      [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx){
+        ctx.duration=0.35; toast.animator.alphaValue=0;
+      } completionHandler:^{ [toast removeFromSuperview]; }];
+    });
+  }];
+}
 - (void)showStatus:(NSString *)url {
   if (!url.length) { self.statusBar.hidden=YES; return; }
   self.statusBar.stringValue=url;
@@ -6004,6 +6032,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
     if (rc==NSAlertFirstButtonReturn) {
       [[BBPasswordStore shared] saveHost:host username:user password:pass];
+      [self showToast:@"Password saved to Keychain"];
     } else if (rc==NSAlertSecondButtonReturn) {
       [[NSUserDefaults standardUserDefaults] setBool:YES forKey:neverKey];
     }
@@ -6932,7 +6961,14 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   [[BBResearchStore shared] save]; [itemTV reloadData];
 }
 
-- (void)newTab:(id)s              { [self addTabPrivate:NO]; }
+- (void)newTab:(id)s {
+  [self addTabPrivate:NO];
+  // Chrome's Cmd+T behavior: focus the address bar so the user can type immediately.
+  dispatch_async(dispatch_get_main_queue(),^{
+    [self.window makeFirstResponder:self.address];
+    [self.address selectText:nil];
+  });
+}
 - (void)newPrivateTab:(id)s       { [self addTabPrivate:YES]; }
 - (void)newWindow:(id)s {
   BBDelegate *w=[[BBDelegate alloc]init];
@@ -8824,6 +8860,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
       NSDictionary *attr=[[NSFileManager defaultManager] attributesOfItemAtPath:item.destURL.path error:nil];
       if (attr) item.writtenBytes=[attr[NSFileSize] longLongValue];
       [self.downloadPanel refresh];
+      [self showToast:[NSString stringWithFormat:@"Downloaded %@",item.filename?:@"file"]];
     }
     BBLog(@"download finished");
   });
