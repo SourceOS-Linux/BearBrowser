@@ -1901,6 +1901,16 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
       [_suggestions addObject:s]; if(_suggestions.count>=3) break;
     }
   }
+  // Reading List — unread items surface with a book badge.
+  for (BBReadingItem *it in [BBReadingList shared].items) {
+    if (it.read) continue;
+    if ([[it.title lowercaseString] containsString:q.lowercaseString]||
+        [[it.urlString lowercaseString] containsString:q.lowercaseString]) {
+      BBAddressSuggestion *s=[BBAddressSuggestion new];
+      s.title=it.title.length?it.title:it.urlString; s.urlString=it.urlString; s.badge=@"📖";
+      [_suggestions addObject:s]; if(_suggestions.count>=6) break;
+    }
+  }
   // History
   for (BBHistoryEntry *e in [[BBHistoryStore shared] search:q limit:6]) {
     BBAddressSuggestion *s=[BBAddressSuggestion new]; s.title=e.title.length?e.title:e.urlString;
@@ -7709,6 +7719,19 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSTextField *lbl=(NSTextField *)objc_getAssociatedObject(self,"BBDLPathLabel");
   if (lbl) { NSString *shown=[path stringByAbbreviatingWithTildeInPath]; lbl.stringValue=shown; lbl.toolTip=shown; }
 }
+- (void)resetAllPreferences:(id)s {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Reset all preferences?";
+  a.informativeText=@"BearBrowser will discard every BB-prefixed setting (homepage, search engine, downloads folder, session data, zoom-per-site memory, mute-site list, "
+                     "hidden NTP shortcuts, translate opt-outs, media permissions, autofill profile, saved workspaces, restore-session choice, generator style). "
+                     "Bookmarks, history, and saved Keychain passwords are NOT touched.";
+  [a addButtonWithTitle:@"Reset Preferences"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
+    if ([key hasPrefix:@"BB"]) [ud removeObjectForKey:key];
+  [self showToast:@"Preferences reset (restart to apply UI changes)"];
+}
 - (void)unhideNTPShortcuts:(id)s {
   NSArray *hidden=[[NSUserDefaults standardUserDefaults] arrayForKey:@"BBHiddenTopSites"]?:@[];
   if (!hidden.count) { [self showToast:@"No hidden shortcuts"]; return; }
@@ -7951,7 +7974,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=580;
+  CGFloat W=470,Hh=620;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -8028,6 +8051,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *unBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
   unBtn.title=@"Unhide Removed Shortcuts…"; unBtn.bezelStyle=NSBezelStyleRounded;
   unBtn.target=self; unBtn.action=@selector(unhideNTPShortcuts:); [cv addSubview:unBtn];
+  y-=38;
+  label(@"Reset:",y+4);
+  NSButton *rsBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  rsBtn.title=@"Reset All Preferences…"; rsBtn.bezelStyle=NSBezelStyleRounded;
+  rsBtn.target=self; rsBtn.action=@selector(resetAllPreferences:); [cv addSubview:rsBtn];
   NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
   save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
   save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
@@ -9372,6 +9400,39 @@ static const NSInteger kDialogAbuseThreshold = 3;
   if (mailto) [[NSWorkspace sharedWorkspace] openURL:mailto];
 }
 // Install a right-click monitor so we can show our own Chrome-style context menu.
+- (void)showBookmarksBarContextMenuAt:(NSPoint)winLoc {
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *add=[m addItemWithTitle:@"Add Current Page…" action:@selector(addBookmark:) keyEquivalent:@""];
+  add.target=self; add.enabled=(self.webView.URL!=nil && ![self isInternalURL:self.webView.URL.absoluteString]);
+  NSMenuItem *ba=[m addItemWithTitle:@"Bookmark All Tabs…" action:@selector(bookmarkAllTabs:) keyEquivalent:@""];
+  ba.target=self;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *nf=[m addItemWithTitle:@"New Folder…" action:@selector(bmBarNewFolder:) keyEquivalent:@""];
+  nf.target=self;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *hide=[m addItemWithTitle:@"Hide Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
+  hide.target=self;
+  NSMenuItem *mgr=[m addItemWithTitle:@"Show Bookmark Manager" action:@selector(openBookmarkManager:) keyEquivalent:@""];
+  mgr.target=self;
+  [m popUpMenuPositioningItem:nil atLocation:winLoc inView:nil];
+}
+- (void)bmBarNewFolder:(id)s {
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"New Bookmark Folder";
+  a.informativeText=@"Folders appear on the bookmarks bar as buttons that pop out their bookmarks.";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.placeholderString=@"Folder name"; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Create"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *name=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!name.length) return;
+    // Empty folders don't persist unless there's a bookmark; add a placeholder note.
+    NSString *placeholderURL=[NSString stringWithFormat:@"bearbrowser://folder-placeholder/%@",name];
+    if (![[BBBookmarksStore shared] isBookmarked:placeholderURL])
+      [[BBBookmarksStore shared] addTitle:@"(empty)" url:placeholderURL folder:name];
+    [self reloadBookmarksBar];
+  }];
+}
 - (void)showTabBarContextMenuAt:(NSPoint)winLoc {
   NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
   NSMenuItem *nt=[m addItemWithTitle:@"New Tab" action:@selector(newTab:) keyEquivalent:@""];
@@ -9407,6 +9468,16 @@ static const NSInteger kDialogAbuseThreshold = 3;
             NSPointInRect([s.tabBarView.tabStrip convertPoint:e.locationInWindow fromView:nil],v.frame)) { onItem=YES; break; }
       }
       if (!onItem) { [s showTabBarContextMenuAt:e.locationInWindow]; return nil; }
+    }
+    // Right-click on empty bookmarks-bar area → Add Current Page / New Folder / etc.
+    if (s.bookmarksBarVisible) {
+      NSPoint bmPt=[s.bookmarksBar convertPoint:e.locationInWindow fromView:nil];
+      if (NSPointInRect(bmPt,s.bookmarksBar.bounds)) {
+        BOOL onBtn=NO;
+        for (NSView *v in s.bookmarksBar.subviews)
+          if ([v isKindOfClass:[NSButton class]] && NSPointInRect(bmPt,v.frame)) { onBtn=YES; break; }
+        if (!onBtn) { [s showBookmarksBarContextMenuAt:e.locationInWindow]; return nil; }
+      }
     }
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if (!NSPointInRect(pt,s.webView.bounds)) return e;
