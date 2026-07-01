@@ -1460,11 +1460,18 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
     name:NSSystemColorsDidChangeNotification object:nil];
   _items=[NSMutableArray array];
   // Header
-  NSTextField *hdr=[[NSTextField alloc]initWithFrame:NSMakeRect(12,f.size.height-36,f.size.width-24,24)];
+  NSTextField *hdr=[[NSTextField alloc]initWithFrame:NSMakeRect(12,f.size.height-36,f.size.width-92,24)];
   hdr.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
   hdr.stringValue=@"Downloads"; hdr.font=[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
   hdr.bordered=NO; hdr.editable=NO; hdr.selectable=NO; hdr.backgroundColor=[NSColor clearColor];
   [self addSubview:hdr];
+  // Clear-finished button
+  NSButton *clr=[[NSButton alloc]initWithFrame:NSMakeRect(f.size.width-80,f.size.height-38,68,22)];
+  clr.autoresizingMask=NSViewMinXMargin|NSViewMinYMargin;
+  clr.title=@"Clear"; clr.font=[NSFont systemFontOfSize:11]; clr.bezelStyle=NSBezelStyleRoundRect;
+  clr.toolTip=@"Remove completed downloads from the list";
+  clr.target=self; clr.action=@selector(clearFinished);
+  [self addSubview:clr];
   // Separator
   NSBox *sep=[[NSBox alloc]initWithFrame:NSMakeRect(0,f.size.height-38,f.size.width,1)];
   sep.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin; sep.boxType=NSBoxSeparator; [self addSubview:sep];
@@ -1505,6 +1512,12 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   }
   if (!anyActive) { [self.pollTimer invalidate]; self.pollTimer=nil; }
   dispatch_async(dispatch_get_main_queue(),^{ [self updateDockBadge]; [self refresh]; });
+}
+- (void)clearFinished {
+  NSMutableArray *keep=[NSMutableArray array];
+  for (BBDownloadItem *it in self.items) if (it.state==BBDownloadStateActive) [keep addObject:it];
+  self.items=keep;
+  [self refresh];
 }
 - (void)refresh {
   for (NSView *v in self.stack.arrangedSubviews) [self.stack removeArrangedSubview:v];
@@ -3542,6 +3555,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) id               ctrlScrollMonitor;    // Ctrl+scroll → page zoom (Chrome parity)
 @property(strong) NSButton        *starButton;           // bookmark this page (address bar)
 @property(strong) NSButton        *zoomChip;             // page-zoom % (hidden at 100)
+@property(strong) NSButton        *readerButton;         // reader-mode entry (hidden until article-like)
 @property(strong) NSTextField     *statusBar;            // Chrome-style hovered-link bubble (bottom-left)
 @property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
 @property(assign) BOOL    readerMode;
@@ -3773,6 +3787,8 @@ static NSMutableArray *gBBWindowControllers;
     ti.keyEquivalentModifierMask=Cmd; ti.tag=i-1;
   }
   [tabM addItem:[NSMenuItem separatorItem]];
+  [tabM addItemWithTitle:@"Copy URLs of All Tabs" action:@selector(copyURLsOfAllTabs:) keyEquivalent:@""];
+  [tabM addItem:[NSMenuItem separatorItem]];
   mi(tabM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
 
   // ── Window ──
@@ -3941,6 +3957,17 @@ static NSMutableArray *gBBWindowControllers;
   self.zoomChip.target=self; self.zoomChip.action=@selector(zoomReset:);
   self.zoomChip.toolTip=@"Reset zoom to 100%";
   [self.toolbarBg addSubview:self.zoomChip];
+  // Reader-mode button — hidden until we detect the page has an <article>/<main>.
+  self.readerButton=[[NSButton alloc]initWithFrame:NSMakeRect(starX-70,btnY+3,22,24)];
+  self.readerButton.autoresizingMask=NSViewMinXMargin;
+  self.readerButton.bezelStyle=NSBezelStyleToolbar; self.readerButton.bordered=NO;
+  { NSImage *im=[NSImage imageWithSystemSymbolName:@"book" accessibilityDescription:@"Reader"];
+    im=[im imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:13 weight:NSFontWeightMedium]];
+    [im setTemplate:YES]; self.readerButton.image=im; self.readerButton.imagePosition=NSImageOnly; }
+  self.readerButton.toolTip=@"Reader Mode (⌃⌘R)";
+  self.readerButton.target=self; self.readerButton.action=@selector(toggleReader:);
+  self.readerButton.hidden=YES;
+  [self.toolbarBg addSubview:self.readerButton];
 
   // Network monitor button
   NSButton *netBtn=[self navBtn:@"network" tip:@"Network Monitor (⇧⌘M)" sel:@selector(openNetworkMonitor:) x:W-rightR-58 y:btnY];
@@ -6329,6 +6356,18 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   }
   [self reloadTabBar];
 }
+- (void)copyURLsOfAllTabs:(id)s {
+  NSMutableArray *lines=[NSMutableArray array];
+  for (BBTab *t in self.tabs) {
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (u.length && ![self isInternalURL:u]) [lines addObject:u];
+  }
+  if (!lines.count) { NSBeep(); return; }
+  NSString *joined=[lines componentsJoinedByString:@"\n"];
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:joined forType:NSPasteboardTypeString];
+  [self showToast:[NSString stringWithFormat:@"Copied %ld URL%@",(long)lines.count,lines.count==1?@"":@"s"]];
+}
 - (void)muteAllTabs:(id)s   { [self setAllTabsMuted:YES]; }
 - (void)unmuteAllTabs:(id)s { [self setAllTabsMuted:NO];  }
 - (void)contextSaveLink:(id)sender {
@@ -7076,6 +7115,16 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   // Foreground the translated page — translation is the user's main intent here.
   (void)prev;
 }
+- (void)detectReaderable:(WKWebView *)wv {
+  if (self.readerMode) { self.readerButton.hidden=YES; return; }
+  [wv evaluateJavaScript:
+    @"(function(){var a=document.querySelector('article,main,[role=main]');"
+     "if(!a)return 0;var t=0;a.querySelectorAll('p').forEach(function(x){t+=(x.innerText||'').length;});return t;})()"
+    completionHandler:^(id r,NSError *e){
+      NSInteger t=[r isKindOfClass:[NSNumber class]]?[r integerValue]:0;
+      self.readerButton.hidden=(t<600);
+    }];
+}
 - (void)toggleReader:(id)s {
   if (self.readerMode) {
     self.readerMode=NO;
@@ -7624,6 +7673,19 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSTextField *lbl=(NSTextField *)objc_getAssociatedObject(self,"BBDLPathLabel");
   if (lbl) { NSString *shown=[path stringByAbbreviatingWithTildeInPath]; lbl.stringValue=shown; lbl.toolTip=shown; }
 }
+- (void)unhideNTPShortcuts:(id)s {
+  NSArray *hidden=[[NSUserDefaults standardUserDefaults] arrayForKey:@"BBHiddenTopSites"]?:@[];
+  if (!hidden.count) { [self showToast:@"No hidden shortcuts"]; return; }
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Restore Hidden Shortcuts";
+  a.informativeText=[NSString stringWithFormat:@"BearBrowser is hiding %ld host%@ from the New Tab Page:\n\n%@\n\nRestore all?",
+    (long)hidden.count, hidden.count==1?@"":@"s",
+    [hidden componentsJoinedByString:@"\n"]];
+  [a addButtonWithTitle:@"Restore All"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"BBHiddenTopSites"];
+  [self showToast:@"Restored"];
+}
 - (void)showSiteDataManager:(id)s {
   CGFloat W=620,Hh=460;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
@@ -7850,7 +7912,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
 }
 - (void)openSearchPreferences:(id)s {
   NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
-  CGFloat W=470,Hh=540;
+  CGFloat W=470,Hh=580;
   NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
   sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
@@ -7922,6 +7984,11 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSButton *sdBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
   sdBtn.title=@"Manage Site Data & Cookies…"; sdBtn.bezelStyle=NSBezelStyleRounded;
   sdBtn.target=self; sdBtn.action=@selector(showSiteDataManager:); [cv addSubview:sdBtn];
+  y-=38;
+  label(@"New Tab Page:",y+4);
+  NSButton *unBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  unBtn.title=@"Unhide Removed Shortcuts…"; unBtn.bezelStyle=NSBezelStyleRounded;
+  unBtn.target=self; unBtn.action=@selector(unhideNTPShortcuts:); [cv addSubview:unBtn];
   NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
   save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
   save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
@@ -9446,6 +9513,7 @@ static const NSInteger kDialogAbuseThreshold = 3;
     [self updateSecurityIndicator:wv.URL];
     [self updateStarButton];
     [self applyZoomForCurrentTab];
+    [self detectReaderable:wv];
   }
   // Record navigation to network monitor
   if(wv.URL.host.length && !tab.isPrivate)
