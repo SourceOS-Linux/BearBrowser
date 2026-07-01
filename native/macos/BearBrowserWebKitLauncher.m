@@ -1260,6 +1260,7 @@ typedef NS_ENUM(NSInteger, BBResearchStatus) {
 - (void)recordTitle:(NSString *)t url:(NSString *)u;
 - (void)updateTitle:(NSString *)t forURL:(NSString *)u;
 - (void)clearAll;
+- (void)removeAllForURL:(NSString *)u;
 - (NSArray<BBHistoryEntry *> *)search:(NSString *)q limit:(NSInteger)n;
 @end
 @implementation BBHistoryStore
@@ -1314,6 +1315,22 @@ typedef NS_ENUM(NSInteger, BBResearchStatus) {
   [self.entries removeAllObjects];
   NSString *path=[[BBSupportDir() stringByAppendingPathComponent:@"history"] stringByAppendingPathComponent:@"history.jsonl"];
   [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+}
+- (void)removeAllForURL:(NSString *)u {
+  if (!u.length) return;
+  NSMutableIndexSet *idx=[NSMutableIndexSet indexSet];
+  for (NSInteger i=0;i<(NSInteger)self.entries.count;i++)
+    if ([self.entries[i].urlString isEqualToString:u]) [idx addIndex:(NSUInteger)i];
+  if (!idx.count) return;
+  [self.entries removeObjectsAtIndexes:idx];
+  // Rewrite the on-disk log without the deleted entries.
+  NSMutableString *out=[NSMutableString string];
+  for (BBHistoryEntry *e in self.entries) {
+    [out appendFormat:@"%@\n",BBJSON(@{@"url":e.urlString,@"title":e.title?:@"",@"t":@(e.visitedAt.timeIntervalSince1970)})];
+  }
+  NSString *path=[[BBSupportDir() stringByAppendingPathComponent:@"history"] stringByAppendingPathComponent:@"history.jsonl"];
+  [[NSFileManager defaultManager] createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+  [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 - (NSArray<BBHistoryEntry *> *)search:(NSString *)q limit:(NSInteger)n {
   if(!q.length) return @[];
@@ -1976,21 +1993,48 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   }]] mutableCopy];
   [_tv reloadData];
 }
+- (void)deleteSelected {
+  NSInteger row=_tv.selectedRow; if (row<0||row>=(NSInteger)_shown.count) return;
+  NSString *u=_shown[row].urlString;
+  [[BBHistoryStore shared] removeAllForURL:u];
+  // Also drop from our local caches so the UI updates immediately.
+  NSMutableArray *newAll=[NSMutableArray array];
+  for (BBHistoryEntry *e in _all) if (![e.urlString isEqualToString:u]) [newAll addObject:e];
+  _all=newAll;
+  NSMutableArray *newShown=[NSMutableArray array];
+  for (BBHistoryEntry *e in _shown) if (![e.urlString isEqualToString:u]) [newShown addObject:e];
+  _shown=newShown;
+  [_tv reloadData];
+}
 @end
 
 // ── BBBookmarksPanelDS ────────────────────────────────────────────────────────
 // Datasource/delegate for the Bookmark Manager table. Reads the shared store live.
-@interface BBBookmarksPanelDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@interface BBBookmarksPanelDS : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSSearchFieldDelegate>
 @property(strong) NSTableView *tv;
 @property(weak)   NSWindow    *win;
 @property(weak)   WKWebView   *webView;
+@property(copy)   NSString    *query;
+- (NSArray<BBBookmark *> *)filteredItems;
 @end
 @implementation BBBookmarksPanelDS
-- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return [BBBookmarksStore shared].items.count; }
+- (NSArray<BBBookmark *> *)filteredItems {
+  NSArray<BBBookmark *> *all=[BBBookmarksStore shared].items;
+  if (!self.query.length) return all;
+  NSString *q=self.query.lowercaseString;
+  NSMutableArray *out=[NSMutableArray array];
+  for (BBBookmark *b in all) {
+    if ([b.title.lowercaseString containsString:q]||
+        [b.urlString.lowercaseString containsString:q]||
+        (b.folder.length && [b.folder.lowercaseString containsString:q])) [out addObject:b];
+  }
+  return out;
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return [self filteredItems].count; }
 - (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
   NSTextField *f=[tv makeViewWithIdentifier:col.identifier owner:self];
   if (!f) { f=[[NSTextField alloc]init]; f.identifier=col.identifier; f.bordered=NO; f.editable=NO; f.selectable=NO; f.backgroundColor=[NSColor clearColor]; f.lineBreakMode=NSLineBreakByTruncatingTail; }
-  NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
+  NSArray<BBBookmark*> *items=[self filteredItems];
   if (row<0||row>=(NSInteger)items.count) { f.stringValue=@""; return f; }
   BBBookmark *b=items[row];
   if ([col.identifier isEqualToString:@"title"])       f.stringValue=b.title.length?b.title:b.urlString;
@@ -1998,8 +2042,14 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   else                                                  f.stringValue=b.urlString;
   return f;
 }
+- (void)controlTextDidChange:(NSNotification *)n {
+  if ([n.object isKindOfClass:[NSSearchField class]]) {
+    self.query=((NSSearchField*)n.object).stringValue;
+    [self.tv reloadData];
+  }
+}
 - (void)moveSelectedToFolder {
-  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[self filteredItems];
   if (row<0||row>=(NSInteger)items.count) return;
   BBBookmark *b=items[row];
   NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Move to Folder";
@@ -2016,15 +2066,16 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   [self.tv reloadData];
 }
 - (void)openSelected {
-  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[BBBookmarksStore shared].items;
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[self filteredItems];
   if (row<0||row>=(NSInteger)items.count) return;
   NSURL *u=[NSURL URLWithString:items[row].urlString]; if(!u) return;
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
   [self.win close];
 }
 - (void)removeSelected {
-  NSInteger row=self.tv.selectedRow;
-  [[BBBookmarksStore shared] removeAtIndex:row];
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark *> *items=[self filteredItems];
+  if (row<0||row>=(NSInteger)items.count) return;
+  [[BBBookmarksStore shared] removeURL:items[row].urlString];
   [self.tv reloadData];
 }
 @end
@@ -3458,6 +3509,7 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(strong) id               middleClickMonitor;
 @property(strong) id               ctrlScrollMonitor;    // Ctrl+scroll → page zoom (Chrome parity)
 @property(strong) NSButton        *starButton;           // bookmark this page (address bar)
+@property(strong) NSButton        *zoomChip;             // page-zoom % (hidden at 100)
 @property(strong) NSTextField     *statusBar;            // Chrome-style hovered-link bubble (bottom-left)
 @property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
 @property(assign) BOOL    readerMode;
@@ -3823,6 +3875,15 @@ static NSMutableArray *gBBWindowControllers;
   self.starButton.bezelStyle=NSBezelStyleToolbar; self.starButton.bordered=NO;
   self.starButton.target=self; self.starButton.action=@selector(toggleBookmarkCurrent:);
   [self updateStarButton]; [self.toolbarBg addSubview:self.starButton];
+  // Zoom-level chip — sits just left of the star, visible only when zoom != 100%.
+  self.zoomChip=[[NSButton alloc]initWithFrame:NSMakeRect(starX-46,btnY+5,42,20)];
+  self.zoomChip.autoresizingMask=NSViewMinXMargin;
+  self.zoomChip.bezelStyle=NSBezelStyleRoundRect; self.zoomChip.bordered=YES;
+  self.zoomChip.font=[NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+  self.zoomChip.title=@"100%"; self.zoomChip.hidden=YES;
+  self.zoomChip.target=self; self.zoomChip.action=@selector(zoomReset:);
+  self.zoomChip.toolTip=@"Reset zoom to 100%";
+  [self.toolbarBg addSubview:self.zoomChip];
 
   // Network monitor button
   NSButton *netBtn=[self navBtn:@"network" tip:@"Network Monitor (⇧⌘M)" sel:@selector(openNetworkMonitor:) x:W-rightR-58 y:btnY];
@@ -6476,7 +6537,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,hw.contentView.bounds.size.height-44,656,28)];
   sf.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
   sf.placeholderString=@"Search history"; [cv addSubview:sf];
-  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,0,680,hw.contentView.bounds.size.height-56)];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,44,680,hw.contentView.bounds.size.height-100)];
   sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
   NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=36;
   NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"title"]; c1.title=@"Title"; c1.width=280;
@@ -6498,6 +6559,12 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   tv.dataSource=ds; tv.delegate=ds; sf.delegate=ds;
   objc_setAssociatedObject(hw,@"ds",ds,OBJC_ASSOCIATION_RETAIN);
   [tv reloadData];
+  NSButton *del=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,120,30)];
+  del.title=@"Delete Entry"; del.bezelStyle=NSBezelStyleRounded; del.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  del.target=ds; del.action=@selector(deleteSelected); [cv addSubview:del];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(hw.contentView.bounds.size.width-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=hw; done.action=@selector(performClose:); [cv addSubview:done];
   [self.window beginSheet:hw completionHandler:nil];
 }
 
@@ -6653,17 +6720,30 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
       else [body appendFormat:@"<%@>%@</%@>",t,[self htmlEscape:b[@"x"]],t];
     }
     NSString *title=[self htmlEscape:obj[@"title"]?:@""];
+    NSInteger fs=[[NSUserDefaults standardUserDefaults] integerForKey:@"BBReaderFontSize"]; if (fs<14||fs>28) fs=18;
     NSString *html=[NSString stringWithFormat:
       @"<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
       @"<style>:root{color-scheme:light dark}"
       @"body{max-width:42rem;margin:0 auto;padding:48px 24px 96px;"
-      @"font:18px/1.7 -apple-system,Georgia,serif;color:#1d1d1f;background:#fff}"
+      @"font:%ldpx/1.7 -apple-system,Georgia,serif;color:#1d1d1f;background:#fff}"
       @"@media(prefers-color-scheme:dark){body{color:#e8e8ea;background:#1c1c1e}}"
       @"h1{font-size:2em;line-height:1.2;margin:0 0 .6em}h2,h3,h4{line-height:1.3;margin:1.4em 0 .4em}"
       @"p,li,blockquote,pre{margin:0 0 1em}blockquote{padding-left:1em;border-left:3px solid #ccc;color:#666}"
       @"pre{white-space:pre-wrap;font:14px/1.5 ui-monospace,monospace;background:rgba(127,127,127,.12);padding:12px;border-radius:8px}"
-      @"img{max-width:100%%;height:auto;border-radius:8px;margin:1em 0}</style>"
-      @"<h1>%@</h1>%@", title, body];
+      @"img{max-width:100%%;height:auto;border-radius:8px;margin:1em 0}"
+      @".bb-reader-bar{position:fixed;top:12px;right:12px;display:flex;gap:6px;"
+      @"padding:6px 10px;border-radius:14px;backdrop-filter:blur(12px);"
+      @"background:rgba(255,255,255,.75);border:1px solid rgba(0,0,0,.08);font:12px -apple-system}"
+      @"@media(prefers-color-scheme:dark){.bb-reader-bar{background:rgba(30,30,30,.75);border-color:rgba(255,255,255,.1);color:#e8e8ea}}"
+      @".bb-reader-bar button{all:unset;cursor:pointer;padding:2px 8px;border-radius:6px;font-weight:600}"
+      @".bb-reader-bar button:hover{background:rgba(0,0,0,.08)}"
+      @"</style>"
+      @"<div class=bb-reader-bar>"
+      @"<button onclick=\"document.body.style.fontSize=Math.max(14,(parseFloat(getComputedStyle(document.body).fontSize)||18)-2)+'px'\">A−</button>"
+      @"<button onclick=\"document.body.style.fontSize=((parseFloat(getComputedStyle(document.body).fontSize)||18))+'px'\">Aa</button>"
+      @"<button onclick=\"document.body.style.fontSize=Math.min(28,(parseFloat(getComputedStyle(document.body).fontSize)||18)+2)+'px'\">A+</button>"
+      @"</div>"
+      @"<h1>%@</h1>%@",(long)fs, title, body];
     self.readerOriginalURL=self.webView.URL;
     self.readerMode=YES;
     [self.webView loadHTMLString:html baseURL:self.webView.URL];
@@ -6676,7 +6756,10 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
     backing:NSBackingStoreBuffered defer:YES];
   bw.releasedWhenClosed=NO; bw.title=@"Bookmarks"; [bw center];
   NSView *cv=bw.contentView;
-  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-48)];
+  NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,Hh-40,W-24,28)];
+  sf.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
+  sf.placeholderString=@"Search bookmarks"; [cv addSubview:sf];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-96)];
   sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
   NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=30;
   NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"title"];  c1.title=@"Title";  c1.width=210;
@@ -6687,6 +6770,7 @@ static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
   BBBookmarksPanelDS *ds=[[BBBookmarksPanelDS alloc]init];
   ds.tv=tv; ds.win=bw; ds.webView=self.webView;
   tv.dataSource=ds; tv.delegate=ds; tv.target=ds; tv.doubleAction=@selector(openSelected);
+  sf.delegate=ds;
   objc_setAssociatedObject(bw,@"bmds",ds,OBJC_ASSOCIATION_RETAIN);
   [tv reloadData];
   NSButton *open=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,90,30)];
@@ -7749,13 +7833,21 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
     else self.zoomByHost[h]=@(z);
     [[NSUserDefaults standardUserDefaults] setObject:self.zoomByHost forKey:@"BBZoomByHost"];
   }
-  [self flashZoom:z];
+  [self flashZoom:z]; [self updateZoomChip];
 }
 // Re-apply a remembered zoom when navigating to / switching to a page.
 - (void)applyZoomForCurrentTab {
   NSString *h=self.currentHost;
   CGFloat z=(h.length && self.zoomByHost[h]) ? self.zoomByHost[h].doubleValue : 1.0;
   self.webView.pageZoom=z;
+  [self updateZoomChip];
+}
+- (void)updateZoomChip {
+  if (!self.zoomChip) return;
+  CGFloat z=self.webView.pageZoom;
+  BOOL show=fabs(z-1.0)>=0.005;
+  self.zoomChip.title=[NSString stringWithFormat:@"%d%%",(int)lround(z*100)];
+  self.zoomChip.hidden=!show;
 }
 - (void)flashZoom:(CGFloat)z {
   [self showStatus:[NSString stringWithFormat:@"Zoom %d%%",(int)lround(z*100)]];
@@ -8639,6 +8731,25 @@ static const NSInteger kDialogAbuseThreshold = 3;
   self.middleClickMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskOtherMouseDown handler:^NSEvent*(NSEvent *e){
     if (e.buttonNumber!=2) return e;
     BBDelegate *s=weak; if(!s||e.window!=s.window) return e;
+    // Middle-click on a bookmark-bar button → open bookmark in a new background tab.
+    if (s.bookmarksBarVisible) {
+      NSPoint barPt=[s.bookmarksBar convertPoint:e.locationInWindow fromView:nil];
+      if (NSPointInRect(barPt,s.bookmarksBar.bounds)) {
+        for (NSView *v in s.bookmarksBar.subviews) {
+          if (![v isKindOfClass:[NSButton class]]) continue;
+          if (!NSPointInRect(barPt,v.frame)) continue;
+          NSString *url=((NSButton*)v).toolTip;
+          NSURL *u=url?[NSURL URLWithString:url]:nil;
+          if (u) {
+            NSInteger prev=s.activeTabIndex;
+            [s addTabPrivate:s.activeTab.isPrivate];
+            [s.webView loadRequest:[NSURLRequest requestWithURL:u]];
+            [s tabItemDidSelect:prev];
+            return (NSEvent *)nil;
+          }
+        }
+      }
+    }
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if(!NSPointInRect(pt,s.webView.bounds)) return e;
     NSString *js=[NSString stringWithFormat:
