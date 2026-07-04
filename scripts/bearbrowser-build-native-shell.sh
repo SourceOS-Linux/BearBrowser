@@ -59,6 +59,7 @@ echo "[2/6] Compiling BearBrowserWebKitLauncher.m..."
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 clang -fobjc-arc -O2 \
   -framework Cocoa -framework WebKit -framework AVFoundation -framework Security \
+  -framework UniformTypeIdentifiers \
   "$src" -o "$app/Contents/MacOS/BearBrowser"
 
 echo "[3/6] Rendering Info.plist (version=$version)..."

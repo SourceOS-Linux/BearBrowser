@@ -5,6 +5,7 @@
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -296,7 +297,10 @@ static const CGFloat kFindBarH  = 44.0;
 static const CGFloat kBMBarH    = 30.0;
 static const CGFloat kDLPanelW  = 280.0;
 static const CGFloat kTabMaxW   = 220.0;
+static const CGFloat kTabPinnedW = 36.0;  // fixed width for pinned tabs (icon-only)
 static const CGFloat kTabMinW   = 80.0;
+static const CGFloat kTabHardMinW = 44.0; // favicon-only floor when many tabs are open
+static const CGFloat kTabCompactW = 72.0; // below this width a tab drops its title/close (favicon-only)
 
 // ── BBTab ─────────────────────────────────────────────────────────────────────
 @interface BBTab : NSObject
@@ -305,15 +309,37 @@ static const CGFloat kTabMinW   = 80.0;
 @property(strong) NSImage   *favicon;
 @property(assign) BOOL       isLoading;
 @property(assign) BOOL       isPrivate;
+@property(assign) NSInteger  dialogCount;
+@property(assign) BOOL       dialogsSuppressed;
+// Tab suspension — frees WKWebView memory for background tabs
+@property(assign) BOOL       suspended;
+@property(copy)   NSString  *suspendedURL;    // URL to reload on wake
+@property(strong) NSDate    *lastActiveAt;    // nil = never focused
+@property(assign) BOOL       muted;           // JS-level audio/video mute
+@property(assign) BOOL       pinned;          // pinned = fixed-width icon-only, no Cmd+W
+@property(assign) BOOL       isPlayingAudio;  // page has active audio (tab badge)
+@property(assign) BOOL       genpassOffered;  // password-generator prompt already shown for this page load
+@property(assign) BOOL       translateOffered;// translate prompt already shown for this page load
+@property(assign) BOOL       editableFocus;   // last-known editable focus state (for native spell-check fallback)
+@property(copy)   NSString  *groupName;       // tab group label (nil/"" = no group)
+@property(assign) NSInteger  groupColorIdx;   // 0..7 color slot; only relevant when groupName set
+@property(assign) BOOL       collapsedInGroup;// when YES, render as a small group-color chip
 @end
 @implementation BBTab
-- (instancetype)init { self=[super init]; _title=@"New Tab"; return self; }
+- (instancetype)init { self=[super init]; _title=@"New Tab"; _lastActiveAt=[NSDate date]; return self; }
 @end
 
 // ── BBTabItemView ─────────────────────────────────────────────────────────────
 @protocol BBTabItemDelegate <NSObject>
 - (void)tabItemDidSelect:(NSInteger)index;
 - (void)tabItemDidClose:(NSInteger)index;
+@optional
+- (void)tabItemDidMiddleClick:(NSInteger)index;       // middle-click closes (Chrome)
+- (NSMenu *)tabItemContextMenu:(NSInteger)index;      // right-click tab menu
+- (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to; // drag-to-reorder
+- (void)tabBarDidDropURL:(NSString *)urlString;            // URL dragged onto tab strip
+- (void)tabItemDidHoverEnter:(NSInteger)index fromView:(NSView *)view;
+- (void)tabItemDidHoverExit:(NSInteger)index;
 @end
 
 @interface BBTabItemView : NSView
@@ -321,9 +347,12 @@ static const CGFloat kTabMinW   = 80.0;
 @property(nonatomic,assign) BOOL isActive;
 @property(nonatomic,assign) BOOL isHovered;
 @property(nonatomic,assign) BOOL isPrivate;
+@property(assign) BOOL compact; // favicon-only mode for very narrow tabs
 @property(strong) NSImageView *faviconView;
+@property(strong) NSProgressIndicator *loadingSpinner;
 @property(strong) NSTextField *titleLabel;
 @property(strong) NSButton    *closeButton;
+@property(strong) NSColor    *groupColor;
 @property(weak)   id<BBTabItemDelegate> delegate;
 - (void)setTabTitle:(NSString *)title favicon:(NSImage *)favicon loading:(BOOL)loading;
 @end
@@ -331,22 +360,32 @@ static const CGFloat kTabMinW   = 80.0;
 @implementation BBTabItemView
 - (instancetype)initWithFrame:(NSRect)f index:(NSInteger)idx delegate:(id<BBTabItemDelegate>)d {
   self=[super initWithFrame:f]; _index=idx; _delegate=d;
+  _compact=(f.size.width < kTabCompactW);
   [self addTrackingArea:[[NSTrackingArea alloc]initWithRect:self.bounds
     options:NSTrackingMouseEnteredAndExited|NSTrackingActiveInKeyWindow|NSTrackingInVisibleRect
     owner:self userInfo:nil]];
-  // Favicon (16×16)
-  _faviconView=[[NSImageView alloc]initWithFrame:NSMakeRect(8,10,16,16)];
+  // Favicon (16×16). Centered in compact mode, left-aligned otherwise.
+  CGFloat favX=_compact?floor((f.size.width-16)/2):8;
+  _faviconView=[[NSImageView alloc]initWithFrame:NSMakeRect(favX,10,16,16)];
   _faviconView.imageScaling=NSImageScaleProportionallyUpOrDown;
+  if (_compact) _faviconView.autoresizingMask=NSViewMinXMargin|NSViewMaxXMargin;
   [self addSubview:_faviconView];
-  // Title
-  _titleLabel=[[NSTextField alloc]initWithFrame:NSMakeRect(28,8,f.size.width-54,20)];
+  // Animated loading spinner (overlaps favicon, hidden when not loading).
+  _loadingSpinner=[[NSProgressIndicator alloc]initWithFrame:NSMakeRect(favX,10,16,16)];
+  _loadingSpinner.style=NSProgressIndicatorStyleSpinning;
+  _loadingSpinner.controlSize=NSControlSizeMini; _loadingSpinner.hidden=YES;
+  if (_compact) _loadingSpinner.autoresizingMask=NSViewMinXMargin|NSViewMaxXMargin;
+  [self addSubview:_loadingSpinner];
+  // Title — hidden in compact mode.
+  _titleLabel=[[NSTextField alloc]initWithFrame:NSMakeRect(28,8,MAX(0,f.size.width-54),20)];
   _titleLabel.autoresizingMask=NSViewWidthSizable;
   _titleLabel.bordered=NO; _titleLabel.editable=NO; _titleLabel.selectable=NO;
   _titleLabel.backgroundColor=[NSColor clearColor];
   _titleLabel.font=[NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
   _titleLabel.lineBreakMode=NSLineBreakByTruncatingTail;
+  _titleLabel.hidden=_compact;
   [self addSubview:_titleLabel];
-  // Close button
+  // Close button — hidden in compact mode unless active/hovered (toggled below).
   _closeButton=[[NSButton alloc]initWithFrame:NSMakeRect(f.size.width-26,9,18,18)];
   _closeButton.autoresizingMask=NSViewMinXMargin;
   _closeButton.bezelStyle=NSBezelStyleCircular; _closeButton.bordered=NO;
@@ -354,24 +393,33 @@ static const CGFloat kTabMinW   = 80.0;
   xi=[xi imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:8 weight:NSFontWeightMedium]];
   [xi setTemplate:YES]; _closeButton.image=xi; _closeButton.imagePosition=NSImageOnly;
   _closeButton.target=self; _closeButton.action=@selector(closeTab:); _closeButton.toolTip=@"Close Tab";
+  _closeButton.hidden=_compact; // shown on hover in compact mode
   [self addSubview:_closeButton];
+  self.toolTip=@""; // set in setTabTitle so narrow/compact tabs still reveal their title
   return self;
 }
 - (void)setTabTitle:(NSString *)title favicon:(NSImage *)favicon loading:(BOOL)loading {
   self.titleLabel.stringValue=title.length?title:@"New Tab";
+  self.toolTip=title.length?title:@"New Tab"; // reveals full title on narrow/compact tabs
   self.titleLabel.textColor=self.isActive?[NSColor labelColor]:[NSColor secondaryLabelColor];
-  if (loading) {
-    NSImage *spinner=[NSImage imageWithSystemSymbolName:@"arrow.2.circlepath" accessibilityDescription:@"Loading"];
-    self.faviconView.image=spinner;
-  } else if (favicon) {
-    self.faviconView.image=favicon;
+  if (loading && !self.isPrivate) {
+    // Animated NSProgressIndicator beats the static SF symbol
+    self.faviconView.hidden=YES;
+    self.loadingSpinner.hidden=NO;
+    [self.loadingSpinner startAnimation:nil];
   } else {
-    NSImage *globe=[NSImage imageWithSystemSymbolName:@"globe" accessibilityDescription:@"Page"];
-    [globe setTemplate:YES]; self.faviconView.image=globe;
-  }
-  if (self.isPrivate) {
-    NSImage *priv=[NSImage imageWithSystemSymbolName:@"eyeglasses" accessibilityDescription:@"Private"];
-    [priv setTemplate:YES]; self.faviconView.image=priv;
+    [self.loadingSpinner stopAnimation:nil];
+    self.loadingSpinner.hidden=YES;
+    self.faviconView.hidden=NO;
+    if (self.isPrivate) {
+      NSImage *priv=[NSImage imageWithSystemSymbolName:@"eyeglasses" accessibilityDescription:@"Private"];
+      [priv setTemplate:YES]; self.faviconView.image=priv;
+    } else if (favicon) {
+      self.faviconView.image=favicon;
+    } else {
+      NSImage *globe=[NSImage imageWithSystemSymbolName:@"globe" accessibilityDescription:@"Page"];
+      [globe setTemplate:YES]; self.faviconView.image=globe;
+    }
   }
 }
 - (void)setIsActive:(BOOL)active {
@@ -394,10 +442,61 @@ static const CGFloat kTabMinW   = 80.0;
     [[NSColor colorWithWhite:0.5 alpha:0.12] setFill];
     [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,1,1) xRadius:7 yRadius:7] fill];
   }
+  // Tab-group indicator: 3px coloured bar at the bottom edge.
+  if (self.groupColor) {
+    [self.groupColor setFill];
+    NSRect bar=NSMakeRect(2,1,self.bounds.size.width-4,3);
+    [[NSBezierPath bezierPathWithRoundedRect:bar xRadius:1.5 yRadius:1.5] fill];
+  }
 }
-- (void)mouseEntered:(NSEvent *)e { self.isHovered=YES;  [self setNeedsDisplay:YES]; }
-- (void)mouseExited:(NSEvent *)e  { self.isHovered=NO;   [self setNeedsDisplay:YES]; }
-- (void)mouseDown:(NSEvent *)e    { [self.delegate tabItemDidSelect:self.index]; }
+- (void)mouseEntered:(NSEvent *)e {
+  self.isHovered=YES;  [self setNeedsDisplay:YES];
+  // In compact mode reveal the close button (over the favicon) on hover.
+  if (self.compact) { self.closeButton.hidden=NO; self.faviconView.hidden=YES; }
+  if ([self.delegate respondsToSelector:@selector(tabItemDidHoverEnter:fromView:)])
+    [self.delegate tabItemDidHoverEnter:self.index fromView:self];
+}
+- (void)mouseExited:(NSEvent *)e  {
+  self.isHovered=NO;   [self setNeedsDisplay:YES];
+  if (self.compact) { self.closeButton.hidden=YES; self.faviconView.hidden=NO; }
+  if ([self.delegate respondsToSelector:@selector(tabItemDidHoverExit:)])
+    [self.delegate tabItemDidHoverExit:self.index];
+}
+- (void)mouseDown:(NSEvent *)e {
+  // Run a tracking loop on the live item FIRST (selecting up front would reload the
+  // bar and destroy this view mid-gesture). If the user drags past a threshold we
+  // live-reorder; otherwise it's a plain click and we select on mouse-up. This lets
+  // any tab — active or not — be dragged immediately, Chrome-style.
+  NSView *strip=self.superview;
+  NSInteger count=0; for (NSView *v in strip.subviews) if ([v isKindOfClass:[BBTabItemView class]]) count++;
+  BOOL canReorder=(strip && count>=2 && [self.delegate respondsToSelector:@selector(tabItemMovedFrom:to:)]);
+  CGFloat stride=self.frame.size.width+2;
+  NSPoint start=e.locationInWindow; CGFloat startX=self.frame.origin.x;
+  BOOL dragging=NO; NSInteger from=self.index, target=from;
+  while (1) {
+    NSEvent *ev=[self.window nextEventMatchingMask:NSEventMaskLeftMouseUp|NSEventMaskLeftMouseDragged];
+    if (!ev || ev.type==NSEventTypeLeftMouseUp) break;
+    if (!canReorder) continue;
+    CGFloat dx=ev.locationInWindow.x-start.x;
+    if (!dragging && fabs(dx)>5) { dragging=YES; [strip addSubview:self positioned:NSWindowAbove relativeTo:nil]; self.alphaValue=0.9; }
+    if (dragging) {
+      NSRect fr=self.frame; fr.origin.x=startX+dx; self.frame=fr;
+      target=(NSInteger)llround((fr.origin.x+fr.size.width/2)/stride);
+      if (target<0) target=0; if (target>count-1) target=count-1;
+    }
+  }
+  self.alphaValue=1.0;
+  if (dragging && target!=from) [self.delegate tabItemMovedFrom:from to:target];
+  else [self.delegate tabItemDidSelect:from]; // plain click selects (or snaps back)
+}
+- (void)otherMouseDown:(NSEvent *)e {
+  if (e.buttonNumber==2) [self.delegate tabItemDidMiddleClick:self.index]; // middle-click closes
+}
+- (void)rightMouseDown:(NSEvent *)e {
+  if (![self.delegate respondsToSelector:@selector(tabItemContextMenu:)]) return;
+  NSMenu *m=[self.delegate tabItemContextMenu:self.index];
+  if (m) [NSMenu popUpContextMenu:m withEvent:e forView:self];
+}
 - (void)closeTab:(id)s            { [self.delegate tabItemDidClose:self.index]; }
 @end
 
@@ -415,6 +514,8 @@ static const CGFloat kTabMinW   = 80.0;
 @property(strong) NSMutableArray<BBTabItemView *> *items;
 @property(assign) NSInteger activeIndex;
 @property(strong) NSButton *addTabButton;
+@property(strong) NSScrollView *tabScroll;   // horizontal scroller for overflow
+@property(strong) NSView *tabStrip;          // document view holding the tab items
 @property(weak)   id<BBTabItemDelegate> outerDelegate;
 - (void)reloadWithTabs:(NSArray<BBTab *> *)tabs activeIndex:(NSInteger)active;
 @end
@@ -427,6 +528,17 @@ static const CGFloat kTabMinW   = 80.0;
   NSBox *sep=[[NSBox alloc]initWithFrame:NSMakeRect(0,0,f.size.width,1)];
   sep.autoresizingMask=NSViewWidthSizable; sep.boxType=NSBoxSeparator; [self addSubview:sep];
   _items=[NSMutableArray array]; _outerDelegate=d;
+  // Tab strip lives in a horizontal scroll view so a large number of tabs scroll
+  // (Chrome-style) instead of shrinking to unreadable slivers.
+  _tabScroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,1,f.size.width-40,f.size.height-2)];
+  _tabScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
+  _tabScroll.drawsBackground=NO; _tabScroll.hasVerticalScroller=NO;
+  _tabScroll.hasHorizontalScroller=YES; _tabScroll.scrollerStyle=NSScrollerStyleOverlay;
+  _tabScroll.horizontalScrollElasticity=NSScrollElasticityAllowed;
+  _tabScroll.verticalScrollElasticity=NSScrollElasticityNone;
+  _tabStrip=[[NSView alloc]initWithFrame:NSMakeRect(0,0,f.size.width-40,f.size.height-2)];
+  _tabScroll.documentView=_tabStrip;
+  [self addSubview:_tabScroll];
   _addTabButton=[[NSButton alloc]initWithFrame:NSMakeRect(f.size.width-34,4,28,28)];
   _addTabButton.autoresizingMask=NSViewMinXMargin;
   NSImage *pi=[NSImage imageWithSystemSymbolName:@"plus" accessibilityDescription:@"New Tab"];
@@ -434,26 +546,130 @@ static const CGFloat kTabMinW   = 80.0;
   [pi setTemplate:YES]; _addTabButton.image=pi; _addTabButton.imagePosition=NSImageOnly;
   _addTabButton.bezelStyle=NSBezelStyleToolbar; _addTabButton.bordered=NO;
   _addTabButton.toolTip=@"New Tab (⌘T)"; [self addSubview:_addTabButton];
+  // Accept URL drags onto the tab bar — open dropped URLs as new tabs (Chrome parity).
+  [self registerForDraggedTypes:@[NSPasteboardTypeURL,NSPasteboardTypeString]];
   return self;
 }
 - (void)reloadWithTabs:(NSArray<BBTab *> *)tabs activeIndex:(NSInteger)active {
   for (BBTabItemView *v in self.items) [v removeFromSuperview];
   [self.items removeAllObjects];
   self.activeIndex=active;
-  NSInteger count=tabs.count; if (!count) return;
-  CGFloat avail=self.bounds.size.width-40;
-  CGFloat tabW=MIN(kTabMaxW,MAX(kTabMinW,floor(avail/count)));
+  CGFloat addX=self.bounds.size.width-34;
+  self.addTabButton.frame=NSMakeRect(addX,4,28,28);
+  CGFloat clipW=addX-2, clipH=self.bounds.size.height-2;
+  self.tabScroll.frame=NSMakeRect(0,1,clipW,clipH);
+  NSInteger count=tabs.count;
+  if (!count) { self.tabStrip.frame=NSMakeRect(0,0,clipW,clipH); return; }
+
+  // Pinned tabs occupy fixed kTabPinnedW each at the left; regular tabs share the rest.
+  NSInteger pinnedCount=0;
+  for (BBTab *t in tabs) if (t.pinned) pinnedCount++;
+  NSInteger regularCount=count-pinnedCount;
+  CGFloat pinnedTotalW=pinnedCount*kTabPinnedW;
+  CGFloat availW=clipW-pinnedTotalW;
+  CGFloat tabW=regularCount>0?MIN(kTabMaxW,MAX(kTabHardMinW,floor(availW/regularCount))):0;
+  CGFloat regularTotalW=tabW*regularCount;
+  CGFloat stripW=MAX(clipW, pinnedTotalW+regularTotalW);
+  self.tabStrip.frame=NSMakeRect(0,0,stripW,clipH);
+
+  BBTabItemView *activeItem=nil;
+  CGFloat pinnedX=0, regularX=pinnedTotalW;
+  NSInteger regularIdx=0;
   for (NSInteger i=0;i<count;i++) {
     BBTab *tab=tabs[i];
-    BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(i*tabW,1,tabW-2,kTabBarH-2) index:i delegate:self];
+    CGFloat x, w;
+    BOOL isPinned=tab.pinned;
+    if (isPinned) {
+      x=pinnedX; w=kTabPinnedW-2; pinnedX+=kTabPinnedW;
+    } else {
+      x=regularX;
+      BOOL isLast=(regularIdx==regularCount-1);
+      w=isLast?MAX(kTabHardMinW-2,floor(pinnedTotalW+regularTotalW)-x-2):floor(tabW)-2;
+      regularX+=floor(tabW); regularIdx++;
+    }
+    BBTabItemView *item=[[BBTabItemView alloc]initWithFrame:NSMakeRect(x,0,w,clipH) index:i delegate:self];
     item.isActive=(i==active); item.isPrivate=tab.isPrivate;
-    [item setTabTitle:tab.title favicon:tab.favicon loading:tab.isLoading];
-    [self addSubview:item]; [self.items addObject:item];
+    if (tab.groupName.length) {
+      static NSArray<NSColor *> *_palette=nil; static dispatch_once_t _o; dispatch_once(&_o,^{
+        _palette=@[[NSColor systemBlueColor],[NSColor systemRedColor],[NSColor systemGreenColor],
+                   [NSColor systemOrangeColor],[NSColor systemPurpleColor],[NSColor systemTealColor],
+                   [NSColor systemPinkColor],[NSColor systemYellowColor]];
+      });
+      item.groupColor=_palette[((NSUInteger)tab.groupColorIdx)%_palette.count];
+    }
+    if (isPinned) { item.compact=YES; item.closeButton.hidden=YES; } // pinned = icon-only, no close
+    // Override favicon: 💤 suspended, 🔇 muted, 🔊 playing audio
+    NSImage *fav=tab.favicon;
+    if (tab.suspended && !tab.isLoading) {
+      fav=[NSImage imageWithSystemSymbolName:@"moon.zzz" accessibilityDescription:@"Suspended"];
+      [fav setTemplate:YES];
+    } else if (tab.muted) {
+      fav=[NSImage imageWithSystemSymbolName:@"speaker.slash.fill" accessibilityDescription:@"Muted"];
+      [fav setTemplate:YES];
+    } else if (tab.isPlayingAudio) {
+      fav=[NSImage imageWithSystemSymbolName:@"speaker.wave.2.fill" accessibilityDescription:@"Playing Audio"];
+      [fav setTemplate:YES];
+    }
+    [item setTabTitle:(isPinned?@"":tab.title) favicon:fav loading:tab.isLoading];
+    [self.tabStrip addSubview:item]; [self.items addObject:item];
+    if (i==active) activeItem=item;
   }
-  self.addTabButton.frame=NSMakeRect(count*tabW+4,4,28,28);
+  if (activeItem && stripW>clipW)
+    [self.tabStrip scrollRectToVisible:NSInsetRect(activeItem.frame,-tabW,0)];
 }
 - (void)tabItemDidSelect:(NSInteger)i { [self.outerDelegate tabItemDidSelect:i]; }
 - (void)tabItemDidClose:(NSInteger)i  { [self.outerDelegate tabItemDidClose:i]; }
+- (void)tabItemDidHoverEnter:(NSInteger)i fromView:(NSView *)v {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemDidHoverEnter:fromView:)])
+    [self.outerDelegate tabItemDidHoverEnter:i fromView:v];
+}
+- (void)tabItemDidHoverExit:(NSInteger)i {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemDidHoverExit:)])
+    [self.outerDelegate tabItemDidHoverExit:i];
+}
+- (void)tabItemDidMiddleClick:(NSInteger)i {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemDidMiddleClick:)]) [self.outerDelegate tabItemDidMiddleClick:i];
+}
+- (NSMenu *)tabItemContextMenu:(NSInteger)i {
+  return [self.outerDelegate respondsToSelector:@selector(tabItemContextMenu:)] ? [self.outerDelegate tabItemContextMenu:i] : nil;
+}
+- (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to {
+  if ([self.outerDelegate respondsToSelector:@selector(tabItemMovedFrom:to:)]) [self.outerDelegate tabItemMovedFrom:from to:to];
+}
+// Double-click on the empty tab-strip area opens a new tab (Chrome behavior).
+- (void)mouseDown:(NSEvent *)e {
+  if (e.clickCount==2) {
+    NSPoint pt=[self.tabStrip convertPoint:e.locationInWindow fromView:nil];
+    BOOL onTab=NO;
+    for (NSView *v in self.tabStrip.subviews) {
+      if ([v isKindOfClass:[BBTabItemView class]] && NSPointInRect(pt,v.frame)) { onTab=YES; break; }
+    }
+    if (!onTab) [NSApp sendAction:self.addTabButton.action to:self.addTabButton.target from:self];
+  }
+  [super mouseDown:e];
+}
+// Drag-and-drop: open dropped URLs (from another app, a link in the page, etc.) as new tabs.
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  if ([pb canReadObjectForClasses:@[[NSURL class]] options:nil]) return NSDragOperationCopy;
+  if ([pb canReadObjectForClasses:@[[NSString class]] options:nil]) return NSDragOperationCopy;
+  return NSDragOperationNone;
+}
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return YES; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  NSArray *urls=[pb readObjectsForClasses:@[[NSURL class]] options:nil];
+  NSString *dropped=nil;
+  if (urls.count) dropped=[urls.firstObject absoluteString];
+  else {
+    NSArray *strs=[pb readObjectsForClasses:@[[NSString class]] options:nil];
+    if (strs.count) dropped=[strs.firstObject stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  }
+  if (!dropped.length) return NO;
+  if ([self.outerDelegate respondsToSelector:@selector(tabBarDidDropURL:)])
+    [self.outerDelegate tabBarDidDropURL:dropped];
+  return YES;
+}
 @end
 
 // ── BBFindBar ─────────────────────────────────────────────────────────────────
@@ -461,6 +677,7 @@ static const CGFloat kTabMinW   = 80.0;
 @property(strong) NSTextField *queryField;
 @property(strong) NSTextField *resultLabel;
 @property(strong) NSButton *prevButton, *nextButton, *closeButton;
+@property(strong) NSButton *caseButton;    // toggles case sensitivity
 @end
 @implementation BBFindBar
 - (instancetype)initWithFrame:(NSRect)f {
@@ -489,6 +706,12 @@ static const CGFloat kTabMinW   = 80.0;
   di=[di imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:11 weight:NSFontWeightMedium]];
   [di setTemplate:YES]; _nextButton.image=di; _nextButton.imagePosition=NSImageOnly;
   _nextButton.bezelStyle=NSBezelStyleToolbar; _nextButton.bordered=YES; [self addSubview:_nextButton];
+  _caseButton=[[NSButton alloc]initWithFrame:NSMakeRect(x,y,32,26)]; x+=38;
+  _caseButton.title=@"Aa"; _caseButton.font=[NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+  _caseButton.bezelStyle=NSBezelStyleToolbar; _caseButton.bordered=YES;
+  [_caseButton setButtonType:NSButtonTypePushOnPushOff];
+  _caseButton.toolTip=@"Match Case";
+  [self addSubview:_caseButton];
   _resultLabel=[[NSTextField alloc]initWithFrame:NSMakeRect(x,y+2,120,22)];
   _resultLabel.bordered=NO; _resultLabel.editable=NO; _resultLabel.selectable=NO;
   _resultLabel.backgroundColor=[NSColor clearColor]; _resultLabel.font=[NSFont systemFontOfSize:12];
@@ -503,15 +726,215 @@ static const CGFloat kTabMinW   = 80.0;
 @interface BBBookmark : NSObject
 @property(copy) NSString *title, *urlString;
 @property(strong) NSDate *addedAt;
+@property(copy) NSString *folder;  // nil/"" = bookmarks bar root; otherwise folder name (one level deep)
 @end
 @implementation BBBookmark
+@end
+
+// ── BBPasswordStore ───────────────────────────────────────────────────────────
+// Keychain-backed login save/fill. One Keychain item per (host, username) pair,
+// kSecClass=GenericPassword, service="BearBrowser-login:<host>", account=<username>,
+// data=<password UTF-8>. macOS Keychain handles encryption-at-rest + user gating
+// (login keychain unlocks automatically; if Touch ID/passcode is required on this
+// Mac, the system prompts on first access per session — we never see the password
+// outside the moment we fill it into a page form).
+@interface BBPasswordEntry : NSObject
+@property(copy) NSString *host, *username, *password;
+@end
+@implementation BBPasswordEntry
+@end
+@interface BBPasswordStore : NSObject
++ (instancetype)shared;
+- (NSString *)serviceForHost:(NSString *)host;
+- (BOOL)saveHost:(NSString *)host username:(NSString *)user password:(NSString *)pass;
+- (NSArray<BBPasswordEntry *> *)entriesForHost:(NSString *)host;
+- (BOOL)removeHost:(NSString *)host username:(NSString *)user;
+- (NSArray<BBPasswordEntry *> *)allEntries;  // for Settings → Saved Passwords
+@end
+@implementation BBPasswordStore
++ (instancetype)shared { static BBPasswordStore *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (NSString *)serviceForHost:(NSString *)host {
+  NSString *h=host.lowercaseString?:@"";
+  if ([h hasPrefix:@"www."]) h=[h substringFromIndex:4];
+  return [@"BearBrowser-login:" stringByAppendingString:h];
+}
+- (BOOL)saveHost:(NSString *)host username:(NSString *)user password:(NSString *)pass {
+  if (!host.length||!user.length||!pass.length) return NO;
+  NSString *svc=[self serviceForHost:host];
+  NSData *pwData=[pass dataUsingEncoding:NSUTF8StringEncoding];
+  // Delete any existing item for (svc, user) so we can update-by-recreate.
+  NSDictionary *del=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                      (__bridge id)kSecAttrService:svc,
+                      (__bridge id)kSecAttrAccount:user};
+  SecItemDelete((__bridge CFDictionaryRef)del);
+  NSDictionary *add=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                      (__bridge id)kSecAttrService:svc,
+                      (__bridge id)kSecAttrAccount:user,
+                      (__bridge id)kSecValueData:pwData,
+                      (__bridge id)kSecAttrLabel:[NSString stringWithFormat:@"BearBrowser — %@",host]};
+  OSStatus rc=SecItemAdd((__bridge CFDictionaryRef)add,NULL);
+  return rc==errSecSuccess;
+}
+- (NSArray<BBPasswordEntry *> *)entriesForHost:(NSString *)host {
+  if (!host.length) return @[];
+  NSString *svc=[self serviceForHost:host];
+  NSDictionary *q=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                    (__bridge id)kSecAttrService:svc,
+                    (__bridge id)kSecMatchLimit:(__bridge id)kSecMatchLimitAll,
+                    (__bridge id)kSecReturnAttributes:@YES,
+                    (__bridge id)kSecReturnData:@YES};
+  CFTypeRef result=NULL;
+  OSStatus rc=SecItemCopyMatching((__bridge CFDictionaryRef)q,&result);
+  if (rc!=errSecSuccess||!result) return @[];
+  NSArray *items=(__bridge_transfer NSArray *)result;
+  NSMutableArray *out=[NSMutableArray array];
+  for (NSDictionary *d in items) {
+    BBPasswordEntry *e=[BBPasswordEntry new];
+    e.host=host;
+    e.username=d[(__bridge id)kSecAttrAccount]?:@"";
+    NSData *pwData=d[(__bridge id)kSecValueData];
+    e.password=pwData?[[NSString alloc]initWithData:pwData encoding:NSUTF8StringEncoding]:@"";
+    if (e.username.length && e.password.length) [out addObject:e];
+  }
+  return out;
+}
+- (BOOL)removeHost:(NSString *)host username:(NSString *)user {
+  if (!host.length||!user.length) return NO;
+  NSDictionary *del=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                      (__bridge id)kSecAttrService:[self serviceForHost:host],
+                      (__bridge id)kSecAttrAccount:user};
+  return SecItemDelete((__bridge CFDictionaryRef)del)==errSecSuccess;
+}
+- (NSArray<BBPasswordEntry *> *)allEntries {
+  NSDictionary *q=@{(__bridge id)kSecClass:(__bridge id)kSecClassGenericPassword,
+                    (__bridge id)kSecMatchLimit:(__bridge id)kSecMatchLimitAll,
+                    (__bridge id)kSecReturnAttributes:@YES};
+  CFTypeRef result=NULL;
+  if (SecItemCopyMatching((__bridge CFDictionaryRef)q,&result)!=errSecSuccess||!result) return @[];
+  NSArray *items=(__bridge_transfer NSArray *)result;
+  NSMutableArray *out=[NSMutableArray array];
+  for (NSDictionary *d in items) {
+    NSString *svc=d[(__bridge id)kSecAttrService]?:@"";
+    if (![svc hasPrefix:@"BearBrowser-login:"]) continue;
+    BBPasswordEntry *e=[BBPasswordEntry new];
+    e.host=[svc substringFromIndex:18];
+    e.username=d[(__bridge id)kSecAttrAccount]?:@"";
+    e.password=@""; // listing doesn't fetch passwords (avoid bulk Keychain prompts)
+    [out addObject:e];
+  }
+  return out;
+}
+@end
+
+// ── BBProfileStore ────────────────────────────────────────────────────────────
+// One stored "address profile" (name, email, phone, street, city, region, postal,
+// country, organization). Lives in NSUserDefaults at BBProfile_v1 — non-sensitive
+// PII (compared to passwords) and the user already chose to type these values into
+// forms once. Filled into matching autocomplete-tagged fields on focus.
+@interface BBProfile : NSObject
+@property(copy) NSString *name, *email, *phone;
+@property(copy) NSString *street, *city, *region, *postal, *country, *organization;
+- (NSDictionary *)toDict;
++ (instancetype)fromDict:(NSDictionary *)d;
+- (BOOL)isEmpty;
+@end
+@implementation BBProfile
+- (NSDictionary *)toDict {
+  return @{@"name":_name?:@"",@"email":_email?:@"",@"phone":_phone?:@"",
+           @"street":_street?:@"",@"city":_city?:@"",@"region":_region?:@"",
+           @"postal":_postal?:@"",@"country":_country?:@"",@"organization":_organization?:@""};
+}
++ (instancetype)fromDict:(NSDictionary *)d {
+  if (![d isKindOfClass:[NSDictionary class]]) return nil;
+  BBProfile *p=[BBProfile new];
+  p.name=d[@"name"]; p.email=d[@"email"]; p.phone=d[@"phone"];
+  p.street=d[@"street"]; p.city=d[@"city"]; p.region=d[@"region"];
+  p.postal=d[@"postal"]; p.country=d[@"country"]; p.organization=d[@"organization"];
+  return p;
+}
+- (BOOL)isEmpty {
+  return !(_name.length||_email.length||_phone.length||_street.length||_city.length||
+           _region.length||_postal.length||_country.length||_organization.length);
+}
+@end
+@interface BBProfileStore : NSObject
++ (instancetype)shared;
+- (BBProfile *)profile;
+- (void)setProfile:(BBProfile *)p;
+@end
+@implementation BBProfileStore {
+  BBProfile *_p;
+}
++ (instancetype)shared { static BBProfileStore *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (instancetype)init {
+  self=[super init];
+  NSDictionary *d=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBProfile_v1"];
+  _p=[BBProfile fromDict:d]?:[BBProfile new];
+  return self;
+}
+- (BBProfile *)profile { return _p; }
+- (void)setProfile:(BBProfile *)p {
+  _p=p?:[BBProfile new];
+  [[NSUserDefaults standardUserDefaults] setObject:[_p toDict] forKey:@"BBProfile_v1"];
+}
+@end
+
+// Datasource/delegate for the Saved Passwords table in Settings → Manage Saved Passwords.
+@interface BBSavedPasswordsDS : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSSearchFieldDelegate>
+@property(strong) NSMutableArray<BBPasswordEntry *> *entries;
+@property(weak)   NSTableView *tv;
+- (instancetype)initWithEntries:(NSMutableArray<BBPasswordEntry *> *)e tableView:(NSTableView *)tv;
+- (void)removeSelected:(id)sender;
+@end
+@implementation BBSavedPasswordsDS
+- (instancetype)initWithEntries:(NSMutableArray<BBPasswordEntry *> *)e tableView:(NSTableView *)tv {
+  self=[super init]; _entries=e?:[NSMutableArray array]; _tv=tv; return self;
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return _entries.count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  if (row<0||row>=(NSInteger)_entries.count) return nil;
+  BBPasswordEntry *e=_entries[row];
+  NSTextField *t=[NSTextField labelWithString:[col.identifier isEqualToString:@"site"]?e.host:e.username];
+  t.font=[NSFont systemFontOfSize:12]; return t;
+}
+- (void)removeSelected:(id)sender {
+  NSInteger row=_tv.selectedRow; if (row<0||row>=(NSInteger)_entries.count) return;
+  BBPasswordEntry *e=_entries[row];
+  [[BBPasswordStore shared] removeHost:e.host username:e.username];
+  [_entries removeObjectAtIndex:row]; [_tv reloadData];
+}
+- (void)copyPasswordSelected:(id)sender {
+  NSInteger row=_tv.selectedRow; if (row<0||row>=(NSInteger)_entries.count) { NSBeep(); return; }
+  BBPasswordEntry *e=_entries[row];
+  NSArray<BBPasswordEntry *> *full=[[BBPasswordStore shared] entriesForHost:e.host];
+  for (BBPasswordEntry *p in full) {
+    if ([p.username isEqualToString:e.username]) {
+      [[NSPasteboard generalPasteboard] clearContents];
+      [[NSPasteboard generalPasteboard] setString:p.password forType:NSPasteboardTypeString];
+      // Auto-clear the clipboard after 30 seconds so a copied password doesn't
+      // linger indefinitely in whatever the user pastes into next.
+      NSString *snapshot=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(30*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        NSString *cur=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+        if ([cur isEqualToString:snapshot]) [[NSPasteboard generalPasteboard] clearContents];
+      });
+      return;
+    }
+  }
+}
 @end
 
 @interface BBBookmarksStore : NSObject
 @property(strong) NSMutableArray<BBBookmark *> *items;
 + (instancetype)shared;
 - (void)addTitle:(NSString *)t url:(NSString *)u;
+- (void)addTitle:(NSString *)t url:(NSString *)u folder:(NSString *)f;
+- (NSArray<NSString *> *)folders;
+- (void)setFolder:(NSString *)f forURL:(NSString *)u;
+- (void)renameFolder:(NSString *)from to:(NSString *)to;
+- (void)removeFolderAndBookmarks:(NSString *)folder;
 - (void)removeAtIndex:(NSInteger)i;
+- (void)removeURL:(NSString *)u;
 - (BOOL)isBookmarked:(NSString *)u;
 @end
 @implementation BBBookmarksStore
@@ -523,22 +946,336 @@ static const CGFloat kTabMinW   = 80.0;
   if (d) for (NSDictionary *r in [NSJSONSerialization JSONObjectWithData:d options:0 error:nil]) {
     BBBookmark *b=[BBBookmark new]; b.title=r[@"title"]?:@""; b.urlString=r[@"url"]?:@"";
     b.addedAt=[NSDate dateWithTimeIntervalSince1970:[r[@"t"] doubleValue]];
+    b.folder=r[@"folder"]?:@"";
     [_items addObject:b];
   }
   return self;
 }
 - (void)addTitle:(NSString *)t url:(NSString *)u {
+  [self addTitle:t url:u folder:nil];
+}
+- (void)addTitle:(NSString *)t url:(NSString *)u folder:(NSString *)f {
   BBBookmark *b=[BBBookmark new]; b.title=t?:@""; b.urlString=u?:@""; b.addedAt=[NSDate date];
+  b.folder=f?:@"";
   [self.items addObject:b]; [self save];
 }
+- (NSArray<NSString *> *)folders {
+  NSMutableOrderedSet *set=[NSMutableOrderedSet orderedSet];
+  for (BBBookmark *b in self.items) if (b.folder.length) [set addObject:b.folder];
+  return [set array];
+}
+- (void)setFolder:(NSString *)f forURL:(NSString *)u {
+  for (BBBookmark *b in self.items) if ([b.urlString isEqualToString:u]) b.folder=f?:@"";
+  [self save];
+}
+- (void)renameFolder:(NSString *)from to:(NSString *)to {
+  if (!from.length) return;
+  for (BBBookmark *b in self.items) if ([b.folder isEqualToString:from]) b.folder=to?:@"";
+  [self save];
+}
+- (void)removeFolderAndBookmarks:(NSString *)folder {
+  if (!folder.length) return;
+  NSMutableIndexSet *idx=[NSMutableIndexSet indexSet];
+  for (NSInteger i=0;i<(NSInteger)self.items.count;i++) if ([self.items[i].folder isEqualToString:folder]) [idx addIndex:(NSUInteger)i];
+  [self.items removeObjectsAtIndexes:idx];
+  [self save];
+}
 - (void)removeAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)self.items.count){[self.items removeObjectAtIndex:i];[self save];} }
+- (void)removeURL:(NSString *)u {
+  for (NSInteger i=(NSInteger)self.items.count-1;i>=0;i--) if([self.items[i].urlString isEqualToString:u]){[self.items removeObjectAtIndex:i];}
+  [self save];
+}
 - (BOOL)isBookmarked:(NSString *)u { for(BBBookmark *b in self.items) if([b.urlString isEqualToString:u]) return YES; return NO; }
 - (void)save {
   NSMutableArray *arr=[NSMutableArray array];
-  for (BBBookmark *b in self.items) [arr addObject:@{@"title":b.title,@"url":b.urlString,@"t":@(b.addedAt.timeIntervalSince1970)}];
+  for (BBBookmark *b in self.items) [arr addObject:@{@"title":b.title?:@"",@"url":b.urlString?:@"",@"t":@(b.addedAt.timeIntervalSince1970),@"folder":b.folder?:@""}];
   NSData *d=[NSJSONSerialization dataWithJSONObject:arr options:0 error:nil];
   [[NSFileManager defaultManager] createDirectoryAtPath:BBSupportDir() withIntermediateDirectories:YES attributes:nil error:nil];
   [d writeToFile:[BBSupportDir() stringByAppendingPathComponent:@"bookmarks.json"] atomically:YES];
+}
+@end
+
+// ── BBReadingList ─────────────────────────────────────────────────────────────
+// Persistent "save for later" list, distinct from bookmarks: items have a read/
+// unread state, and the UI defaults to unread. Stored at readinglist.json.
+@interface BBReadingItem : NSObject
+@property(copy) NSString *title, *urlString;
+@property(strong) NSDate *addedAt;
+@property(assign) BOOL    read;
+@end
+@implementation BBReadingItem
+@end
+@interface BBReadingList : NSObject
+@property(strong) NSMutableArray<BBReadingItem *> *items;
++ (instancetype)shared;
+- (void)addTitle:(NSString *)t url:(NSString *)u;
+- (void)removeAtIndex:(NSInteger)i;
+- (void)toggleReadAtIndex:(NSInteger)i;
+- (NSInteger)unreadCount;
+- (BOOL)contains:(NSString *)u;
+- (void)save;
+@end
+@implementation BBReadingList
++ (instancetype)shared { static BBReadingList *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (instancetype)init {
+  self=[super init]; _items=[NSMutableArray array];
+  NSData *d=[NSData dataWithContentsOfFile:[BBSupportDir() stringByAppendingPathComponent:@"readinglist.json"]];
+  if (d) for (NSDictionary *r in [NSJSONSerialization JSONObjectWithData:d options:0 error:nil]) {
+    BBReadingItem *it=[BBReadingItem new];
+    it.title=r[@"title"]?:@""; it.urlString=r[@"url"]?:@"";
+    it.addedAt=[NSDate dateWithTimeIntervalSince1970:[r[@"t"] doubleValue]];
+    it.read=[r[@"read"] boolValue];
+    [_items addObject:it];
+  }
+  return self;
+}
+- (void)addTitle:(NSString *)t url:(NSString *)u {
+  if (!u.length) return;
+  for (BBReadingItem *it in _items) if ([it.urlString isEqualToString:u]) return; // de-dupe
+  BBReadingItem *it=[BBReadingItem new];
+  it.title=t.length?t:u; it.urlString=u; it.addedAt=[NSDate date]; it.read=NO;
+  [_items addObject:it]; [self save];
+}
+- (void)removeAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)_items.count){[_items removeObjectAtIndex:i];[self save];} }
+- (void)toggleReadAtIndex:(NSInteger)i { if(i>=0&&i<(NSInteger)_items.count){_items[i].read=!_items[i].read;[self save];} }
+- (NSInteger)unreadCount { NSInteger n=0; for (BBReadingItem *it in _items) if (!it.read) n++; return n; }
+- (BOOL)contains:(NSString *)u { for (BBReadingItem *it in _items) if ([it.urlString isEqualToString:u]) return YES; return NO; }
+- (void)save {
+  NSMutableArray *arr=[NSMutableArray array];
+  for (BBReadingItem *it in _items) [arr addObject:@{@"title":it.title?:@"",@"url":it.urlString?:@"",
+    @"t":@(it.addedAt.timeIntervalSince1970),@"read":@(it.read)}];
+  NSData *d=[NSJSONSerialization dataWithJSONObject:arr options:0 error:nil];
+  [[NSFileManager defaultManager] createDirectoryAtPath:BBSupportDir() withIntermediateDirectories:YES attributes:nil error:nil];
+  [d writeToFile:[BBSupportDir() stringByAppendingPathComponent:@"readinglist.json"] atomically:YES];
+}
+@end
+
+// Datasource/delegate for the Settings → Site Data manager. Asynchronously
+// fetches all WKWebsiteDataRecords, groups by display name (domain), supports
+// case-insensitive filter, and deletes per-record on demand.
+@interface BBSiteDataDS : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSSearchFieldDelegate>
+@property(strong) NSMutableArray<WKWebsiteDataRecord *> *all, *shown;
+@property(weak) NSTableView *tv;
+@property(weak) NSSearchField *sf;
+- (instancetype)initWithTableView:(NSTableView *)tv searchField:(NSSearchField *)sf;
+- (void)reload;
+- (void)removeSelected;
+- (void)removeAll;
+@end
+@implementation BBSiteDataDS
+- (instancetype)initWithTableView:(NSTableView *)tv searchField:(NSSearchField *)sf {
+  self=[super init]; _tv=tv; _sf=sf; _all=[NSMutableArray array]; _shown=[NSMutableArray array]; return self;
+}
+- (void)reload {
+  NSSet *all=[WKWebsiteDataStore allWebsiteDataTypes];
+  [[WKWebsiteDataStore defaultDataStore] fetchDataRecordsOfTypes:all completionHandler:^(NSArray<WKWebsiteDataRecord *> *recs){
+    NSArray *sorted=[recs sortedArrayUsingComparator:^NSComparisonResult(WKWebsiteDataRecord *a,WKWebsiteDataRecord *b){
+      return [a.displayName caseInsensitiveCompare:b.displayName];
+    }];
+    self.all=[sorted mutableCopy];
+    [self applyFilter];
+  }];
+}
+- (void)applyFilter {
+  NSString *q=self.sf.stringValue.lowercaseString?:@"";
+  if (!q.length) { self.shown=[self.all mutableCopy]; }
+  else {
+    NSMutableArray *out=[NSMutableArray array];
+    for (WKWebsiteDataRecord *r in self.all) if ([r.displayName.lowercaseString containsString:q]) [out addObject:r];
+    self.shown=out;
+  }
+  [self.tv reloadData];
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return self.shown.count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  if (row<0||row>=(NSInteger)self.shown.count) return nil;
+  WKWebsiteDataRecord *r=self.shown[row];
+  if ([col.identifier isEqualToString:@"domain"]) {
+    NSTextField *f=[NSTextField labelWithString:r.displayName?:@""];
+    f.font=[NSFont systemFontOfSize:12]; return f;
+  }
+  // Summarise the type set (Cookies/Local Storage/IndexedDB/Cache).
+  NSMutableArray *parts=[NSMutableArray array];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeCookies])           [parts addObject:@"cookies"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeLocalStorage])      [parts addObject:@"local"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeIndexedDBDatabases])[parts addObject:@"indexedDB"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeDiskCache])         [parts addObject:@"cache"];
+  if ([r.dataTypes containsObject:WKWebsiteDataTypeServiceWorkerRegistrations]) [parts addObject:@"sw"];
+  if (!parts.count) [parts addObject:@(r.dataTypes.count).stringValue];
+  NSTextField *f=[NSTextField labelWithString:[parts componentsJoinedByString:@", "]];
+  f.font=[NSFont systemFontOfSize:11]; f.textColor=[NSColor secondaryLabelColor];
+  return f;
+}
+- (void)searchFieldDidEndSearching:(NSSearchField *)sender { [self applyFilter]; }
+- (void)controlTextDidChange:(NSNotification *)n { if (n.object==self.sf) [self applyFilter]; }
+- (void)removeSelected {
+  NSInteger row=self.tv.selectedRow; if (row<0||row>=(NSInteger)self.shown.count) return;
+  WKWebsiteDataRecord *r=self.shown[row];
+  [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:r.dataTypes forDataRecords:@[r] completionHandler:^{
+    dispatch_async(dispatch_get_main_queue(),^{ [self reload]; });
+  }];
+}
+- (void)removeAll {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Remove all site data?";
+  a.informativeText=@"Cookies, local storage, IndexedDB, cache, and service workers for every site will be erased.";
+  [a addButtonWithTitle:@"Remove All"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSSet *all=[WKWebsiteDataStore allWebsiteDataTypes];
+  [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:all modifiedSince:[NSDate distantPast] completionHandler:^{
+    dispatch_async(dispatch_get_main_queue(),^{ [self reload]; });
+  }];
+}
+@end
+
+// Datasource/delegate for the Reading List sheet (defined here so it can see
+// BBReadingItem/BBReadingList declared just above).
+@interface BBReadingListDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@property(weak) WKWebView *webView;
+@property(weak) NSWindow *win;
+@property(weak) NSTableView *tv;
+- (instancetype)initWithWebView:(WKWebView *)wv window:(NSWindow *)w tableView:(NSTableView *)tv;
+- (void)openSelected;
+- (void)removeSelected;
+- (void)toggleReadSelected;
+@end
+@implementation BBReadingListDS
+- (instancetype)initWithWebView:(WKWebView *)wv window:(NSWindow *)w tableView:(NSTableView *)tv {
+  self=[super init]; _webView=wv; _win=w; _tv=tv; return self;
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return [BBReadingList shared].items.count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  NSArray<BBReadingItem *> *items=[BBReadingList shared].items;
+  if (row<0||row>=(NSInteger)items.count) return nil;
+  BBReadingItem *it=items[row];
+  if ([col.identifier isEqualToString:@"read"]) {
+    NSImageView *iv=[[NSImageView alloc]initWithFrame:NSMakeRect(0,0,18,18)];
+    NSImage *img=[NSImage imageWithSystemSymbolName:it.read?@"checkmark.circle.fill":@"circle" accessibilityDescription:@"Read"];
+    [img setTemplate:YES]; iv.image=img;
+    return iv;
+  }
+  NSTextField *f=[NSTextField labelWithString:[col.identifier isEqualToString:@"title"]?(it.title?:it.urlString):it.urlString];
+  f.font=[NSFont systemFontOfSize:12];
+  f.textColor=it.read?[NSColor tertiaryLabelColor]:[NSColor labelColor];
+  return f;
+}
+- (void)openSelected {
+  NSInteger row=_tv.selectedRow; NSArray<BBReadingItem *> *items=[BBReadingList shared].items;
+  if (row<0||row>=(NSInteger)items.count) return;
+  NSURL *u=[NSURL URLWithString:items[row].urlString]; if (!u) return;
+  [_webView loadRequest:[NSURLRequest requestWithURL:u]];
+  if (!items[row].read) { [[BBReadingList shared] toggleReadAtIndex:row]; [_tv reloadData]; }
+  [_win.sheetParent endSheet:_win];
+}
+- (void)removeSelected {
+  NSInteger row=_tv.selectedRow;
+  [[BBReadingList shared] removeAtIndex:row];
+  [_tv reloadData];
+}
+- (void)toggleReadSelected {
+  NSInteger row=_tv.selectedRow;
+  [[BBReadingList shared] toggleReadAtIndex:row];
+  [_tv reloadData];
+}
+@end
+
+// ── BBResearchSession ─────────────────────────────────────────────────────────
+// A named pile of URLs with per-item status. Not bookmarks — designed for
+// research workflows: open 500 tabs, collapse to a session, curate, hand to agent.
+typedef NS_ENUM(NSInteger, BBResearchStatus) {
+  BBResearchStatusUnread=0, BBResearchStatusReading, BBResearchStatusDone, BBResearchStatusDismissed
+};
+@interface BBResearchItem : NSObject
+@property(copy)   NSString         *urlString;
+@property(copy)   NSString         *title;
+@property(copy)   NSString         *note;        // user annotation
+@property(assign) BBResearchStatus  status;
+@property(strong) NSDate           *addedAt;
+- (NSDictionary *)toDict;
++ (BBResearchItem *)fromDict:(NSDictionary *)d;
+@end
+@implementation BBResearchItem
+- (NSDictionary *)toDict {
+  return @{@"url":_urlString?:@"",@"title":_title?:@"",@"note":_note?:@"",
+           @"status":@(_status),@"t":@(_addedAt.timeIntervalSince1970)};
+}
++ (BBResearchItem *)fromDict:(NSDictionary *)d {
+  BBResearchItem *it=[BBResearchItem new];
+  it.urlString=d[@"url"]?:@""; it.title=d[@"title"]?:@""; it.note=d[@"note"]?:@"";
+  it.status=(BBResearchStatus)[d[@"status"] integerValue];
+  it.addedAt=[NSDate dateWithTimeIntervalSince1970:[d[@"t"] doubleValue]];
+  return it;
+}
+@end
+
+@interface BBResearchSession : NSObject
+@property(copy)   NSString                       *name;
+@property(strong) NSMutableArray<BBResearchItem*> *items;
+@property(strong) NSDate                          *createdAt;
+- (NSDictionary *)toDict;
++ (BBResearchSession *)fromDict:(NSDictionary *)d;
+- (NSUInteger)unreadCount;
+- (NSString *)exportMarkdown;
+@end
+@implementation BBResearchSession
+- (instancetype)initWithName:(NSString *)name {
+  self=[super init]; _name=name; _items=[NSMutableArray array]; _createdAt=[NSDate date]; return self;
+}
+- (NSDictionary *)toDict {
+  NSMutableArray *arr=[NSMutableArray array];
+  for (BBResearchItem *it in _items) [arr addObject:[it toDict]];
+  return @{@"name":_name?:@"",@"t":@(_createdAt.timeIntervalSince1970),@"items":arr};
+}
++ (BBResearchSession *)fromDict:(NSDictionary *)d {
+  BBResearchSession *s=[[BBResearchSession alloc] initWithName:d[@"name"]?:@"Session"];
+  s.createdAt=[NSDate dateWithTimeIntervalSince1970:[d[@"t"] doubleValue]];
+  for (NSDictionary *id_ in d[@"items"]) [s.items addObject:[BBResearchItem fromDict:id_]];
+  return s;
+}
+- (NSUInteger)unreadCount {
+  NSUInteger n=0; for (BBResearchItem *it in _items) if(it.status==BBResearchStatusUnread) n++; return n;
+}
+- (NSString *)exportMarkdown {
+  NSMutableString *md=[NSMutableString string];
+  [md appendFormat:@"# %@\n\n",_name];
+  static NSArray *labels; if(!labels) labels=@[@"☐",@"…",@"✓",@"✗"];
+  for (BBResearchItem *it in _items) {
+    [md appendFormat:@"- %@ [%@](%@)",labels[it.status],it.title.length?it.title:it.urlString,it.urlString];
+    if (it.note.length) [md appendFormat:@"  \n  > %@",it.note];
+    [md appendString:@"\n"];
+  }
+  return md;
+}
+@end
+
+@interface BBResearchStore : NSObject
+@property(strong) NSMutableArray<BBResearchSession*> *sessions;
++ (instancetype)shared;
+- (void)save;
+- (BBResearchSession *)sessionNamed:(NSString *)name create:(BOOL)create;
+@end
+@implementation BBResearchStore
++ (instancetype)shared { static BBResearchStore *s; static dispatch_once_t o; dispatch_once(&o,^{s=[[self alloc]init];}); return s; }
+- (instancetype)init {
+  self=[super init]; _sessions=[NSMutableArray array];
+  NSString *path=[BBSupportDir() stringByAppendingPathComponent:@"research-sessions.json"];
+  NSData *d=[NSData dataWithContentsOfFile:path];
+  if (d) for (NSDictionary *r in [NSJSONSerialization JSONObjectWithData:d options:0 error:nil])
+    [_sessions addObject:[BBResearchSession fromDict:r]];
+  return self;
+}
+- (void)save {
+  NSMutableArray *arr=[NSMutableArray array];
+  for (BBResearchSession *s in _sessions) [arr addObject:[s toDict]];
+  NSData *d=[NSJSONSerialization dataWithJSONObject:arr options:NSJSONWritingPrettyPrinted error:nil];
+  [[NSFileManager defaultManager] createDirectoryAtPath:BBSupportDir() withIntermediateDirectories:YES attributes:nil error:nil];
+  [d writeToFile:[BBSupportDir() stringByAppendingPathComponent:@"research-sessions.json"] atomically:YES];
+}
+- (BBResearchSession *)sessionNamed:(NSString *)name create:(BOOL)create {
+  for (BBResearchSession *s in _sessions) if ([s.name isEqualToString:name]) return s;
+  if (!create) return nil;
+  BBResearchSession *s=[[BBResearchSession alloc] initWithName:name];
+  [_sessions addObject:s]; [self save]; return s;
 }
 @end
 
@@ -554,6 +1291,9 @@ static const CGFloat kTabMinW   = 80.0;
 @property(strong) NSMutableArray<BBHistoryEntry *> *entries; // newest-last, capped 20k
 + (instancetype)shared;
 - (void)recordTitle:(NSString *)t url:(NSString *)u;
+- (void)updateTitle:(NSString *)t forURL:(NSString *)u;
+- (void)clearAll;
+- (void)removeAllForURL:(NSString *)u;
 - (NSArray<BBHistoryEntry *> *)search:(NSString *)q limit:(NSInteger)n;
 @end
 @implementation BBHistoryStore
@@ -573,13 +1313,57 @@ static const CGFloat kTabMinW   = 80.0;
   }
   return self;
 }
-- (void)recordTitle:(NSString *)t url:(NSString *)u {
-  if (!u.length||[u hasPrefix:@"bearbrowser://"]) return;
-  BBHistoryEntry *e=[BBHistoryEntry new]; e.title=t?:@""; e.urlString=u; e.visitedAt=[NSDate date];
-  [self.entries addObject:e]; if(self.entries.count>20000) [self.entries removeObjectAtIndex:0];
+- (void)persist:(BBHistoryEntry *)e {
   NSString *dir=[BBSupportDir() stringByAppendingPathComponent:@"history"];
   BBAppendLine([dir stringByAppendingPathComponent:@"history.jsonl"],
-    BBJSON(@{@"url":u,@"title":t?:@"",@"t":@(e.visitedAt.timeIntervalSince1970)}));
+    BBJSON(@{@"url":e.urlString,@"title":e.title?:@"",@"t":@(e.visitedAt.timeIntervalSince1970)}));
+}
+- (void)recordTitle:(NSString *)t url:(NSString *)u {
+  if (!u.length||[u hasPrefix:@"bearbrowser://"]) return;
+  // Collapse a reload / immediate re-visit of the same URL into the existing
+  // entry instead of stacking duplicate consecutive rows.
+  BBHistoryEntry *last=self.entries.lastObject;
+  if (last && [last.urlString isEqualToString:u]) {
+    if (t.length) last.title=t;
+    last.visitedAt=[NSDate date];
+    [self persist:last];
+    return;
+  }
+  BBHistoryEntry *e=[BBHistoryEntry new]; e.title=t?:@""; e.urlString=u; e.visitedAt=[NSDate date];
+  [self.entries addObject:e]; if(self.entries.count>20000) [self.entries removeObjectAtIndex:0];
+  [self persist:e];
+}
+// The page title usually arrives (via title KVO) AFTER didFinishNavigation already
+// recorded the visit with an empty/placeholder title. Patch the latest matching entry.
+- (void)updateTitle:(NSString *)t forURL:(NSString *)u {
+  if (!t.length||!u.length||[u hasPrefix:@"bearbrowser://"]) return;
+  for (NSInteger i=self.entries.count-1;i>=0;i--) {
+    BBHistoryEntry *e=self.entries[i];
+    if (![e.urlString isEqualToString:u]) continue;
+    if ([e.title isEqualToString:t]) return;   // already current
+    e.title=t; [self persist:e]; return;
+  }
+}
+- (void)clearAll {
+  [self.entries removeAllObjects];
+  NSString *path=[[BBSupportDir() stringByAppendingPathComponent:@"history"] stringByAppendingPathComponent:@"history.jsonl"];
+  [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+}
+- (void)removeAllForURL:(NSString *)u {
+  if (!u.length) return;
+  NSMutableIndexSet *idx=[NSMutableIndexSet indexSet];
+  for (NSInteger i=0;i<(NSInteger)self.entries.count;i++)
+    if ([self.entries[i].urlString isEqualToString:u]) [idx addIndex:(NSUInteger)i];
+  if (!idx.count) return;
+  [self.entries removeObjectsAtIndexes:idx];
+  // Rewrite the on-disk log without the deleted entries.
+  NSMutableString *out=[NSMutableString string];
+  for (BBHistoryEntry *e in self.entries) {
+    [out appendFormat:@"%@\n",BBJSON(@{@"url":e.urlString,@"title":e.title?:@"",@"t":@(e.visitedAt.timeIntervalSince1970)})];
+  }
+  NSString *path=[[BBSupportDir() stringByAppendingPathComponent:@"history"] stringByAppendingPathComponent:@"history.jsonl"];
+  [[NSFileManager defaultManager] createDirectoryAtPath:path.stringByDeletingLastPathComponent withIntermediateDirectories:YES attributes:nil error:nil];
+  [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
 }
 - (NSArray<BBHistoryEntry *> *)search:(NSString *)q limit:(NSInteger)n {
   if(!q.length) return @[];
@@ -600,6 +1384,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @interface BBDownloadItem : NSObject
 @property(copy)   NSString *filename;
 @property(strong) NSURL    *destURL;
+@property(strong) NSURL    *sourceURL; // original URL the download came from
 @property(assign) long long  totalBytes, writtenBytes;
 @property(assign) BBDownloadState state;
 @property(copy)   NSString *errorMessage;
@@ -607,6 +1392,72 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @property(strong) NSDate *startedAt;
 @end
 @implementation BBDownloadItem
+@end
+
+// Tiny NSView subclass for download-panel rows: drag the destination file URL
+// out to Finder / Mail / another app once the download has completed.
+@interface BBDownloadRowView : NSView <NSDraggingSource>
+@property(strong) NSURL *fileURL;
+@end
+@implementation BBDownloadRowView
+- (NSDragOperation)draggingSession:(NSDraggingSession *)s sourceOperationMaskForDraggingContext:(NSDraggingContext)c { return NSDragOperationCopy; }
+- (void)mouseDown:(NSEvent *)e {
+  if (!self.fileURL) { [super mouseDown:e]; return; }
+  if (![[NSFileManager defaultManager] fileExistsAtPath:self.fileURL.path]) { [super mouseDown:e]; return; }
+  NSPoint start=e.locationInWindow;
+  NSEvent *evt=e;
+  while (evt) {
+    evt=[self.window nextEventMatchingMask:NSEventMaskLeftMouseDragged|NSEventMaskLeftMouseUp];
+    if (evt.type==NSEventTypeLeftMouseUp) { [super mouseDown:e]; return; }
+    if (evt.type==NSEventTypeLeftMouseDragged) {
+      NSPoint p=evt.locationInWindow;
+      if (hypot(p.x-start.x,p.y-start.y)>6) break;
+    }
+  }
+  NSDraggingItem *di=[[NSDraggingItem alloc]initWithPasteboardWriter:self.fileURL];
+  NSImage *icon=[[NSWorkspace sharedWorkspace] iconForFile:self.fileURL.path];
+  [icon setSize:NSMakeSize(32,32)];
+  NSPoint local=[self convertPoint:start fromView:nil];
+  [di setDraggingFrame:NSMakeRect(local.x-16,local.y-16,32,32) contents:icon];
+  [self beginDraggingSessionWithItems:@[di] event:e source:self];
+}
+@end
+
+// Bookmarks-bar NSView subclass that accepts URL drops (Chrome parity: drag a
+// URL onto the bar to add a bookmark).
+@protocol BBBookmarksBarDelegate <NSObject>
+- (void)bookmarksBarDidDropURL:(NSString *)urlString;
+@end
+@interface BBBookmarksBarView : NSView
+@property(weak) id<BBBookmarksBarDelegate> bbDelegate;
+@end
+@implementation BBBookmarksBarView
+- (instancetype)initWithFrame:(NSRect)f {
+  self=[super initWithFrame:f];
+  [self registerForDraggedTypes:@[NSPasteboardTypeURL,NSPasteboardTypeString]];
+  return self;
+}
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  if ([pb canReadObjectForClasses:@[[NSURL class]] options:nil]) return NSDragOperationCopy;
+  if ([pb canReadObjectForClasses:@[[NSString class]] options:nil]) return NSDragOperationCopy;
+  return NSDragOperationNone;
+}
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender { return YES; }
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+  NSPasteboard *pb=sender.draggingPasteboard;
+  NSArray *urls=[pb readObjectsForClasses:@[[NSURL class]] options:nil];
+  NSString *dropped=nil;
+  if (urls.count) dropped=[urls.firstObject absoluteString];
+  else {
+    NSArray *strs=[pb readObjectsForClasses:@[[NSString class]] options:nil];
+    if (strs.count) dropped=[strs.firstObject stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  }
+  if (!dropped.length) return NO;
+  if ([self.bbDelegate respondsToSelector:@selector(bookmarksBarDidDropURL:)])
+    [self.bbDelegate bookmarksBarDidDropURL:dropped];
+  return YES;
+}
 @end
 
 @interface BBDownloadPanel : NSView
@@ -628,11 +1479,18 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
     name:NSSystemColorsDidChangeNotification object:nil];
   _items=[NSMutableArray array];
   // Header
-  NSTextField *hdr=[[NSTextField alloc]initWithFrame:NSMakeRect(12,f.size.height-36,f.size.width-24,24)];
+  NSTextField *hdr=[[NSTextField alloc]initWithFrame:NSMakeRect(12,f.size.height-36,f.size.width-92,24)];
   hdr.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
   hdr.stringValue=@"Downloads"; hdr.font=[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
   hdr.bordered=NO; hdr.editable=NO; hdr.selectable=NO; hdr.backgroundColor=[NSColor clearColor];
   [self addSubview:hdr];
+  // Clear-finished button
+  NSButton *clr=[[NSButton alloc]initWithFrame:NSMakeRect(f.size.width-80,f.size.height-38,68,22)];
+  clr.autoresizingMask=NSViewMinXMargin|NSViewMinYMargin;
+  clr.title=@"Clear"; clr.font=[NSFont systemFontOfSize:11]; clr.bezelStyle=NSBezelStyleRoundRect;
+  clr.toolTip=@"Remove completed downloads from the list";
+  clr.target=self; clr.action=@selector(clearFinished);
+  [self addSubview:clr];
   // Separator
   NSBox *sep=[[NSBox alloc]initWithFrame:NSMakeRect(0,f.size.height-38,f.size.width,1)];
   sep.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin; sep.boxType=NSBoxSeparator; [self addSubview:sep];
@@ -652,10 +1510,15 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   return self;
 }
 - (void)themeChanged:(NSNotification *)n { self.layer.backgroundColor=[NSColor windowBackgroundColor].CGColor; }
+- (void)updateDockBadge {
+  NSInteger active=0;
+  for (BBDownloadItem *it in self.items) if (it.state==BBDownloadStateActive) active++;
+  [NSApp dockTile].badgeLabel=active>0?[NSString stringWithFormat:@"%ld",(long)active]:@"";
+}
 - (void)addItem:(BBDownloadItem *)item {
   [self.items addObject:item];
   if (!self.pollTimer) self.pollTimer=[NSTimer scheduledTimerWithTimeInterval:0.5 target:self selector:@selector(pollFileSizes) userInfo:nil repeats:YES];
-  [self refresh]; [self show];
+  [self updateDockBadge]; [self refresh]; [self show];
 }
 - (void)pollFileSizes {
   BOOL anyActive=NO;
@@ -667,7 +1530,13 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
     }
   }
   if (!anyActive) { [self.pollTimer invalidate]; self.pollTimer=nil; }
-  dispatch_async(dispatch_get_main_queue(),^{ [self refresh]; });
+  dispatch_async(dispatch_get_main_queue(),^{ [self updateDockBadge]; [self refresh]; });
+}
+- (void)clearFinished {
+  NSMutableArray *keep=[NSMutableArray array];
+  for (BBDownloadItem *it in self.items) if (it.state==BBDownloadStateActive) [keep addObject:it];
+  self.items=keep;
+  [self refresh];
 }
 - (void)refresh {
   for (NSView *v in self.stack.arrangedSubviews) [self.stack removeArrangedSubview:v];
@@ -682,8 +1551,23 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   }
 }
 - (NSView *)rowForItem:(BBDownloadItem *)item {
-  NSView *row=[[NSView alloc]initWithFrame:NSZeroRect]; row.wantsLayer=YES;
+  BBDownloadRowView *row=[[BBDownloadRowView alloc]initWithFrame:NSZeroRect]; row.wantsLayer=YES;
   row.layer.backgroundColor=[NSColor controlBackgroundColor].CGColor;
+  if (item.state==BBDownloadStateDone) row.fileURL=item.destURL;
+  // Right-click context menu on the row.
+  NSMenu *rm=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *cu=[rm addItemWithTitle:@"Copy Source URL" action:@selector(dlCopySourceURL:) keyEquivalent:@""];
+  cu.target=self; cu.representedObject=item.sourceURL;
+  NSMenuItem *rv=[rm addItemWithTitle:@"Show in Finder" action:@selector(dlContextReveal:) keyEquivalent:@""];
+  rv.target=self; rv.representedObject=item.destURL; rv.enabled=(item.destURL!=nil);
+  NSMenuItem *op=[rm addItemWithTitle:@"Open" action:@selector(dlContextOpen:) keyEquivalent:@""];
+  op.target=self; op.representedObject=item.destURL; op.enabled=(item.state==BBDownloadStateDone);
+  [rm addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *rf=[rm addItemWithTitle:@"Remove from List" action:@selector(dlRemoveFromList:) keyEquivalent:@""];
+  rf.target=self; rf.representedObject=item;
+  NSMenuItem *df=[rm addItemWithTitle:@"Delete File" action:@selector(dlDeleteFile:) keyEquivalent:@""];
+  df.target=self; df.representedObject=item; df.enabled=(item.destURL!=nil);
+  row.menu=rm;
   // Filename
   NSTextField *name=[[NSTextField alloc]initWithFrame:NSZeroRect];
   name.translatesAutoresizingMaskIntoConstraints=NO;
@@ -755,15 +1639,177 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
   NSInteger idx=self.items.count-1-btn.tag; // rows displayed newest-first
   if(idx<0||idx>=(NSInteger)self.items.count) return;
   BBDownloadItem *item=self.items[idx];
-  if (item.state==BBDownloadStateDone && item.destURL)
-    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[item.destURL]];
+  if (item.state==BBDownloadStateDone && item.destURL) {
+    // Offer Open + Show in Finder (Chrome's completed-download menu).
+    NSMenu *m=[[NSMenu alloc]init];
+    NSMenuItem *o=[m addItemWithTitle:@"Open" action:@selector(dlOpen:) keyEquivalent:@""];
+    o.target=self; o.representedObject=item.destURL;
+    NSMenuItem *r=[m addItemWithTitle:@"Show in Finder" action:@selector(dlReveal:) keyEquivalent:@""];
+    r.target=self; r.representedObject=item.destURL;
+    [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+  }
   else if (item.state==BBDownloadStateFailed)
     { item.state=BBDownloadStateActive; [self refresh]; }
   else if (item.download)
     [item.download cancel:^(NSData *rd){}];
 }
+- (void)dlOpen:(NSMenuItem *)s   { if([s.representedObject isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] openURL:s.representedObject]; }
+- (void)dlReveal:(NSMenuItem *)s { if([s.representedObject isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[s.representedObject]]; }
 - (void)show { self.hidden=NO; }
 - (void)hide { self.hidden=YES; }
+@end
+
+// ── BBSearch ──────────────────────────────────────────────────────────────────
+// Search-engine registry. Declared here (before the address dropdown) so the
+// dropdown can route suggestions to the chosen engine. BBDelegate exposes thin
+// wrappers (searchEngines / searchEngineName / searchURLForQuery:) over this.
+@interface BBSearch : NSObject
++ (NSArray<NSDictionary*> *)engines;
++ (NSString *)engineName;
++ (NSString *)urlForQuery:(NSString *)q;
++ (NSString *)urlForKeywordQuery:(NSString *)raw;
++ (NSString *)keywordLabel:(NSString *)raw;
++ (NSString *)calculatorResultForQuery:(NSString *)q;
+@end
+@implementation BBSearch
++ (NSArray<NSDictionary*> *)engines {
+  return @[
+    @{@"name":@"DuckDuckGo",  @"id":@"ddg",    @"url":@"https://duckduckgo.com/?q=%@"},
+    @{@"name":@"Kagi",        @"id":@"kagi",   @"url":@"https://kagi.com/search?q=%@"},
+    @{@"name":@"Brave",       @"id":@"brave",  @"url":@"https://search.brave.com/search?q=%@"},
+    @{@"name":@"Startpage",   @"id":@"start",  @"url":@"https://www.startpage.com/search?q=%@"},
+  ];
+}
++ (NSString *)engineName {
+  NSString *eid=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
+  for (NSDictionary *e in [self engines]) if ([e[@"id"] isEqualToString:eid]) return e[@"name"];
+  return @"DuckDuckGo";
+}
++ (NSString *)urlForQuery:(NSString *)q {
+  NSString *eid=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
+  NSString *enc=[q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  for (NSDictionary *e in [self engines])
+    if ([e[@"id"] isEqualToString:eid]) return [NSString stringWithFormat:e[@"url"],enc];
+  return [NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",enc];
+}
+// Type "wiki foo" / "yt foo" / "gh foo" / "ddg foo" / "kagi foo" → site-scoped search.
+// A leading "!" is also accepted for DuckDuckGo-style bang syntax: "!wiki foo".
+// Returns nil if the input doesn't start with a recognised keyword + space.
++ (NSString *)urlForKeywordQuery:(NSString *)raw {
+  if ([raw hasPrefix:@"!"]) raw=[raw substringFromIndex:1];
+  NSRange sp=[raw rangeOfString:@" "];
+  if (sp.location==NSNotFound||sp.location<1) return nil;
+  NSString *kw=[[raw substringToIndex:sp.location] lowercaseString];
+  NSString *rest=[[raw substringFromIndex:sp.location+1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+  if (!rest.length) return nil;
+  NSString *enc=[rest stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  static NSDictionary *kws=nil; static dispatch_once_t o; dispatch_once(&o,^{
+    kws=@{@"wiki":@"https://en.wikipedia.org/w/index.php?search=%@",
+          @"yt":  @"https://www.youtube.com/results?search_query=%@",
+          @"gh":  @"https://github.com/search?q=%@",
+          @"npm": @"https://www.npmjs.com/search?q=%@",
+          @"so":  @"https://stackoverflow.com/search?q=%@",
+          @"mdn": @"https://developer.mozilla.org/en-US/search?q=%@",
+          @"ddg": @"https://duckduckgo.com/?q=%@",
+          @"kagi":@"https://kagi.com/search?q=%@",
+          @"g":   @"https://www.google.com/search?q=%@",
+          @"map": @"https://www.openstreetmap.org/search?query=%@",
+          @"amzn":@"https://www.amazon.com/s?k=%@",
+          @"hn":  @"https://hn.algolia.com/?q=%@"};
+  });
+  NSString *fmt=kws[kw]; if (!fmt) return nil;
+  return [NSString stringWithFormat:fmt,enc];
+}
++ (NSString *)keywordLabel:(NSString *)raw {
+  if ([raw hasPrefix:@"!"]) raw=[raw substringFromIndex:1];
+  NSRange sp=[raw rangeOfString:@" "]; if (sp.location==NSNotFound) return nil;
+  NSString *kw=[[raw substringToIndex:sp.location] lowercaseString];
+  static NSDictionary *labels=nil; static dispatch_once_t o; dispatch_once(&o,^{
+    labels=@{@"wiki":@"Wikipedia",@"yt":@"YouTube",@"gh":@"GitHub",@"npm":@"npm",
+             @"so":@"Stack Overflow",@"mdn":@"MDN",@"ddg":@"DuckDuckGo",@"kagi":@"Kagi",
+             @"g":@"Google",@"map":@"OpenStreetMap",@"amzn":@"Amazon",@"hn":@"Hacker News"};
+  });
+  return labels[kw];
+}
+// Arithmetic-only expression → NSExpression-evaluated result; returns nil if it's
+// not a pure arithmetic input. Restricts the grammar to digits/operators/whitespace
+// to avoid mistaking URLs ("foo.com") for numeric exprs.
++ (NSString *)calculatorResultForQuery:(NSString *)q {
+  NSString *trimmed=[q stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (trimmed.length<3) return nil;
+  // Must contain at least one operator and only allowed characters.
+  NSCharacterSet *allowed=[NSCharacterSet characterSetWithCharactersInString:@"0123456789.+-*/%()^ "];
+  if ([trimmed rangeOfCharacterFromSet:allowed.invertedSet].location!=NSNotFound) return nil;
+  NSCharacterSet *ops=[NSCharacterSet characterSetWithCharactersInString:@"+-*/%^"];
+  if ([trimmed rangeOfCharacterFromSet:ops].location==NSNotFound) return nil;
+  // NSExpression treats "^" as XOR on integers — translate it to ** which works on doubles.
+  NSString *expr=[trimmed stringByReplacingOccurrencesOfString:@"^" withString:@"**"];
+  @try {
+    NSExpression *e=[NSExpression expressionWithFormat:expr];
+    id v=[e expressionValueWithObject:nil context:nil];
+    if ([v isKindOfClass:[NSNumber class]]) {
+      double d=[(NSNumber*)v doubleValue];
+      if (isnan(d)||isinf(d)) return nil;
+      if (d==floor(d) && fabs(d)<1e15) return [NSString stringWithFormat:@"%lld",(long long)d];
+      return [NSString stringWithFormat:@"%g",d];
+    }
+  } @catch(...) {}
+  return nil;
+}
+@end
+
+// ── BBAddressField — NSTextField subclass with Paste-and-Go context menu ─────
+@protocol BBAddressFieldDelegate <NSObject>
+- (void)addressFieldPasteAndGo:(NSString *)url;
+@end
+@interface BBAddressField : NSTextField <NSDraggingSource>
+@property(weak) id<BBAddressFieldDelegate> pasteDelegate;
+@end
+@implementation BBAddressField
+- (NSDragOperation)draggingSession:(NSDraggingSession *)s sourceOperationMaskForDraggingContext:(NSDraggingContext)c {
+  return NSDragOperationCopy;
+}
+- (void)mouseDown:(NSEvent *)e {
+  // Only intercept when the field isn't currently being edited — preserve normal
+  // text-editing click-to-focus behavior otherwise.
+  if ([self.window firstResponder]==self || self.currentEditor) { [super mouseDown:e]; return; }
+  NSPoint start=e.locationInWindow;
+  // Walk events until drag threshold or release.
+  NSEvent *evt=e;
+  while (evt) {
+    evt=[self.window nextEventMatchingMask:NSEventMaskLeftMouseDragged|NSEventMaskLeftMouseUp];
+    if (evt.type==NSEventTypeLeftMouseUp) { [super mouseDown:e]; return; }
+    if (evt.type==NSEventTypeLeftMouseDragged) {
+      NSPoint p=evt.locationInWindow;
+      if (hypot(p.x-start.x,p.y-start.y)>6) break;
+    }
+  }
+  // Initiate a drag carrying the current URL.
+  NSString *url=self.stringValue;
+  if (!url.length || [url rangeOfString:@" "].location!=NSNotFound) { [super mouseDown:e]; return; }
+  NSPasteboardItem *pi=[[NSPasteboardItem alloc]init];
+  if ([url hasPrefix:@"http"]||[url hasPrefix:@"file://"]) [pi setString:url forType:NSPasteboardTypeURL];
+  [pi setString:url forType:NSPasteboardTypeString];
+  NSDraggingItem *di=[[NSDraggingItem alloc]initWithPasteboardWriter:pi];
+  NSImage *icon=[NSImage imageWithSystemSymbolName:@"link" accessibilityDescription:@"URL"];
+  [di setDraggingFrame:NSMakeRect(start.x-16,start.y-16,32,32) contents:icon];
+  [self beginDraggingSessionWithItems:@[di] event:e source:self];
+}
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+  NSMenu *m=[super menuForEvent:event];
+  if (!m) m=[[NSMenu alloc]init];
+  NSString *clip=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+  if (clip.length) {
+    [m insertItemWithTitle:@"Paste and Go" action:@selector(bbPasteAndGo:) keyEquivalent:@"" atIndex:0];
+    [m itemAtIndex:0].target=self;
+    [m insertItem:[NSMenuItem separatorItem] atIndex:1];
+  }
+  return m;
+}
+- (void)bbPasteAndGo:(id)s {
+  NSString *clip=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+  if (clip.length && self.pasteDelegate) [self.pasteDelegate addressFieldPasteAndGo:clip];
+}
 @end
 
 // ── BBAddressDropdown ─────────────────────────────────────────────────────────
@@ -784,6 +1830,8 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 @property(strong) NSMutableArray<BBAddressSuggestion *> *suggestions;
 @property(weak)   id<BBAddressDropdownDelegate> delegate;
 @property(strong) NSTimer *ddgTimer;
+@property(assign) BOOL remoteSuggestEnabled; // set per-keystroke by the owner (off in private / when disabled)
+@property(strong) NSArray<NSDictionary *> *openTabsSnapshot; // owner sets before each updateForQuery
 - (void)updateForQuery:(NSString *)q belowField:(NSTextField *)field inWindow:(NSWindow *)win;
 - (void)hide;
 - (BOOL)selectNext;
@@ -815,6 +1863,36 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
 - (void)updateForQuery:(NSString *)q belowField:(NSTextField *)field inWindow:(NSWindow *)win {
   [_suggestions removeAllObjects];
   if (!q.length) { [self hide]; return; }
+  // Calculator chip — pure arithmetic input renders the answer at the top of the dropdown.
+  NSString *calc=[BBSearch calculatorResultForQuery:q];
+  if (calc.length) {
+    BBAddressSuggestion *s=[BBAddressSuggestion new];
+    s.title=[NSString stringWithFormat:@"= %@",calc];
+    s.urlString=calc; // selecting copies the answer (handled by the delegate's URL-load fallback)
+    s.badge=@"∑"; [_suggestions addObject:s];
+  }
+  // Search-engine keywords: "wiki foo" → Wikipedia search row.
+  NSString *kwLabel=[BBSearch keywordLabel:q];
+  NSString *kwURL=kwLabel?[BBSearch urlForKeywordQuery:q]:nil;
+  if (kwURL.length) {
+    BBAddressSuggestion *s=[BBAddressSuggestion new];
+    NSString *q2=[q substringFromIndex:[q rangeOfString:@" "].location+1];
+    s.title=[NSString stringWithFormat:@"Search %@: %@",kwLabel,q2];
+    s.urlString=kwURL; s.badge=@"⌕"; [_suggestions addObject:s];
+  }
+  // "Switch to this tab" — when a typed query matches an already-open tab.
+  for (NSDictionary *t in self.openTabsSnapshot) {
+    NSString *title=[t[@"title"] isKindOfClass:[NSString class]]?t[@"title"]:@"";
+    NSString *url=[t[@"url"] isKindOfClass:[NSString class]]?t[@"url"]:@"";
+    if ([title.lowercaseString containsString:q.lowercaseString] ||
+        [url.lowercaseString   containsString:q.lowercaseString]) {
+      BBAddressSuggestion *s=[BBAddressSuggestion new];
+      s.title=[NSString stringWithFormat:@"Switch to tab: %@",title.length?title:url];
+      s.urlString=[NSString stringWithFormat:@"bb-switch-tab:%@",t[@"idx"]];
+      s.badge=@"⇄"; [_suggestions addObject:s];
+      if (_suggestions.count>=2) break;
+    }
+  }
   // Bookmarks first
   for (BBBookmark *b in [BBBookmarksStore shared].items) {
     if ([[b.urlString lowercaseString] containsString:q.lowercaseString]||
@@ -823,17 +1901,26 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
       [_suggestions addObject:s]; if(_suggestions.count>=3) break;
     }
   }
+  // Reading List — unread items surface with a book badge.
+  for (BBReadingItem *it in [BBReadingList shared].items) {
+    if (it.read) continue;
+    if ([[it.title lowercaseString] containsString:q.lowercaseString]||
+        [[it.urlString lowercaseString] containsString:q.lowercaseString]) {
+      BBAddressSuggestion *s=[BBAddressSuggestion new];
+      s.title=it.title.length?it.title:it.urlString; s.urlString=it.urlString; s.badge=@"📖";
+      [_suggestions addObject:s]; if(_suggestions.count>=6) break;
+    }
+  }
   // History
   for (BBHistoryEntry *e in [[BBHistoryStore shared] search:q limit:6]) {
     BBAddressSuggestion *s=[BBAddressSuggestion new]; s.title=e.title.length?e.title:e.urlString;
     s.urlString=e.urlString; s.badge=@"↺"; [_suggestions addObject:s];
     if(_suggestions.count>=9) break;
   }
-  // Search row always last
+  // Search row always last — routed to the user's chosen search engine.
   BBAddressSuggestion *search=[BBAddressSuggestion new];
-  search.title=[NSString stringWithFormat:@"Search DuckDuckGo: %@",q];
-  NSString *eq=[q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-  search.urlString=[NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",eq];
+  search.title=[NSString stringWithFormat:@"Search %@: %@",[BBSearch engineName],q];
+  search.urlString=[BBSearch urlForQuery:q];
   search.badge=@"⌕"; [_suggestions addObject:search];
   [_table reloadData]; [_table deselectAll:nil];
   // Position overlay in contentView coordinates below the address field
@@ -845,11 +1932,16 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
                             fieldInContent.origin.y-h,
                             fieldInContent.size.width, h);
   _overlay.hidden=NO;
-  // DDG autocomplete after 250ms debounce
-  [_ddgTimer invalidate]; NSString *qc=q;
-  _ddgTimer=[NSTimer scheduledTimerWithTimeInterval:0.25 repeats:NO block:^(NSTimer *t){
-    [self fetchDDGSuggestions:qc];
-  }];
+  // Remote search-suggestions (privacy-sensitive: sends keystrokes to the suggest
+  // endpoint). Only when enabled by the owner — off in private tabs or if the user
+  // disabled it in Settings.
+  [_ddgTimer invalidate];
+  if (self.remoteSuggestEnabled) {
+    NSString *qc=q;
+    _ddgTimer=[NSTimer scheduledTimerWithTimeInterval:0.25 repeats:NO block:^(NSTimer *t){
+      [self fetchDDGSuggestions:qc];
+    }];
+  }
 }
 - (void)fetchDDGSuggestions:(NSString *)q {
   NSString *eq=[q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
@@ -867,8 +1959,7 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
       for (NSString *term in terms) {
         if(![term isKindOfClass:[NSString class]]||!term.length) continue;
         BBAddressSuggestion *s=[BBAddressSuggestion new]; s.title=term; s.badge=@"⌕";
-        NSString *teq=[term stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-        s.urlString=[NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",teq];
+        s.urlString=[BBSearch urlForQuery:term]; // route to the chosen engine
         if(ins<(NSInteger)self.suggestions.count) [self.suggestions insertObject:s atIndex:ins++];
         if(self.suggestions.count>=12) break;
       }
@@ -975,6 +2066,176 @@ typedef NS_ENUM(NSInteger, BBDownloadState) { BBDownloadStatePending, BBDownload
     return [[e.urlString lowercaseString] containsString:ql]||[[e.title lowercaseString] containsString:ql];
   }]] mutableCopy];
   [_tv reloadData];
+}
+- (void)deleteSelected {
+  NSInteger row=_tv.selectedRow; if (row<0||row>=(NSInteger)_shown.count) return;
+  NSString *u=_shown[row].urlString;
+  [[BBHistoryStore shared] removeAllForURL:u];
+  // Also drop from our local caches so the UI updates immediately.
+  NSMutableArray *newAll=[NSMutableArray array];
+  for (BBHistoryEntry *e in _all) if (![e.urlString isEqualToString:u]) [newAll addObject:e];
+  _all=newAll;
+  NSMutableArray *newShown=[NSMutableArray array];
+  for (BBHistoryEntry *e in _shown) if (![e.urlString isEqualToString:u]) [newShown addObject:e];
+  _shown=newShown;
+  [_tv reloadData];
+}
+@end
+
+// ── BBBookmarksPanelDS ────────────────────────────────────────────────────────
+// Datasource/delegate for the Bookmark Manager table. Reads the shared store live.
+@interface BBBookmarksPanelDS : NSObject <NSTableViewDataSource,NSTableViewDelegate,NSSearchFieldDelegate>
+@property(strong) NSTableView *tv;
+@property(weak)   NSWindow    *win;
+@property(weak)   WKWebView   *webView;
+@property(copy)   NSString    *query;
+- (NSArray<BBBookmark *> *)filteredItems;
+@end
+@implementation BBBookmarksPanelDS
+- (NSArray<BBBookmark *> *)filteredItems {
+  NSArray<BBBookmark *> *all=[BBBookmarksStore shared].items;
+  if (!self.query.length) return all;
+  NSString *q=self.query.lowercaseString;
+  NSMutableArray *out=[NSMutableArray array];
+  for (BBBookmark *b in all) {
+    if ([b.title.lowercaseString containsString:q]||
+        [b.urlString.lowercaseString containsString:q]||
+        (b.folder.length && [b.folder.lowercaseString containsString:q])) [out addObject:b];
+  }
+  return out;
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return [self filteredItems].count; }
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  NSTextField *f=[tv makeViewWithIdentifier:col.identifier owner:self];
+  if (!f) { f=[[NSTextField alloc]init]; f.identifier=col.identifier; f.bordered=NO; f.editable=NO; f.selectable=NO; f.backgroundColor=[NSColor clearColor]; f.lineBreakMode=NSLineBreakByTruncatingTail; }
+  NSArray<BBBookmark*> *items=[self filteredItems];
+  if (row<0||row>=(NSInteger)items.count) { f.stringValue=@""; return f; }
+  BBBookmark *b=items[row];
+  if ([col.identifier isEqualToString:@"title"])       f.stringValue=b.title.length?b.title:b.urlString;
+  else if ([col.identifier isEqualToString:@"folder"]) f.stringValue=b.folder?:@"";
+  else                                                  f.stringValue=b.urlString;
+  return f;
+}
+- (void)controlTextDidChange:(NSNotification *)n {
+  if ([n.object isKindOfClass:[NSSearchField class]]) {
+    self.query=((NSSearchField*)n.object).stringValue;
+    [self.tv reloadData];
+  }
+}
+- (void)moveSelectedToFolder {
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[self filteredItems];
+  if (row<0||row>=(NSInteger)items.count) return;
+  BBBookmark *b=items[row];
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Move to Folder";
+  a.informativeText=@"Leave blank for the bookmarks-bar root.";
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  cb.usesDataSource=NO; cb.completes=YES; cb.stringValue=b.folder?:@"";
+  [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  a.accessoryView=cb;
+  [a addButtonWithTitle:@"Move"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSString *target=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  [[BBBookmarksStore shared] setFolder:target forURL:b.urlString];
+  [self.tv reloadData];
+}
+- (void)openSelected {
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark*> *items=[self filteredItems];
+  if (row<0||row>=(NSInteger)items.count) return;
+  NSURL *u=[NSURL URLWithString:items[row].urlString]; if(!u) return;
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  [self.win close];
+}
+- (void)removeSelected {
+  NSInteger row=self.tv.selectedRow; NSArray<BBBookmark *> *items=[self filteredItems];
+  if (row<0||row>=(NSInteger)items.count) return;
+  [[BBBookmarksStore shared] removeURL:items[row].urlString];
+  [self.tv reloadData];
+}
+@end
+
+// ── BBResearchManagerDS ───────────────────────────────────────────────────────
+// Combined NSTableViewDataSource/Delegate for both the session list (left) and
+// the item list (right) in the Research Session Manager window.
+@interface BBResearchManagerDS : NSObject <NSTableViewDataSource,NSTableViewDelegate>
+@property(weak)   NSWindow *rw;
+@property(weak)   id        delegate;
+@property(strong) NSTableView *sessTV;
+@property(strong) NSTableView *itemTV;
+@end
+@implementation BBResearchManagerDS
+- (instancetype)initWithWindow:(NSWindow *)w delegate:(id)d {
+  self=[super init];
+  _rw=w; _delegate=d;
+  _sessTV=objc_getAssociatedObject(w,"sessTV");
+  _itemTV=objc_getAssociatedObject(w,"itemTV");
+  return self;
+}
+- (BBResearchSession *)currentSession {
+  NSInteger row=_sessTV.selectedRow;
+  NSArray *s=[BBResearchStore shared].sessions;
+  if(row<0||row>=(NSInteger)s.count) return nil;
+  return s[row];
+}
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv {
+  if (tv==_sessTV) return (NSInteger)[BBResearchStore shared].sessions.count;
+  BBResearchSession *s=[self currentSession]; return s?(NSInteger)s.items.count:0;
+}
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  NSTextField *f=[tv makeViewWithIdentifier:col.identifier owner:self];
+  if (!f) {
+    f=[[NSTextField alloc]init]; f.identifier=col.identifier; f.bordered=NO;
+    f.editable=NO; f.selectable=NO; f.backgroundColor=[NSColor clearColor];
+    f.lineBreakMode=NSLineBreakByTruncatingTail;
+  }
+  if (tv==_sessTV) {
+    NSArray *s=[BBResearchStore shared].sessions;
+    if (row<0||row>=(NSInteger)s.count) { f.stringValue=@""; return f; }
+    BBResearchSession *sess=s[row];
+    f.stringValue=[NSString stringWithFormat:@"%@ (%lu)",sess.name,(unsigned long)[sess unreadCount]];
+  } else {
+    BBResearchSession *sess=[self currentSession]; if (!sess) { f.stringValue=@""; return f; }
+    if (row<0||row>=(NSInteger)sess.items.count) { f.stringValue=@""; return f; }
+    BBResearchItem *it=sess.items[row];
+    NSString *cid=col.identifier;
+    if ([cid isEqualToString:@"status"]) {
+      static NSArray *icons; if(!icons) icons=@[@"☐",@"…",@"✓",@"✗"];
+      f.stringValue=icons[it.status]; f.alignment=NSTextAlignmentCenter;
+    } else if ([cid isEqualToString:@"title"]) {
+      f.stringValue=it.title.length?it.title:it.urlString;
+    } else {
+      f.stringValue=it.urlString; f.textColor=[NSColor secondaryLabelColor];
+    }
+  }
+  return f;
+}
+- (void)tableViewSelectionDidChange:(NSNotification *)n {
+  if (n.object==_sessTV) [_itemTV reloadData];
+}
+- (BOOL)tableView:(NSTableView *)tv shouldEditTableColumn:(NSTableColumn *)c row:(NSInteger)r { return NO; }
+
+// Single-click: if the click landed on the status column, cycle that item's status
+- (void)itemTableClicked:(id)s {
+  NSInteger col=_itemTV.clickedColumn, row=_itemTV.clickedRow;
+  if (col!=0||row<0) return;
+  BBResearchSession *sess=[self currentSession]; if(!sess) return;
+  if (row>=(NSInteger)sess.items.count) return;
+  BBResearchItem *it=sess.items[row];
+  it.status=(BBResearchStatus)((it.status+1)%4);
+  [[BBResearchStore shared] save]; [_itemTV reloadData];
+}
+
+// Double-click any item row: open URL in a new tab and mark as Reading
+- (void)openItemDoubleClick:(id)s {
+  NSInteger row=_itemTV.clickedRow; if (row<0) return;
+  BBResearchSession *sess=[self currentSession]; if(!sess) return;
+  if (row>=(NSInteger)sess.items.count) return;
+  BBResearchItem *it=sess.items[row];
+  if (![NSURL URLWithString:it.urlString]) return;
+  it.status=BBResearchStatusReading; [[BBResearchStore shared] save]; [_itemTV reloadData];
+  [[NSNotificationCenter defaultCenter]
+    postNotificationName:@"BBResearchOpenURL" object:nil
+    userInfo:@{@"url":it.urlString}];
 }
 @end
 
@@ -1385,6 +2646,7 @@ static NSString *kMapHTML(void) {
   _panel=[[NSPanel alloc]initWithContentRect:r
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable)
     backing:NSBackingStoreBuffered defer:NO];
+  _panel.releasedWhenClosed=NO; // ARC owns it; avoid the legacy close-time over-release
   _panel.title=@"BearBrowser Network Monitor";
   _panel.minSize=NSMakeSize(600,400);
   _panel.becomesKeyOnlyIfNeeded=YES;
@@ -1536,6 +2798,7 @@ static NSString *kMapHTML(void) {
   NSWindow *fw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,480,400)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
     backing:NSBackingStoreBuffered defer:NO];
+  fw.releasedWhenClosed=NO;
   fw.title=@"BearBrowser Firewall Rules";
   NSScrollView *sv=[[NSScrollView alloc]initWithFrame:fw.contentView.bounds];
   sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
@@ -1598,6 +2861,7 @@ static NSString *kMapHTML(void) {
   _capturePanel=[[NSPanel alloc]initWithContentRect:pr
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
     backing:NSBackingStoreBuffered defer:NO];
+  _capturePanel.releasedWhenClosed=NO;
   _capturePanel.title=@"Packet Capture";
   NSView *cpv=_capturePanel.contentView;
   NSScrollView *csvw=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,36,cpv.bounds.size.width,cpv.bounds.size.height-36)];
@@ -1749,6 +3013,7 @@ static NSString *kMapHTML(void) {
     styleMask:NSWindowStyleMaskTitled|NSWindowStyleMaskResizable|
               NSWindowStyleMaskClosable|NSWindowStyleMaskMiniaturizable
     backing:NSBackingStoreBuffered defer:NO];
+  _panel.releasedWhenClosed=NO;
   _panel.title=@"Security Monitor";
   _panel.minSize=NSMakeSize(600,340);
 
@@ -2292,16 +3557,16 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @end
 
 // ── BBDelegate ────────────────────────────────────────────────────────────────
-@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate>
+@interface BBDelegate : NSObject <NSApplicationDelegate,NSWindowDelegate,WKNavigationDelegate,WKUIDelegate,WKDownloadDelegate,NSTextFieldDelegate,BBTabItemDelegate,BBAddressDropdownDelegate,BBAddressFieldDelegate,WKScriptMessageHandler,BBAgentBrowserDelegate,NSMenuDelegate,BBBookmarksBarDelegate>
 @property(strong) NSWindow *window;
 @property(strong) NSMutableArray<BBTab *> *tabs;
-@property(strong) NSMutableArray<NSString *> *closedTabURLs;
+@property(strong) NSMutableArray<NSDictionary *> *recentlyClosed; // @{url,title}, newest last
 @property(assign) NSInteger activeTabIndex;
 @property(strong) NSView    *root;
 @property(strong) NSView *toolbarBg;
 @property(strong) BBTabBarView *tabBarView;
-@property(strong) NSTextField  *address;
-@property(strong) NSButton *backButton, *forwardButton, *reloadButton, *securityButton;
+@property(strong) BBAddressField *address;
+@property(strong) NSButton *backButton, *forwardButton, *reloadButton, *homeButton, *securityButton;
 @property(strong) NSProgressIndicator *progressBar;
 @property(strong) BBFindBar *findBar;
 @property(assign) BOOL findBarVisible;
@@ -2313,119 +3578,293 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 @property(assign) BOOL               bookmarksBarVisible;
 @property(strong) NSCache           *dnsBlockCache;   // Quad9 NXDOMAIN results
 @property(assign) SecTrustRef      currentTrust;        // TLS trust for current page cert inspector
+@property(strong) id               addrDismissMonitor;   // local event monitor (must be removed to avoid firing after teardown)
+@property(strong) id               contextMenuMonitor;
+@property(strong) id               middleClickMonitor;
+@property(strong) id               ctrlScrollMonitor;    // Ctrl+scroll → page zoom (Chrome parity)
+@property(strong) NSButton        *starButton;           // bookmark this page (address bar)
+@property(strong) NSButton        *zoomChip;             // page-zoom % (hidden at 100)
+@property(strong) NSButton        *readerButton;         // reader-mode entry (hidden until article-like)
+@property(strong) NSTextField     *statusBar;            // Chrome-style hovered-link bubble (bottom-left)
+@property(strong) NSMutableDictionary<NSString*,NSNumber*> *zoomByHost; // per-site zoom memory
+@property(assign) BOOL    readerMode;
+@property(strong) NSURL  *readerOriginalURL;
+@property(assign) BOOL    suppressInlineCompletion;
+@property(strong) NSTimer *suspendTimer;         // periodic tab suspension sweep
+@property(strong) NSTimer *sessionAutosaveTimer; // crash-safe periodic session flush
+@property(strong) NSTimer *tabHoverTimer;        // delayed thumbnail preview
+@property(strong) NSPanel *tabHoverPanel;        // borderless preview popover
 @end
+
+// Retains a controller for every open browser window. Both NSApplication.delegate
+// and NSWindow.delegate are weak, so without an explicit owner a window opened via
+// newWindow: would have its controller deallocated the moment the method returns
+// (weak delegates go nil → the window's tabs/nav/address bar become inert).
+static NSMutableArray *gBBWindowControllers;
 
 @implementation BBDelegate
 
 - (BBTab *)activeTab { return (self.activeTabIndex<(NSInteger)self.tabs.count)?self.tabs[self.activeTabIndex]:nil; }
 - (WKWebView *)webView { return self.activeTab.webView; }
 - (NSString *)currentURLString { return self.activeTab.webView.URL.absoluteString?:@"bearbrowser://start"; }
+// Emit a navigation provenance event, but never persist the URL for a private tab —
+// incognito must leave no on-disk trace of where you went. The event itself is still
+// recorded (the provenance model knows a governed navigation happened) but redacted.
+- (void)emitNav:(NSString *)type url:(NSString *)url reason:(NSString *)reason private:(BOOL)priv {
+  if (priv) BBEmitEvent(type,@"allow",reason,@{@"private":@YES});
+  else      BBEmitEvent(type,@"allow",reason,@{@"url":url?:@""});
+}
 
 // ── Menu ──────────────────────────────────────────────────────────────────────
 - (void)buildMenu {
+  // Menu bar laid out to mirror Google Chrome on macOS:
+  // Chrome · File · Edit · View · History · Bookmarks · Tab · Window · Help
   NSMenu *bar=[[NSMenu alloc]init]; [NSApp setMainMenu:bar];
   void(^mi)(NSMenu*,NSString*,SEL,NSString*,NSUInteger)=^(NSMenu *m,NSString *t,SEL a,NSString *k,NSUInteger mod){
     NSMenuItem *i=[m addItemWithTitle:t action:a keyEquivalent:k]; if(mod) i.keyEquivalentModifierMask=mod;
   };
-  // BearBrowser
-  NSMenuItem *appI=[[NSMenuItem alloc]init]; [bar addItem:appI];
-  NSMenu *appM=[[NSMenu alloc]initWithTitle:@"BearBrowser"]; appI.submenu=appM;
+  NSMenu*(^submenu)(NSString*)=^NSMenu*(NSString *title){
+    NSMenuItem *it=[[NSMenuItem alloc]init]; [bar addItem:it];
+    NSMenu *m=[[NSMenu alloc]initWithTitle:title]; it.submenu=m; return m;
+  };
+  NSUInteger Cmd=NSEventModifierFlagCommand, Shift=NSEventModifierFlagShift,
+             Opt=NSEventModifierFlagOption, Ctrl=NSEventModifierFlagControl;
+
+  // ── Chrome (app menu) ──
+  NSMenu *appM=submenu(@"BearBrowser");
   [appM addItemWithTitle:@"About BearBrowser" action:@selector(orderFrontStandardAboutPanel:) keyEquivalent:@""];
   [appM addItem:[NSMenuItem separatorItem]];
-  mi(appM,@"Search Engine…",@selector(openSearchPreferences:),@",",NSEventModifierFlagCommand);
+  mi(appM,@"Settings…",@selector(openSearchPreferences:),@",",Cmd);
   [appM addItem:[NSMenuItem separatorItem]];
-  mi(appM,@"Hide BearBrowser",@selector(hide:),@"h",NSEventModifierFlagCommand);
-  [appM addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"].keyEquivalentModifierMask=NSEventModifierFlagCommand|NSEventModifierFlagOption;
+  mi(appM,@"Clear Browsing Data…",@selector(clearHistory:),@"\b",Cmd|Shift); // ⌘⇧⌫
+  [appM addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *svc=[appM addItemWithTitle:@"Services" action:nil keyEquivalent:@""];
+  NSMenu *svcM=[[NSMenu alloc]initWithTitle:@"Services"]; svc.submenu=svcM; [NSApp setServicesMenu:svcM];
+  [appM addItem:[NSMenuItem separatorItem]];
+  mi(appM,@"Hide BearBrowser",@selector(hide:),@"h",Cmd);
+  [appM addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"].keyEquivalentModifierMask=Cmd|Opt;
   [appM addItemWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""];
   [appM addItem:[NSMenuItem separatorItem]];
-  mi(appM,@"Quit BearBrowser",@selector(terminate:),@"q",NSEventModifierFlagCommand);
-  // File
-  NSMenuItem *fileI=[[NSMenuItem alloc]init]; [bar addItem:fileI];
-  NSMenu *fileM=[[NSMenu alloc]initWithTitle:@"File"]; fileI.submenu=fileM;
-  mi(fileM,@"New Tab",@selector(newTab:),@"t",NSEventModifierFlagCommand);
-  mi(fileM,@"New Private Tab",@selector(newPrivateTab:),@"t",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  mi(fileM,@"New Window",@selector(newWindow:),@"n",NSEventModifierFlagCommand);
+  [appM addItemWithTitle:@"Restart BearBrowser" action:@selector(restartApp:) keyEquivalent:@""];
+  mi(appM,@"Quit BearBrowser",@selector(terminate:),@"q",Cmd);
+
+  // ── File ──
+  NSMenu *fileM=submenu(@"File");
+  mi(fileM,@"New Tab",@selector(newTab:),@"t",Cmd);
+  mi(fileM,@"New Window",@selector(newWindow:),@"n",Cmd);
+  mi(fileM,@"New Incognito Window",@selector(newPrivateWindow:),@"n",Cmd|Shift);
+  mi(fileM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",Cmd|Shift);
   [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Open File…",@selector(openFile:),@"o",NSEventModifierFlagCommand);
+  mi(fileM,@"Open File…",@selector(openFile:),@"o",Cmd);
+  mi(fileM,@"Open Location…",@selector(focusAddressBar:),@"l",Cmd);
+  // Cmd+K = Chrome alias for address-bar focus (Cmd+L is primary above)
+  [fileM addItemWithTitle:@"" action:@selector(focusAddressBar:) keyEquivalent:@"k"].keyEquivalentModifierMask=Cmd;
   [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Add Bookmark…",@selector(addBookmark:),@"d",NSEventModifierFlagCommand);
-  mi(fileM,@"Show Bookmarks Bar",@selector(toggleBookmarksBar:),@"b",NSEventModifierFlagCommand|NSEventModifierFlagShift);
+  mi(fileM,@"Close Window",@selector(performClose:),@"w",Cmd|Shift);
+  mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
+  mi(fileM,@"Save Page As…",@selector(savePage:),@"s",Cmd);
+  [fileM addItemWithTitle:@"Save Page as PDF…" action:@selector(savePageAsPDF:) keyEquivalent:@"s"].keyEquivalentModifierMask=Cmd|Opt;
+  [fileM addItemWithTitle:@"Take Page Screenshot…" action:@selector(takePageScreenshot:) keyEquivalent:@"s"].keyEquivalentModifierMask=Cmd|Ctrl;
   [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Close Tab",@selector(closeCurrentTab:),@"w",NSEventModifierFlagCommand);
-  mi(fileM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",NSEventModifierFlagCommand|NSEventModifierFlagShift|NSEventModifierFlagOption);
-  [fileM addItem:[NSMenuItem separatorItem]];
-  mi(fileM,@"Save Page As…",@selector(savePage:),@"s",NSEventModifierFlagCommand);
-  mi(fileM,@"Print…",@selector(printPage:),@"p",NSEventModifierFlagCommand);
-  // Edit
-  NSMenuItem *editI=[[NSMenuItem alloc]init]; [bar addItem:editI];
-  NSMenu *editM=[[NSMenu alloc]initWithTitle:@"Edit"]; editI.submenu=editM;
-  mi(editM,@"Undo",@selector(undo:),@"z",NSEventModifierFlagCommand);
-  [editM addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"z"].keyEquivalentModifierMask=NSEventModifierFlagCommand|NSEventModifierFlagShift;
+  mi(fileM,@"Share…",@selector(sharePage:),@"",0);
+  mi(fileM,@"Print…",@selector(printPage:),@"p",Cmd);
+  [fileM addItemWithTitle:@"Print Selection…" action:@selector(printSelection:) keyEquivalent:@"p"].keyEquivalentModifierMask=Cmd|Shift;
+
+  // ── Edit ──
+  NSMenu *editM=submenu(@"Edit");
+  mi(editM,@"Undo",@selector(undo:),@"z",Cmd);
+  [editM addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"z"].keyEquivalentModifierMask=Cmd|Shift;
   [editM addItem:[NSMenuItem separatorItem]];
-  mi(editM,@"Cut",@selector(cut:),@"x",NSEventModifierFlagCommand);
-  mi(editM,@"Copy",@selector(copy:),@"c",NSEventModifierFlagCommand);
-  mi(editM,@"Paste",@selector(paste:),@"v",NSEventModifierFlagCommand);
-  mi(editM,@"Paste and Go",@selector(pasteAndGo:),@"v",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  mi(editM,@"Select All",@selector(selectAll:),@"a",NSEventModifierFlagCommand);
+  mi(editM,@"Cut",@selector(cut:),@"x",Cmd);
+  mi(editM,@"Copy",@selector(copy:),@"c",Cmd);
+  mi(editM,@"Paste",@selector(paste:),@"v",Cmd);
+  mi(editM,@"Paste and Go",@selector(pasteAndGo:),@"v",Cmd|Shift);
+  mi(editM,@"Copy Current URL",@selector(contextCopyPageURL:),@"c",Cmd|Shift);
+  mi(editM,@"Select All",@selector(selectAll:),@"a",Cmd);
   [editM addItem:[NSMenuItem separatorItem]];
-  mi(editM,@"Find on Page…",@selector(toggleFind:),@"f",NSEventModifierFlagCommand);
-  // View
-  NSMenuItem *viewI=[[NSMenuItem alloc]init]; [bar addItem:viewI];
-  NSMenu *viewM=[[NSMenu alloc]initWithTitle:@"View"]; viewI.submenu=viewM;
-  mi(viewM,@"Reload Page",@selector(reloadOrStop:),@"r",NSEventModifierFlagCommand);
-  mi(viewM,@"Hard Reload (Skip Cache)",@selector(hardReload:),@"r",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  mi(viewM,@"Focus Address Bar",@selector(focusAddressBar:),@"l",NSEventModifierFlagCommand);
+  NSMenuItem *findI=[editM addItemWithTitle:@"Find" action:nil keyEquivalent:@""];
+  NSMenu *findM=[[NSMenu alloc]initWithTitle:@"Find"]; findI.submenu=findM;
+  mi(findM,@"Find…",@selector(toggleFind:),@"f",Cmd);
+  mi(findM,@"Find Next",@selector(findNext:),@"g",Cmd);
+  mi(findM,@"Find Previous",@selector(findPrev:),@"g",Cmd|Shift);
+  mi(findM,@"Use Selection for Find",@selector(useSelectionForFind:),@"e",Cmd);
+
+  // ── View ──
+  NSMenu *viewM=submenu(@"View");
+  mi(viewM,@"Always Show Bookmarks Bar",@selector(toggleBookmarksBar:),@"b",Cmd|Shift);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Zoom In",@selector(zoomIn:),@"+",NSEventModifierFlagCommand);
-  mi(viewM,@"Zoom Out",@selector(zoomOut:),@"-",NSEventModifierFlagCommand);
-  mi(viewM,@"Actual Size",@selector(zoomReset:),@"0",NSEventModifierFlagCommand);
+  mi(viewM,@"Reload This Page",@selector(reloadOrStop:),@"r",Cmd);
+  // F5 alias for Reload (Chrome/Win parity)
+  { unichar f5=NSF5FunctionKey;
+    [viewM addItemWithTitle:@"" action:@selector(reloadOrStop:)
+             keyEquivalent:[NSString stringWithCharacters:&f5 length:1]].keyEquivalentModifierMask=0; }
+  mi(viewM,@"Force Reload This Page",@selector(hardReload:),@"r",Cmd|Shift);
+  // Cmd+. = Stop loading (Chrome alias; works while a page is loading).
+  [viewM addItemWithTitle:@"Stop Loading" action:@selector(stopLoading:) keyEquivalent:@"."].keyEquivalentModifierMask=Cmd;
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"View Page Source",@selector(viewSource:),@"u",NSEventModifierFlagCommand);
-  mi(viewM,@"Developer Tools",@selector(openDevTools:),@"i",NSEventModifierFlagCommand|NSEventModifierFlagOption);
+  mi(viewM,@"Actual Size",@selector(zoomReset:),@"0",Cmd);
+  mi(viewM,@"Zoom In",@selector(zoomIn:),@"+",Cmd);
+  // Cmd+= mirrors Cmd++ on US keyboard (no Shift required) — Chrome parity
+  [viewM addItemWithTitle:@"" action:@selector(zoomIn:) keyEquivalent:@"="].keyEquivalentModifierMask=Cmd;
+  mi(viewM,@"Zoom Out",@selector(zoomOut:),@"-",Cmd);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Enter Full Screen",@selector(toggleFullScreen:),@"f",NSEventModifierFlagCommand|NSEventModifierFlagControl);
+  mi(viewM,@"Enter Full Screen",@selector(toggleFullScreen:),@"f",Cmd|Ctrl);
+  // F11 alias for Full Screen (Chrome/Win parity)
+  { unichar f11=NSF11FunctionKey;
+    [viewM addItemWithTitle:@"" action:@selector(toggleFullScreen:)
+             keyEquivalent:[NSString stringWithCharacters:&f11 length:1]].keyEquivalentModifierMask=0; }
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"History",@selector(showHistory:),@"y",NSEventModifierFlagCommand);
-  mi(viewM,@"Downloads",@selector(toggleDownloadPanel:),@"j",NSEventModifierFlagCommand);
+  mi(viewM,@"Downloads",@selector(toggleDownloadPanel:),@"j",Cmd|Shift);
+  mi(viewM,@"Show Reader",@selector(toggleReader:),@"r",Cmd|Ctrl);
+  mi(viewM,@"Translate Page…",@selector(translatePage:),@"u",Cmd|Ctrl);
+  mi(viewM,@"Read Aloud",@selector(readAloud:),@"r",Cmd|Opt);
   [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Network Monitor",@selector(openNetworkMonitor:),@"m",NSEventModifierFlagCommand|NSEventModifierFlagShift);
-  [viewM addItem:[NSMenuItem separatorItem]];
-  mi(viewM,@"Read Aloud",@selector(readAloud:),@"r",NSEventModifierFlagCommand|NSEventModifierFlagOption);
-  // History
-  NSMenuItem *histI=[[NSMenuItem alloc]init]; [bar addItem:histI];
-  NSMenu *histM=[[NSMenu alloc]initWithTitle:@"History"]; histI.submenu=histM;
-  mi(histM,@"Back",@selector(goBack:),@"[",NSEventModifierFlagCommand);
-  mi(histM,@"Forward",@selector(goForward:),@"]",NSEventModifierFlagCommand);
-  // Window
-  NSMenuItem *winI=[[NSMenuItem alloc]init]; [bar addItem:winI];
-  NSMenu *winM=[[NSMenu alloc]initWithTitle:@"Window"]; winI.submenu=winM;
-  [NSApp setWindowsMenu:winM];
-  mi(winM,@"Minimize",@selector(performMiniaturize:),@"m",NSEventModifierFlagCommand);
-  [winM addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
-  [winM addItem:[NSMenuItem separatorItem]];
-  mi(winM,@"Next Tab",@selector(nextTab:),@"\t",NSEventModifierFlagControl);
-  [winM addItemWithTitle:@"Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=NSEventModifierFlagControl|NSEventModifierFlagShift;
-  [winM addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *devI=[viewM addItemWithTitle:@"Developer" action:nil keyEquivalent:@""];
+  NSMenu *devM=[[NSMenu alloc]initWithTitle:@"Developer"]; devI.submenu=devM;
+  mi(devM,@"View Source",@selector(viewSource:),@"u",Cmd|Opt);
+  mi(devM,@"Developer Tools",@selector(openDevTools:),@"i",Cmd|Opt);
+  // F12 alias for Developer Tools (Chrome/Win parity)
+  { unichar f12=NSF12FunctionKey;
+    [devM addItemWithTitle:@"" action:@selector(openDevTools:)
+            keyEquivalent:[NSString stringWithCharacters:&f12 length:1]].keyEquivalentModifierMask=0; }
+  mi(devM,@"Network Monitor",@selector(openNetworkMonitor:),@"m",Cmd|Shift);
+
+  // ── History ──
+  NSMenu *histM=submenu(@"History");
+  mi(histM,@"Home",@selector(goHome:),@"h",Cmd|Shift);
+  mi(histM,@"Back",@selector(goBack:),@"[",Cmd);
+  mi(histM,@"Forward",@selector(goForward:),@"]",Cmd);
+  { unichar aL=NSLeftArrowFunctionKey, aR=NSRightArrowFunctionKey;
+    [histM addItemWithTitle:@"" action:@selector(goBack:)
+             keyEquivalent:[NSString stringWithCharacters:&aL length:1]].keyEquivalentModifierMask=Cmd;
+    [histM addItemWithTitle:@"" action:@selector(goForward:)
+             keyEquivalent:[NSString stringWithCharacters:&aR length:1]].keyEquivalentModifierMask=Cmd; }
+  [histM addItem:[NSMenuItem separatorItem]];
+  mi(histM,@"Reopen Closed Tab",@selector(reopenClosedTab:),@"t",Cmd|Shift);
+  NSMenuItem *rcI=[histM addItemWithTitle:@"Recently Closed" action:nil keyEquivalent:@""];
+  NSMenu *rcM=[[NSMenu alloc]initWithTitle:@"Recently Closed"]; rcM.delegate=self; // populated on open
+  rcI.submenu=rcM;
+  [histM addItem:[NSMenuItem separatorItem]];
+  mi(histM,@"Show Full History",@selector(showHistory:),@"y",Cmd);
+  [histM addItem:[NSMenuItem separatorItem]];
+  // No key equivalent here — ⌘⇧⌫ is already bound on the app menu's Clear Browsing Data.
+  [histM addItem:[NSMenuItem separatorItem]];
+  // "Recent Pages" inline submenu — last 10 visits, populated on-open via the
+  // NSMenuDelegate hook (same pattern as Recently Closed).
+  NSMenuItem *recentRoot=[histM addItemWithTitle:@"Recent Pages" action:nil keyEquivalent:@""];
+  NSMenu *recentM=[[NSMenu alloc]initWithTitle:@"Recent Pages"]; recentM.delegate=self;
+  recentRoot.submenu=recentM;
+  [histM addItem:[NSMenuItem separatorItem]];
+  [histM addItemWithTitle:@"Clear Browsing Data…" action:@selector(clearHistory:) keyEquivalent:@""];
+
+  // ── Bookmarks ──
+  NSMenu *bmM=submenu(@"Bookmarks");
+  mi(bmM,@"Bookmark Manager",@selector(openBookmarkManager:),@"b",Cmd|Opt);
+  // Cmd+Shift+O — Chrome/macOS alias for Bookmark Manager
+  [bmM addItemWithTitle:@"" action:@selector(openBookmarkManager:) keyEquivalent:@"o"].keyEquivalentModifierMask=Cmd|Shift;
+  [bmM addItem:[NSMenuItem separatorItem]];
+  mi(bmM,@"Bookmark This Tab…",@selector(addBookmark:),@"d",Cmd);
+  mi(bmM,@"Bookmark All Tabs…",@selector(bookmarkAllTabs:),@"d",Cmd|Shift);
+  [bmM addItem:[NSMenuItem separatorItem]];
+  mi(bmM,@"Add to Reading List",@selector(addToReadingList:),@"d",Cmd|Opt);
+  [bmM addItemWithTitle:@"Show Reading List…" action:@selector(showReadingList:) keyEquivalent:@""];
+  [bmM addItem:[NSMenuItem separatorItem]];
+  [bmM addItemWithTitle:@"Import Bookmarks (HTML)…" action:@selector(importBookmarksHTML:) keyEquivalent:@""];
+  [bmM addItemWithTitle:@"Import from Chrome" action:@selector(importBookmarksFromChrome:) keyEquivalent:@""];
+  [bmM addItemWithTitle:@"Import from Safari" action:@selector(importBookmarksFromSafari:) keyEquivalent:@""];
+  [bmM addItemWithTitle:@"Export Bookmarks (HTML)…" action:@selector(exportBookmarksHTML:) keyEquivalent:@""];
+  [bmM addItem:[NSMenuItem separatorItem]];
+  [bmM addItemWithTitle:@"Save Tabs as Workspace…" action:@selector(saveTabsAsWorkspace:) keyEquivalent:@""];
+  NSMenuItem *wsRoot=[bmM addItemWithTitle:@"Open Workspace" action:nil keyEquivalent:@""];
+  NSMenu *wsM=[[NSMenu alloc]initWithTitle:@"Workspaces"]; wsM.delegate=self; wsRoot.submenu=wsM;
+  [bmM addItem:[NSMenuItem separatorItem]];
+  // No key equivalent here — ⌘⇧B is already bound on View ▸ Always Show Bookmarks Bar.
+  [bmM addItemWithTitle:@"Show Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
+
+  // ── Research Sessions ──
+  NSMenu *resM=submenu(@"Research");
+  mi(resM,@"Research Sessions…",@selector(openResearchManager:),@"r",Cmd|Shift);
+  [resM addItem:[NSMenuItem separatorItem]];
+  mi(resM,@"Add Tab to Session…",@selector(addCurrentTabToSession:),@"s",Cmd|Shift);
+  [resM addItemWithTitle:@"Collect All Tabs into Session…" action:@selector(collectAllTabsToSession:) keyEquivalent:@""];
+  [resM addItem:[NSMenuItem separatorItem]];
+  [resM addItemWithTitle:@"Suspend Inactive Tabs Now" action:@selector(suspendInactiveTabs:) keyEquivalent:@""];
+
+  // ── Tab ──
+  NSMenu *tabM=submenu(@"Tab");
+  mi(tabM,@"New Tab",@selector(newTab:),@"t",Cmd);
+  mi(tabM,@"Search Tabs…",@selector(openTabSearch:),@"a",Cmd|Shift);
+  [tabM addItemWithTitle:@"Duplicate Tab" action:@selector(duplicateCurrentTab:) keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Mute Tab" action:@selector(muteTab:) keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Pin Tab" action:@selector(pinCurrentTab:) keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Mute All Tabs"   action:@selector(muteAllTabs:)   keyEquivalent:@""];
+  [tabM addItemWithTitle:@"Unmute All Tabs" action:@selector(unmuteAllTabs:) keyEquivalent:@""];
+  [tabM addItem:[NSMenuItem separatorItem]];
+  mi(tabM,@"Select Next Tab",@selector(nextTab:),@"\t",Ctrl);
+  [tabM addItemWithTitle:@"Select Previous Tab" action:@selector(prevTab:) keyEquivalent:@"\t"].keyEquivalentModifierMask=Ctrl|Shift;
+  // Cmd+Option+→ / ← — Chrome's macOS aliases for next/prev tab.
+  [tabM addItemWithTitle:@"" action:@selector(nextTab:) keyEquivalent:@""].keyEquivalentModifierMask=Cmd|Opt;
+  [tabM addItemWithTitle:@"" action:@selector(prevTab:) keyEquivalent:@""].keyEquivalentModifierMask=Cmd|Opt;
+  [tabM addItemWithTitle:@"Move Tab Left"  action:@selector(moveTabLeft:)  keyEquivalent:@"["].keyEquivalentModifierMask=Ctrl|Shift;
+  [tabM addItemWithTitle:@"Move Tab Right" action:@selector(moveTabRight:) keyEquivalent:@"]"].keyEquivalentModifierMask=Ctrl|Shift;
+  // Ctrl+PgUp / Ctrl+PgDn — Chrome/Windows aliases for prev/next tab.
+  { unichar pgUp=NSPageUpFunctionKey, pgDn=NSPageDownFunctionKey;
+    [tabM addItemWithTitle:@"" action:@selector(prevTab:)
+             keyEquivalent:[NSString stringWithCharacters:&pgUp length:1]].keyEquivalentModifierMask=Ctrl;
+    [tabM addItemWithTitle:@"" action:@selector(nextTab:)
+             keyEquivalent:[NSString stringWithCharacters:&pgDn length:1]].keyEquivalentModifierMask=Ctrl; }
+  [tabM addItem:[NSMenuItem separatorItem]];
   for (NSInteger i=1;i<=9;i++) {
-    NSMenuItem *ti=[winM addItemWithTitle:[NSString stringWithFormat:@"Tab %ld",(long)i]
+    NSMenuItem *ti=[tabM addItemWithTitle:[NSString stringWithFormat:@"Tab %ld",(long)i]
                                    action:@selector(switchToTabByMenuItem:)
                             keyEquivalent:[NSString stringWithFormat:@"%ld",(long)i]];
-    ti.keyEquivalentModifierMask=NSEventModifierFlagCommand; ti.tag=i-1;
+    ti.keyEquivalentModifierMask=Cmd; ti.tag=i-1;
   }
+  [tabM addItem:[NSMenuItem separatorItem]];
+  [tabM addItemWithTitle:@"Copy URLs of All Tabs" action:@selector(copyURLsOfAllTabs:) keyEquivalent:@""];
+  [tabM addItem:[NSMenuItem separatorItem]];
+  mi(tabM,@"Close Tab",@selector(closeCurrentTab:),@"w",Cmd);
+
+  // ── Window ──
+  NSMenu *winM=submenu(@"Window");
+  [NSApp setWindowsMenu:winM];
+  mi(winM,@"Minimize",@selector(performMiniaturize:),@"m",Cmd);
+  [winM addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
   [winM addItem:[NSMenuItem separatorItem]];
   [winM addItemWithTitle:@"Bring All to Front" action:@selector(arrangeInFront:) keyEquivalent:@""];
+
+  // ── Help ──
+  NSMenu *helpM=submenu(@"Help");
+  [NSApp setHelpMenu:helpM];
+  [helpM addItemWithTitle:@"BearBrowser Help" action:@selector(openBearHelp:) keyEquivalent:@""];
+  [helpM addItem:[NSMenuItem separatorItem]];
+  [helpM addItemWithTitle:@"Keyboard Shortcuts" action:@selector(showKeyboardShortcuts:) keyEquivalent:@"/"].keyEquivalentModifierMask=Cmd;
+  [helpM addItemWithTitle:@"Report an Issue…" action:@selector(reportIssue:) keyEquivalent:@""];
 }
 
 // ── App launch ────────────────────────────────────────────────────────────────
 - (void)applicationDidFinishLaunching:(NSNotification *)n {
   BBLog(@"BearBrowser start");
+  static dispatch_once_t controllersOnce;
+  dispatch_once(&controllersOnce,^{
+    gBBWindowControllers=[NSMutableArray array];
+    // Search suggestions default ON (DuckDuckGo's privacy-respecting endpoint); the
+    // user can disable in Settings, and they're always off in private tabs.
+    [[NSUserDefaults standardUserDefaults] registerDefaults:@{
+    @"BBSearchSuggestions":@YES,
+    @"BBInlineAutocomplete":@YES,
+    @"BBSuspendAfterSec":@300,   // 5 minutes
+  }];
+  });
+  [gBBWindowControllers addObject:self];  // keep this controller alive for its window's lifetime
   BBEmitEvent(@"app.launch",@"allow",@"Native shell launched.",@{@"bundleId":@"dev.sourceos.BearBrowser"});
   [[BBAgentServer shared] startWithDelegate:self];
   BBLog([NSString stringWithFormat:@"Agent socket: %@",[BBAgentServer shared].socketPath]);
   BBLog([NSString stringWithFormat:@"Agent token: %@",[BBAgentServer shared].tokenPath]);
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   [self buildMenu];
-  self.closedTabURLs=[NSMutableArray array];
+  self.recentlyClosed=[NSMutableArray array];
+  self.zoomByHost=[([[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBZoomByHost"]?:@{}) mutableCopy];
   // Compile content rules on a background queue; tabs added after compilation get rules applied.
   // Tabs opened immediately (below) get rules applied once compile finishes via the shared property.
   [BBContentBlocker loadRulesInto:[[WKWebViewConfiguration alloc]init] completion:^{
@@ -2460,14 +3899,25 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|
                NSWindowStyleMaskMiniaturizable|NSWindowStyleMaskFullSizeContentView)
     backing:NSBackingStoreBuffered defer:NO];
+  // CRITICAL: NSWindow defaults releasedWhenClosed=YES. With a `strong` property
+  // ARC already owns the window, so closing it would over-release → self.window
+  // becomes a dangling pointer → EXC_BAD_ACCESS in objc_retain the next time any
+  // retained event-monitor block touches it. Opt out of the legacy release.
+  self.window.releasedWhenClosed=NO;
+  // Disallow native NSWindow tabbing — we have our own tabs; macOS's "Merge All Windows"
+  // and per-window tab bar would double up on top of ours.
+  self.window.tabbingMode=NSWindowTabbingModeDisallowed;
   self.window.title=@"BearBrowser";
   self.window.titlebarAppearsTransparent=YES;
   self.window.titleVisibility=NSWindowTitleHidden;
   self.window.minSize=NSMakeSize(640,480);
+  self.window.collectionBehavior=NSWindowCollectionBehaviorFullScreenPrimary|NSWindowCollectionBehaviorManaged;
   self.window.delegate=self;
   if (useCenter) [self.window center]; else [self.window setFrame:contentFrame display:NO];
   [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(windowWillClose:)
     name:NSWindowWillCloseNotification object:self.window];
+  [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(researchURLNotification:)
+    name:@"BBResearchOpenURL" object:nil];
 
   self.root=[[NSView alloc]initWithFrame:self.window.contentView.bounds];
   self.root.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable;
@@ -2492,8 +3942,23 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   self.backButton   =[self navBtn:@"chevron.left"    tip:@"Back"    sel:@selector(goBack:)       x:x y:btnY]; x+=34;
   self.forwardButton=[self navBtn:@"chevron.right"   tip:@"Forward" sel:@selector(goForward:)    x:x y:btnY]; x+=34;
   self.reloadButton =[self navBtn:@"arrow.clockwise" tip:@"Reload"  sel:@selector(reloadOrStop:) x:x y:btnY]; x+=40;
+  { NSMenu *rm=[[NSMenu alloc]initWithTitle:@""];
+    [rm addItemWithTitle:@"Normal Reload" action:@selector(reloadOrStop:) keyEquivalent:@""].target=self;
+    [rm addItemWithTitle:@"Hard Reload (bypass cache)" action:@selector(hardReload:) keyEquivalent:@""].target=self;
+    [rm addItem:[NSMenuItem separatorItem]];
+    [rm addItemWithTitle:@"Empty Cache and Hard Reload" action:@selector(emptyCacheAndHardReload:) keyEquivalent:@""].target=self;
+    self.reloadButton.menu=rm; }
+  // Home button — visible only when the user has set a Homepage in Settings.
+  self.homeButton   =[self navBtn:@"house.fill"      tip:@"Home"    sel:@selector(goHome:)       x:x y:btnY];
+  if ([[NSUserDefaults standardUserDefaults] stringForKey:@"BBHomepage"].length) x+=34;
+  else self.homeButton.hidden=YES;
+  { NSMenu *hm=[[NSMenu alloc]initWithTitle:@""];
+    [hm addItemWithTitle:@"Go Home" action:@selector(goHome:) keyEquivalent:@""].target=self;
+    [hm addItemWithTitle:@"Set Current Page as Home" action:@selector(setCurrentPageAsHome:) keyEquivalent:@""].target=self;
+    [hm addItemWithTitle:@"Change Homepage in Settings…" action:@selector(openSearchPreferences:) keyEquivalent:@""].target=self;
+    self.homeButton.menu=hm; }
   self.backButton.enabled=NO; self.forwardButton.enabled=NO;
-  for (NSButton *b in @[self.backButton,self.forwardButton,self.reloadButton])
+  for (NSButton *b in @[self.backButton,self.forwardButton,self.reloadButton,self.homeButton])
     [self.toolbarBg addSubview:b];
 
   // Security indicator
@@ -2502,15 +3967,51 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   self.securityButton.target=self; self.securityButton.action=@selector(showSecurityInfo:);
   [self updateSecurityIndicator:nil]; [self.toolbarBg addSubview:self.securityButton];
 
-  // Address bar
+  // Address bar — reserve room on the right for the bookmark star AND the three
+  // toolbar action buttons (network / read-aloud / bear panel) so none overlap.
   CGFloat rightR=48;
-  self.address=[[NSTextField alloc]initWithFrame:NSMakeRect(x,btnY+1,W-x-rightR-12,28)];
+  CGFloat rightGroupLeft=W-rightR-58;   // left edge of the action-button group (netBtn)
+  CGFloat starX=rightGroupLeft-30;      // star sits just left of that group
+  self.address=[[BBAddressField alloc]initWithFrame:NSMakeRect(x,btnY+1,starX-x-6,28)];
   self.address.autoresizingMask=NSViewWidthSizable;
   self.address.bezelStyle=NSTextFieldRoundedBezel;
   self.address.placeholderString=@"Search or enter address";
   self.address.font=[NSFont systemFontOfSize:13.5]; self.address.stringValue=@"";
-  self.address.delegate=self; [self.address.cell setWraps:NO]; [self.address.cell setScrollable:YES];
+  self.address.delegate=self; self.address.pasteDelegate=self;
+  [self.address.cell setWraps:NO]; [self.address.cell setScrollable:YES];
   [self.toolbarBg addSubview:self.address];
+
+  // Bookmark star at the right end of the omnibox (Chrome-style). Click toggles a
+  // bookmark for the current page. Placed clear of the action-button group.
+  self.starButton=[[NSButton alloc]initWithFrame:NSMakeRect(starX,btnY+3,24,24)];
+  self.starButton.autoresizingMask=NSViewMinXMargin;
+  self.starButton.bezelStyle=NSBezelStyleToolbar; self.starButton.bordered=NO;
+  self.starButton.target=self; self.starButton.action=@selector(toggleBookmarkCurrent:);
+  { NSMenu *sm=[[NSMenu alloc]initWithTitle:@""];
+    [sm addItemWithTitle:@"Bookmark This Page" action:@selector(toggleBookmarkCurrent:) keyEquivalent:@""].target=self;
+    [sm addItemWithTitle:@"Edit Bookmark…" action:@selector(editCurrentBookmark:) keyEquivalent:@""].target=self;
+    self.starButton.menu=sm; }
+  [self updateStarButton]; [self.toolbarBg addSubview:self.starButton];
+  // Zoom-level chip — sits just left of the star, visible only when zoom != 100%.
+  self.zoomChip=[[NSButton alloc]initWithFrame:NSMakeRect(starX-46,btnY+5,42,20)];
+  self.zoomChip.autoresizingMask=NSViewMinXMargin;
+  self.zoomChip.bezelStyle=NSBezelStyleRoundRect; self.zoomChip.bordered=YES;
+  self.zoomChip.font=[NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+  self.zoomChip.title=@"100%"; self.zoomChip.hidden=YES;
+  self.zoomChip.target=self; self.zoomChip.action=@selector(zoomReset:);
+  self.zoomChip.toolTip=@"Reset zoom to 100%";
+  [self.toolbarBg addSubview:self.zoomChip];
+  // Reader-mode button — hidden until we detect the page has an <article>/<main>.
+  self.readerButton=[[NSButton alloc]initWithFrame:NSMakeRect(starX-70,btnY+3,22,24)];
+  self.readerButton.autoresizingMask=NSViewMinXMargin;
+  self.readerButton.bezelStyle=NSBezelStyleToolbar; self.readerButton.bordered=NO;
+  { NSImage *im=[NSImage imageWithSystemSymbolName:@"book" accessibilityDescription:@"Reader"];
+    im=[im imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:13 weight:NSFontWeightMedium]];
+    [im setTemplate:YES]; self.readerButton.image=im; self.readerButton.imagePosition=NSImageOnly; }
+  self.readerButton.toolTip=@"Reader Mode (⌃⌘R)";
+  self.readerButton.target=self; self.readerButton.action=@selector(toggleReader:);
+  self.readerButton.hidden=YES;
+  [self.toolbarBg addSubview:self.readerButton];
 
   // Network monitor button
   NSButton *netBtn=[self navBtn:@"network" tip:@"Network Monitor (⇧⌘M)" sel:@selector(openNetworkMonitor:) x:W-rightR-58 y:btnY];
@@ -2537,17 +4038,33 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   self.progressBar.controlSize=NSControlSizeSmall; self.progressBar.hidden=YES;
   [self.root addSubview:self.progressBar];
 
+  // Hovered-link status bubble (bottom-left), exactly like Chrome. Hidden until a
+  // link is hovered; the page posts the href via the `hoverlink` message handler.
+  self.statusBar=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,420,20)];
+  self.statusBar.bordered=NO; self.statusBar.editable=NO; self.statusBar.selectable=NO;
+  self.statusBar.drawsBackground=YES;
+  self.statusBar.backgroundColor=[NSColor windowBackgroundColor];
+  self.statusBar.textColor=[NSColor secondaryLabelColor];
+  self.statusBar.font=[NSFont systemFontOfSize:11];
+  self.statusBar.lineBreakMode=NSLineBreakByTruncatingMiddle;
+  self.statusBar.cell.usesSingleLineMode=YES;
+  self.statusBar.hidden=YES; self.statusBar.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  [self.root addSubview:self.statusBar positioned:NSWindowAbove relativeTo:nil];
+
   // Find bar
   self.findBar=[[BBFindBar alloc]initWithFrame:NSMakeRect(0,0,W,kFindBarH)];
   self.findBar.autoresizingMask=NSViewWidthSizable; self.findBar.hidden=YES;
   self.findBar.closeButton.target=self; self.findBar.closeButton.action=@selector(closeFind:);
   self.findBar.prevButton.target=self;  self.findBar.prevButton.action=@selector(findPrev:);
   self.findBar.nextButton.target=self;  self.findBar.nextButton.action=@selector(findNext:);
+  self.findBar.caseButton.target=self;  self.findBar.caseButton.action=@selector(findToggleCase:);
   self.findBar.queryField.delegate=self;
   [self.root addSubview:self.findBar];
 
   // Bookmarks bar (hidden by default, Cmd+Shift+B toggles)
-  self.bookmarksBar=[[NSView alloc]initWithFrame:NSMakeRect(0,H-kToolbarH-kTabBarH-kBMBarH,W,kBMBarH)];
+  BBBookmarksBarView *bb=[[BBBookmarksBarView alloc]initWithFrame:NSMakeRect(0,H-kToolbarH-kTabBarH-kBMBarH,W,kBMBarH)];
+  bb.bbDelegate=self;
+  self.bookmarksBar=bb;
   self.bookmarksBar.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
   self.bookmarksBar.wantsLayer=YES; self.bookmarksBar.layer.backgroundColor=[NSColor windowBackgroundColor].CGColor;
   self.bookmarksBar.hidden=YES;
@@ -2567,18 +4084,47 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   self.dnsBlockCache.countLimit=2000;
 
   self.tabs=[NSMutableArray array]; self.activeTabIndex=0;
-  // Session restore — reopen tabs from last session
-  NSArray<NSString*> *savedURLs=[[NSUserDefaults standardUserDefaults] arrayForKey:@"BBSessionURLs"];
+  // Session restore — reopen tabs from last session (supports old string array + new dict array).
+  // Skipped entirely when the user set BBRestoreSession=NO in Settings.
+  NSUserDefaults *ud0=[NSUserDefaults standardUserDefaults];
+  BOOL restoreEnabled=([ud0 objectForKey:@"BBRestoreSession"]==nil||[ud0 boolForKey:@"BBRestoreSession"]);
+  NSArray *savedTabs=restoreEnabled?[ud0 arrayForKey:@"BBSessionURLs"]:@[];
   BOOL restored=NO;
-  if (savedURLs.count) {
-    for (NSString *u in savedURLs) {
-      if (!u.length) continue;
-      [self addTabPrivate:NO];
-      [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:u]]];
-      restored=YES;
+  for (id entry in savedTabs) {
+    NSString *u=nil; BOOL pinned=NO, muted=NO;
+    if ([entry isKindOfClass:[NSString class]]) {
+      u=entry; // legacy format
+    } else if ([entry isKindOfClass:[NSDictionary class]]) {
+      u=entry[@"url"]; pinned=[entry[@"pinned"] boolValue]; muted=[entry[@"muted"] boolValue];
     }
+    if (!u.length) continue;
+    NSURL *nsurl=[NSURL URLWithString:u]; if(!nsurl) continue;
+    [self addTabPrivate:NO];
+    BBTab *tab=self.activeTab; tab.pinned=pinned; tab.muted=muted;
+    if ([entry isKindOfClass:[NSDictionary class]]) {
+      NSString *g=entry[@"group"]; if ([g isKindOfClass:[NSString class]] && g.length) {
+        tab.groupName=g; tab.groupColorIdx=[entry[@"groupColor"] integerValue];
+      }
+    }
+    // Eagerly restore title and favicon so pinned tabs look right before the page loads
+    if ([entry isKindOfClass:[NSDictionary class]]) {
+      NSString *savedTitle=entry[@"title"]; if (savedTitle.length) tab.title=savedTitle;
+      NSString *b64=entry[@"favicon"];
+      if (b64.length) { NSData *png=[[NSData alloc]initWithBase64EncodedString:b64 options:0]; if(png) tab.favicon=[[NSImage alloc]initWithData:png]; }
+    }
+    [self.webView loadRequest:[NSURLRequest requestWithURL:nsurl]];
+    if (muted) [self.webView evaluateJavaScript:
+      @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=true;})"
+      completionHandler:nil];
+    restored=YES;
   }
   if (!restored) [self addTabPrivate:NO];
+  // Restore the bookmarks-bar preference (after the first tab exists so layout is valid).
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:@"BBShowBookmarksBar"]) {
+    self.bookmarksBarVisible=YES; self.bookmarksBar.hidden=NO;
+    [self reloadBookmarksBar]; [self resizeWebViewForCurrentTab];
+  }
+  [self startSuspendTimer];
   [self.window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
   BBLog([NSString stringWithFormat:@"window frame=%@ root=%@ toolbar=%@",
     NSStringFromRect(self.window.frame), NSStringFromRect(self.root.bounds), NSStringFromRect(self.toolbarBg.frame)]);
@@ -2588,9 +4134,13 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     [self.address selectText:nil];
   });
   // Dismiss the address dropdown when the user clicks outside it or the address field.
-  [NSEvent addLocalMonitorForEventsMatchingMask:
+  // Keep the token so we can remove it on close — a leaked monitor keeps firing
+  // (and retaining self) after teardown.
+  __weak BBDelegate *weakSelf=self;
+  self.addrDismissMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:
     NSEventMaskLeftMouseDown|NSEventMaskRightMouseDown|NSEventMaskKeyDown
     handler:^NSEvent*(NSEvent *e){
+    BBDelegate *self=weakSelf; if (!self) return e;
     if (e.type==NSEventTypeLeftMouseDown && e.window==self.window) {
       NSView *overlay=self.addressDropdown.overlay;
       NSPoint pt=[self.root convertPoint:e.locationInWindow fromView:nil];
@@ -2603,6 +4153,22 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     return e;
   }];
   [self installContextMenuMonitor];
+  [self installCtrlScrollMonitor];
+}
+- (void)installCtrlScrollMonitor {
+  __weak BBDelegate *weak=self;
+  __block CGFloat accum=0;
+  self.ctrlScrollMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskScrollWheel handler:^NSEvent*(NSEvent *e){
+    BBDelegate *s=weak; if (!s||e.window!=s.window) return e;
+    if (!(e.modifierFlags & NSEventModifierFlagControl)) return e;
+    NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
+    if (!NSPointInRect(pt,s.webView.bounds)) return e;
+    accum+=e.scrollingDeltaY;
+    CGFloat step=e.hasPreciseScrollingDeltas?12.0:1.0;
+    while (accum>=step)  { accum-=step; [s zoomIn:nil];  }
+    while (accum<=-step) { accum+=step; [s zoomOut:nil]; }
+    return nil; // swallow — don't scroll the page
+  }];
 }
 
 // Returns YES for URLs that should show as blank in the address bar (start page, new-tab).
@@ -2645,6 +4211,93 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   img=[img imageWithSymbolConfiguration:colorCfg];
   self.securityButton.image=img; self.securityButton.imagePosition=NSImageOnly;
   self.securityButton.toolTip=tip.length?tip:@"Security info";
+}
+// ── Bookmark star (address bar) ───────────────────────────────────────────────
+- (void)updateStarButton {
+  if (!self.starButton) return;
+  NSString *url=self.webView.URL.absoluteString?:@"";
+  BOOL marked=url.length && [[BBBookmarksStore shared] isBookmarked:url];
+  NSImage *img=[NSImage imageWithSystemSymbolName:(marked?@"star.fill":@"star") accessibilityDescription:@"Bookmark"];
+  img=[img imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:13 weight:NSFontWeightMedium]];
+  if (marked) img=[img imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithHierarchicalColor:[NSColor systemYellowColor]]];
+  else [img setTemplate:YES];
+  self.starButton.image=img; self.starButton.imagePosition=NSImageOnly;
+  self.starButton.toolTip=marked?@"Remove bookmark":@"Bookmark this page";
+}
+- (void)toggleBookmarkCurrent:(id)s {
+  NSString *url=self.webView.URL.absoluteString;
+  if (!url.length||[url hasPrefix:@"bearbrowser://"]||[self isInternalURL:url]) { NSBeep(); return; }
+  if ([[BBBookmarksStore shared] isBookmarked:url]) [[BBBookmarksStore shared] removeURL:url];
+  else [[BBBookmarksStore shared] addTitle:(self.activeTab.title.length?self.activeTab.title:url) url:url];
+  [self updateStarButton]; [self reloadBookmarksBar];
+}
+- (void)editCurrentBookmark:(id)s {
+  NSString *url=self.webView.URL.absoluteString;
+  if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
+  BBBookmark *existing=nil;
+  for (BBBookmark *b in [BBBookmarksStore shared].items) if ([b.urlString isEqualToString:url]) { existing=b; break; }
+  if (!existing) { [self addBookmark:s]; return; }
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Edit Bookmark";
+  NSView *acc=[[NSView alloc]initWithFrame:NSMakeRect(0,0,340,120)];
+  NSTextField *lblT=[NSTextField labelWithString:@"Name:"]; lblT.frame=NSMakeRect(0,90,64,20); lblT.alignment=NSTextAlignmentRight; [acc addSubview:lblT];
+  NSTextField *tfT=[[NSTextField alloc]initWithFrame:NSMakeRect(68,88,268,24)]; tfT.stringValue=existing.title?:@""; [acc addSubview:tfT];
+  NSTextField *lblU=[NSTextField labelWithString:@"URL:"]; lblU.frame=NSMakeRect(0,58,64,20); lblU.alignment=NSTextAlignmentRight; [acc addSubview:lblU];
+  NSTextField *tfU=[[NSTextField alloc]initWithFrame:NSMakeRect(68,56,268,24)]; tfU.stringValue=existing.urlString?:@""; [acc addSubview:tfU];
+  NSTextField *lblF=[NSTextField labelWithString:@"Folder:"]; lblF.frame=NSMakeRect(0,26,64,20); lblF.alignment=NSTextAlignmentRight; [acc addSubview:lblF];
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(68,24,268,24)];
+  cb.usesDataSource=NO; cb.completes=YES; cb.stringValue=existing.folder?:@""; [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  [acc addSubview:cb];
+  a.accessoryView=acc;
+  [a addButtonWithTitle:@"Save"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *newURL=[tfU.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString *newTitle=tfT.stringValue;
+    NSString *newFolder=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    existing.title=newTitle; existing.folder=newFolder?:@"";
+    if (newURL.length && ![newURL isEqualToString:existing.urlString]) existing.urlString=newURL;
+    [[BBBookmarksStore shared] save];
+    [self updateStarButton]; [self reloadBookmarksBar];
+  }];
+}
+// ── Hovered-link status bubble ────────────────────────────────────────────────
+// Brief transient toast bottom-right of the window (in-window; doesn't need
+// NSUserNotificationCenter permissions or entitlements).
+- (void)showToast:(NSString *)text {
+  if (!text.length||!self.window) return;
+  NSView *cv=self.window.contentView;
+  NSTextField *tf=[NSTextField labelWithString:text];
+  tf.font=[NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+  tf.textColor=[NSColor whiteColor]; tf.alignment=NSTextAlignmentCenter;
+  [tf sizeToFit];
+  CGFloat w=MIN(cv.bounds.size.width-40,MAX(160,tf.frame.size.width+28)),h=32;
+  NSView *toast=[[NSView alloc]initWithFrame:NSMakeRect(cv.bounds.size.width-w-16,20,w,h)];
+  toast.wantsLayer=YES; toast.layer.cornerRadius=8;
+  toast.layer.backgroundColor=[NSColor colorWithWhite:0.12 alpha:0.9].CGColor;
+  toast.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  tf.frame=NSMakeRect(14,(h-tf.frame.size.height)/2,w-28,tf.frame.size.height);
+  [toast addSubview:tf];
+  toast.alphaValue=0;
+  [cv addSubview:toast];
+  [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx){
+    ctx.duration=0.18; toast.animator.alphaValue=1.0;
+  } completionHandler:^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(1.7*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+      [NSAnimationContext runAnimationGroup:^(NSAnimationContext *ctx){
+        ctx.duration=0.35; toast.animator.alphaValue=0;
+      } completionHandler:^{ [toast removeFromSuperview]; }];
+    });
+  }];
+}
+- (void)showStatus:(NSString *)url {
+  if (!url.length) { self.statusBar.hidden=YES; return; }
+  self.statusBar.stringValue=url;
+  NSSize sz=[self.statusBar.cell cellSizeForBounds:NSMakeRect(0,0,self.root.bounds.size.width*0.7,20)];
+  CGFloat w=MIN(self.root.bounds.size.width*0.7,MAX(80,sz.width+16));
+  self.statusBar.frame=NSMakeRect(0,0,w,20);
+  self.statusBar.hidden=NO;
+  [self.root addSubview:self.statusBar positioned:NSWindowAbove relativeTo:nil];
 }
 - (void)showSecurityInfo:(id)s {
   NSURL *url=self.webView.URL;
@@ -2694,13 +4347,35 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
       [info appendString:@"(Certificate details not available — navigate to a page to inspect)"];
     }
   }
-
+  // Show granted permissions for this host so the user can audit + reset them.
+  if (host.length) {
+    NSMutableArray *perms=[NSMutableArray array];
+    NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+    for (NSString *kind in @[@"camera",@"microphone",@"camera & microphone"]) {
+      NSString *key=[NSString stringWithFormat:@"BBMediaPerm_%@_%@",kind,host];
+      NSString *v=[ud stringForKey:key];
+      if ([v isEqualToString:@"allow"]) [perms addObject:[NSString stringWithFormat:@"%@: allowed",kind]];
+      else if ([v isEqualToString:@"deny"]) [perms addObject:[NSString stringWithFormat:@"%@: blocked",kind]];
+    }
+    if (perms.count) {
+      [info appendString:@"\nPermissions:\n  • "];
+      [info appendString:[perms componentsJoinedByString:@"\n  • "]];
+    }
+  }
   NSAlert *a=[[NSAlert alloc]init];
   a.messageText=host.length?host:@"BearBrowser";
   a.informativeText=info;
   a.alertStyle=isHTTPS?NSAlertStyleInformational:NSAlertStyleWarning;
   [a addButtonWithTitle:@"OK"];
-  [a beginSheetModalForWindow:self.window completionHandler:nil];
+  if (host.length) [a addButtonWithTitle:@"Reset Site Permissions"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc==NSAlertSecondButtonReturn && host.length) {
+      NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+      NSString *suffix=[NSString stringWithFormat:@"_%@",host];
+      for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
+        if ([key hasPrefix:@"BBMediaPerm_"] && [key hasSuffix:suffix]) [ud removeObjectForKey:key];
+    }
+  }];
 }
 
 // ── WebView factory ───────────────────────────────────────────────────────────
@@ -2708,6 +4383,12 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   WKWebViewConfiguration *config=[[WKWebViewConfiguration alloc]init];
   if (priv) config.websiteDataStore=[WKWebsiteDataStore nonPersistentDataStore];
   [config.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+  // Enable HTML5 Fullscreen API so YouTube/Netflix "f" works (no public API; WebKit pref).
+  @try { [config.preferences setValue:@YES forKey:@"fullScreenEnabled"]; } @catch(...) {}
+  // Allow inline video and picture-in-picture (required for YouTube/Netflix UX parity)
+  config.allowsInlinePredictions=NO; // don't interfere with our own omnibox
+  config.mediaTypesRequiringUserActionForPlayback=WKAudiovisualMediaTypeNone;
+  config.allowsAirPlayForMediaPlayback=YES;
   // Third-party cookie isolation — block cross-site cookies via private KVC key
   @try { [config.websiteDataStore.httpCookieStore
     performSelector:NSSelectorFromString(@"_setStorageBlockingPolicy:") withObject:@1]; } @catch(...) {}
@@ -2730,6 +4411,118 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [config.userContentController addScriptMessageHandler:self name:@"honeypot"];
   [config.userContentController addScriptMessageHandler:self name:@"netmon"];
   [config.userContentController addScriptMessageHandler:self name:@"secmon"];
+  [config.userContentController addScriptMessageHandler:self name:@"historynav"];
+  // Record SPA route changes (pushState/replaceState/popstate) into history — these
+  // never trigger a full navigation, so didFinishNavigation alone would miss them.
+  NSString *histHook=
+    @"(function(){'use strict';"
+    @"function bb(){try{window.webkit.messageHandlers.historynav.postMessage(location.href);}catch(e){}}"
+    @"var p=history.pushState,r=history.replaceState;"
+    @"history.pushState=function(){var v=p.apply(this,arguments);bb();return v;};"
+    @"history.replaceState=function(){var v=r.apply(this,arguments);bb();return v;};"
+    @"window.addEventListener('popstate',bb);"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:histHook injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+  // Hovered-link bubble (Chrome's bottom-left status), posted to `hoverlink`.
+  [config.userContentController addScriptMessageHandler:self name:@"hoverlink"];
+  NSString *hoverHook=
+    @"(function(){'use strict';"
+    @"function send(u){try{window.webkit.messageHandlers.hoverlink.postMessage(u||'');}catch(e){}}"
+    @"document.addEventListener('mouseover',function(e){var n=e.target;"
+    @"while(n&&n.tagName!=='A')n=n.parentElement;if(n&&n.href)send(n.href);},true);"
+    @"document.addEventListener('mouseout',function(e){var n=e.target;"
+    @"while(n&&n.tagName!=='A')n=n.parentElement;if(n)send('');},true);"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:hoverHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO]];
+  // Audio-playing indicator — posts 1 when any audio/video starts, 0 when all stop.
+  [config.userContentController addScriptMessageHandler:self name:@"audiostate"];
+  NSString *audioHook=
+    @"(function(){'use strict';"
+    @"function post(v){try{window.webkit.messageHandlers.audiostate.postMessage(v);}catch(e){}}"
+    @"function update(){"
+    @"var active=[].slice.call(document.querySelectorAll('audio,video'))"
+    @".some(function(m){return !m.paused&&!m.muted&&m.volume>0;});"
+    @"post(active?1:0);}"
+    @"document.addEventListener('play',update,true);"
+    @"document.addEventListener('pause',update,true);"
+    @"document.addEventListener('ended',update,true);"
+    @"document.addEventListener('volumechange',update,true);"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:audioHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:NO]];
+  // ── Login form autofill: save-on-submit + fill-on-load ────────────────────
+  // Strategy: find each password field, walk up to its <form>, treat the most
+  // plausible nearby text/email/tel input as the username. On submit, post the
+  // values to native; native asks "Save?" then writes to Keychain. On DOMContent
+  // we post the host so native can hand back stored credentials for offer-to-fill.
+  [config.userContentController addScriptMessageHandler:self name:@"loginform"];
+  [config.userContentController addScriptMessageHandler:self name:@"ntpHide"];
+  NSString *autofillHook=
+    @"(function(){'use strict';"
+    @"function post(name,body){try{window.webkit.messageHandlers.loginform.postMessage({k:name,b:body});}catch(e){}}"
+    @"function findUserFor(pw){var f=pw.form;if(!f)return null;var ins=f.querySelectorAll('input');var last=null;"
+    @"for(var i=0;i<ins.length;i++){var n=ins[i];if(n===pw)break;var t=(n.type||'text').toLowerCase();"
+    @"if(t==='text'||t==='email'||t==='tel'||t==='username')last=n;}return last;}"
+    @"function isNewPw(pw){var a=(pw.getAttribute('autocomplete')||'').toLowerCase();"
+    @"return a.indexOf('new-password')>=0;}"
+    @"function bind(pw){if(pw.__bbBound)return;pw.__bbBound=true;var f=pw.form;if(!f)return;"
+    @"f.addEventListener('submit',function(){try{var u=findUserFor(pw);if(!u||!u.value||!pw.value)return;"
+    @"post('save',{host:location.host,user:String(u.value),pass:String(pw.value)});}catch(e){}},true);"
+    @"pw.addEventListener('focus',function(){if(isNewPw(pw))post('genpassOffer',{host:location.host});},true);}"
+    @"function scan(){document.querySelectorAll('input[type=password]').forEach(bind);}"
+    @"function applyCred(cred){try{var pws=document.querySelectorAll('input[type=password]');"
+    @"for(var i=0;i<pws.length;i++){var pw=pws[i],u=findUserFor(pw);if(!u)continue;"
+    @"u.value=cred.user;pw.value=cred.pass;"
+    @"u.dispatchEvent(new Event('input',{bubbles:true}));u.dispatchEvent(new Event('change',{bubbles:true}));"
+    @"pw.dispatchEvent(new Event('input',{bubbles:true}));pw.dispatchEvent(new Event('change',{bubbles:true}));"
+    @"return;}}catch(e){}}"
+    @"function applyGenPass(p){try{var pws=document.querySelectorAll('input[type=password]');"
+    @"for(var i=0;i<pws.length;i++){var pw=pws[i];if(!isNewPw(pw)&&pws.length>1)continue;"
+    @"pw.value=p;pw.dispatchEvent(new Event('input',{bubbles:true}));pw.dispatchEvent(new Event('change',{bubbles:true}));"
+    @"return;}}catch(e){}}"
+    @"window.__bbAutofill=applyCred;"
+    @"window.__bbApplyGenPass=applyGenPass;"
+    @"function reportEdit(){var a=document.activeElement;"
+    @"var e=!!(a&&(a.isContentEditable||a.tagName==='INPUT'||a.tagName==='TEXTAREA'));"
+    @"post('editFocus',{e:e});}"
+    @"document.addEventListener('focusin',reportEdit,true);"
+    @"document.addEventListener('focusout',reportEdit,true);"
+    @"function fieldKey(el){var a=(el.getAttribute('autocomplete')||'').toLowerCase();"
+    @"if(a){if(a.indexOf('email')>=0)return'email';if(a.indexOf('tel')>=0)return'phone';"
+    @"if(a==='name'||a==='cc-name')return'name';if(a==='given-name'||a==='additional-name'||a==='family-name')return'name';"
+    @"if(a==='street-address'||a==='address-line1')return'street';"
+    @"if(a==='address-level2')return'city';if(a==='address-level1')return'region';"
+    @"if(a==='postal-code')return'postal';if(a==='country'||a==='country-name')return'country';"
+    @"if(a==='organization')return'organization';}"
+    @"var k=((el.name||'')+' '+(el.id||'')+' '+(el.getAttribute('placeholder')||'')).toLowerCase();"
+    @"if(/(^|[^a-z])(email|e-mail)([^a-z]|$)/.test(k))return'email';"
+    @"if(/(phone|tel|mobile)/.test(k))return'phone';"
+    @"if(/(fname|firstname|first.name|fullname|full.name|^name$|your.name)/.test(k))return'name';"
+    @"if(/(street|address.?1|addr1|address$)/.test(k))return'street';"
+    @"if(/(city|town|locality)/.test(k))return'city';"
+    @"if(/(state|province|region)/.test(k))return'region';"
+    @"if(/(zip|postal|postcode)/.test(k))return'postal';"
+    @"if(/(country)/.test(k))return'country';"
+    @"if(/(company|organi[sz]ation)/.test(k))return'organization';"
+    @"return'';}"
+    @"function applyProfile(p){try{var ins=document.querySelectorAll('input,select,textarea');"
+    @"for(var i=0;i<ins.length;i++){var n=ins[i];var t=(n.type||'').toLowerCase();"
+    @"if(t==='password'||t==='hidden'||t==='checkbox'||t==='radio'||t==='submit'||t==='button')continue;"
+    @"var k=fieldKey(n);if(!k||!p[k])continue;if(n.value)continue;"
+    @"n.value=p[k];n.dispatchEvent(new Event('input',{bubbles:true}));n.dispatchEvent(new Event('change',{bubbles:true}));}"
+    @"}catch(e){}}"
+    @"window.__bbApplyProfile=applyProfile;"
+    @"function hasProfileField(){var ins=document.querySelectorAll('input,select,textarea');"
+    @"for(var i=0;i<ins.length;i++){if(fieldKey(ins[i]))return true;}return false;}"
+    @"function maybeOfferProfile(){if(hasProfileField())post('profileLookup',{host:location.host});}"
+    @"document.addEventListener('DOMContentLoaded',function(){scan();post('lookup',{host:location.host});maybeOfferProfile();},true);"
+    @"new MutationObserver(scan).observe(document.documentElement,{childList:true,subtree:true});"
+    @"if(document.readyState!=='loading'){scan();post('lookup',{host:location.host});maybeOfferProfile();}"
+    @"})();";
+  [config.userContentController addUserScript:[[WKUserScript alloc]
+    initWithSource:autofillHook injectionTime:WKUserScriptInjectionTimeAtDocumentEnd forMainFrameOnly:YES]];
   // ── Fingerprinting shield (injected before any page script runs) ──────────
   // Cross-referenced against Mozilla Bugzilla RFP bugs and Firefox test suite:
   //   Bug 418986  (FIXED)  — screen / CSS media query resolution
@@ -3824,6 +5617,9 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   wv.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   wv.navigationDelegate=self; wv.UIDelegate=self;
   wv.allowsBackForwardNavigationGestures=YES; wv.allowsLinkPreview=YES;
+  wv.allowsMagnification=YES; // trackpad pinch-to-zoom (Chrome parity)
+  // Required for Web Inspector / "Inspect Element" to open on macOS 13.3+ (defaults NO).
+  if (@available(macOS 13.3, *)) wv.inspectable=YES;
   // PiP enabled on macOS via configuration (allowsPictureInPictureMediaPlayback is iOS-only)
   [wv addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:(__bridge void *)wv];
   [wv addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:(__bridge void *)wv];
@@ -3839,7 +5635,13 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     self.progressBar.hidden=(p>=0.99||p<=0.0);
   } else if ([path isEqualToString:@"title"]) {
     BBTab *tab=[self tabForWebView:wv];
-    if (tab&&wv.title.length) { tab.title=wv.title; [self reloadTabBar]; self.window.title=wv.title; }
+    if (tab&&wv.title.length) {
+      tab.title=wv.title; [self reloadTabBar];
+      if (tab==self.activeTab) self.window.title=[self windowTitleForTab:tab];
+      // Patch the history entry recorded at didFinishNavigation (its title was
+      // usually empty/placeholder because the title hadn't loaded yet).
+      if (!tab.isPrivate) [[BBHistoryStore shared] updateTitle:wv.title forURL:wv.URL.absoluteString];
+    }
   }
 }
 
@@ -3854,19 +5656,115 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   [self reloadTabBar];
 }
 
+// ── Tab suspension ────────────────────────────────────────────────────────────
+// Suspend a background tab: save its URL, load a minimal placeholder so the
+// WKWebView process yields its memory, and mark it suspended. The tab bar still
+// shows its title + favicon — only the web process is freed.
+static NSString *BBSuspendedHTML(NSString *title, NSString *url) {
+  return [NSString stringWithFormat:
+    @"<!doctype html><html><head><meta charset='utf-8'>"
+    @"<style>body{margin:0;display:flex;align-items:center;justify-content:center;"
+    @"min-height:100vh;font-family:-apple-system,sans-serif;background:#f0f2f4;"
+    @"color:#6e6e73;font-size:13px;}"
+    @".wrap{text-align:center;opacity:.7}"
+    @".icon{font-size:28px;margin-bottom:8px}"
+    @"p{margin:0}</style></head>"
+    @"<body><div class='wrap'><div class='icon'>💤</div><p>%@ — suspended</p>"
+    @"<p style='font-size:11px;margin-top:4px;opacity:.6'>%@</p></div></body></html>",
+    title.length?title:@"Tab", url?:@""];
+}
+- (void)suspendTab:(BBTab *)tab {
+  if (tab.suspended || tab==self.activeTab) return;
+  NSString *url=tab.webView.URL.absoluteString;
+  if (!url.length || [self isInternalURL:url]) return; // don't suspend NTP
+  tab.suspendedURL=url;
+  tab.suspended=YES;
+  [tab.webView loadHTMLString:BBSuspendedHTML(tab.title,url) baseURL:nil];
+  BBLog([NSString stringWithFormat:@"[tab-suspend] %@",url]);
+}
+- (void)wakeTab:(BBTab *)tab {
+  if (!tab.suspended || !tab.suspendedURL.length) return;
+  tab.suspended=NO;
+  NSURL *u=[NSURL URLWithString:tab.suspendedURL];
+  if (u) [tab.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  tab.suspendedURL=nil;
+}
+// Sweep: suspend background tabs idle > threshold (default 5 min, user-configurable)
+- (void)suspendInactiveTabs:(id)sender {
+  NSInteger threshSec=[[NSUserDefaults standardUserDefaults] integerForKey:@"BBSuspendAfterSec"];
+  if (threshSec<=0) threshSec=300; // 5 minutes default
+  NSDate *now=[NSDate date];
+  for (NSInteger i=0;i<(NSInteger)self.tabs.count;i++) {
+    if (i==self.activeTabIndex) continue;
+    BBTab *t=self.tabs[i];
+    if (t.suspended) continue;
+    NSTimeInterval idle=t.lastActiveAt?[now timeIntervalSinceDate:t.lastActiveAt]:9999;
+    if (idle>=threshSec) [self suspendTab:t];
+  }
+}
+- (void)autosaveSession:(NSTimer *)t {
+  NSMutableArray *tabDicts=[NSMutableArray array];
+  for (BBTab *tab in self.tabs) {
+    if (tab.isPrivate) continue;
+    NSString *u=tab.suspended?tab.suspendedURL:tab.webView.URL.absoluteString;
+    if (!u.length || [self isInternalURL:u]) continue;
+    NSMutableDictionary *d=[NSMutableDictionary dictionaryWithDictionary:
+      @{@"url":u,@"pinned":@(tab.pinned),@"muted":@(tab.muted),@"title":tab.title?:@"",
+        @"group":tab.groupName?:@"",@"groupColor":@(tab.groupColorIdx)}];
+    if (tab.favicon) {
+      NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[tab.favicon TIFFRepresentation]];
+      NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (png) d[@"favicon"]=[png base64EncodedStringWithOptions:0];
+    }
+    [tabDicts addObject:d];
+  }
+  [[NSUserDefaults standardUserDefaults] setObject:tabDicts forKey:@"BBSessionURLs"];
+}
+- (void)startSuspendTimer {
+  [self.suspendTimer invalidate];
+  // Sweep every 60 seconds; actual suspend threshold is per-tab idle time
+  self.suspendTimer=[NSTimer scheduledTimerWithTimeInterval:60 target:self
+    selector:@selector(suspendInactiveTabs:) userInfo:nil repeats:YES];
+  self.suspendTimer.tolerance=30; // coalesce with other timers
+  // Crash-safe session autosave every 30 seconds.
+  [self.sessionAutosaveTimer invalidate];
+  self.sessionAutosaveTimer=[NSTimer scheduledTimerWithTimeInterval:30 target:self
+    selector:@selector(autosaveSession:) userInfo:nil repeats:YES];
+  self.sessionAutosaveTimer.tolerance=15;
+
+  // On memory pressure warnings, aggressively suspend idle tabs immediately
+  dispatch_source_t mp=dispatch_source_create(
+    DISPATCH_SOURCE_TYPE_MEMORYPRESSURE, 0,
+    DISPATCH_MEMORYPRESSURE_WARN|DISPATCH_MEMORYPRESSURE_CRITICAL,
+    dispatch_get_main_queue());
+  __weak typeof(self) wself=self;
+  dispatch_source_set_event_handler(mp,^{ [wself suspendInactiveTabs:nil]; });
+  dispatch_resume(mp);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 - (void)activateTab:(NSInteger)index {
+  if (index<0||index>=(NSInteger)self.tabs.count) return;
+  // Stamp the tab we're leaving so the suspension sweep knows when it went idle
+  if (self.activeTabIndex>=0 && self.activeTabIndex<(NSInteger)self.tabs.count)
+    self.tabs[self.activeTabIndex].lastActiveAt=[NSDate date];
   for (BBTab *t in self.tabs) { [t.webView removeFromSuperview]; t.webView.hidden=YES; }
   self.activeTabIndex=index;
   BBTab *tab=self.tabs[index];
+  // Wake a suspended tab the moment the user clicks it
+  if (tab.suspended) [self wakeTab:tab];
+  tab.lastActiveAt=[NSDate date];
   tab.webView.hidden=NO;
   [self resizeWebViewForCurrentTab];
   [self.root addSubview:tab.webView positioned:NSWindowBelow relativeTo:self.tabBarView];
-  NSString *url=tab.webView.URL.absoluteString?:@"";
-  self.address.stringValue=[self isInternalURL:url]?@"":url;
+  NSString *url=tab.suspended?tab.suspendedURL:(tab.webView.URL.absoluteString?:@"");
+  self.address.stringValue=[self isInternalURL:url]?@"":url?:@"";
   self.backButton.enabled=tab.webView.canGoBack;
   self.forwardButton.enabled=tab.webView.canGoForward;
-  self.window.title=tab.title.length?tab.title:@"BearBrowser";
+  self.window.title=[self windowTitleForTab:tab];
   [self updateSecurityIndicator:tab.webView.URL];
+  [self updateStarButton];
+  [self applyZoomForCurrentTab];
+  self.statusBar.hidden=YES;
 }
 
 - (void)reloadTabBar { [self.tabBarView reloadWithTabs:self.tabs activeIndex:self.activeTabIndex]; }
@@ -3881,17 +5779,316 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 }
 
 - (void)tabItemDidSelect:(NSInteger)i { if(i!=self.activeTabIndex){[self activateTab:i];[self reloadTabBar];} }
-- (void)tabItemDidClose:(NSInteger)i  {
-  NSString *closingURL=self.tabs[i].webView.URL.absoluteString;
-  if (closingURL.length) [self.closedTabURLs addObject:closingURL];
-  [self.tabs[i].webView removeObserver:self forKeyPath:@"estimatedProgress"];
-  [self.tabs[i].webView removeObserver:self forKeyPath:@"title"];
-  [self.tabs[i].webView removeFromSuperview];
+
+// Tears a tab out of the model without touching the active selection. Callers fix
+// up activeTabIndex + reactivate afterward (lets us close several at once cheaply).
+- (void)teardownTabAtIndex:(NSInteger)i {
+  if (i<0||i>=(NSInteger)self.tabs.count) return;
+  BBTab *t=self.tabs[i];
+  NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+  if (u.length && ![self isInternalURL:u] && !t.isPrivate) [self pushRecentlyClosed:u title:t.title];
+  [t.webView removeObserver:self forKeyPath:@"estimatedProgress"];
+  [t.webView removeObserver:self forKeyPath:@"title"];
+  [t.webView removeFromSuperview];
   [self.tabs removeObjectAtIndex:i];
+}
+- (void)tabItemDidClose:(NSInteger)i  {
+  if ([self validTabIndex:i] && self.tabs[i].pinned) return; // pinned tabs resist Cmd+W / close button
+  [self teardownTabAtIndex:i];
   if (!self.tabs.count) { [self.window performClose:nil]; return; }
   NSInteger newActive=MIN(self.activeTabIndex,(NSInteger)self.tabs.count-1);
   self.activeTabIndex=newActive;
   [self activateTab:newActive]; [self reloadTabBar];
+}
+- (void)tabItemDidMiddleClick:(NSInteger)i { [self tabItemDidClose:i]; }
+- (void)ctxTogglePinTab:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  self.tabs[i].pinned=!self.tabs[i].pinned; [self reloadTabBar];
+}
+- (void)ctxToggleMuteTab:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  BBTab *tab=self.tabs[i]; tab.muted=!tab.muted;
+  [tab.webView evaluateJavaScript:[NSString stringWithFormat:
+    @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",tab.muted?@"true":@"false"]
+    completionHandler:nil];
+  [self reloadTabBar];
+}
+- (void)ctxToggleMuteSite:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  BBTab *tab=self.tabs[i];
+  NSString *host=(tab.suspended?[NSURL URLWithString:tab.suspendedURL].host:tab.webView.URL.host)?:@"";
+  if (!host.length) { NSBeep(); return; }
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  NSString *key=[NSString stringWithFormat:@"BBMuteSite_%@",host.lowercaseString];
+  BOOL now=![ud boolForKey:key];
+  if (now) [ud setBool:YES forKey:key]; else [ud removeObjectForKey:key];
+  // Apply to every tab currently on this host.
+  for (BBTab *t in self.tabs) {
+    NSString *h=(t.suspended?[NSURL URLWithString:t.suspendedURL].host:t.webView.URL.host)?:@"";
+    if (![h.lowercaseString isEqualToString:host.lowercaseString]) continue;
+    t.muted=now;
+    [t.webView evaluateJavaScript:
+      [NSString stringWithFormat:@"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",now?@"true":@"false"]
+      completionHandler:nil];
+  }
+  [self reloadTabBar];
+}
+- (void)ctxToggleSuspendTab:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]) return;
+  BBTab *tab=self.tabs[i];
+  if (tab.suspended) [self wakeTab:tab]; else [self suspendTab:tab];
+  [self reloadTabBar];
+}
+- (void)pinCurrentTab:(id)s {
+  BBTab *tab=self.activeTab; if (!tab) return;
+  tab.pinned=!tab.pinned; [self reloadTabBar];
+}
+// ── Tab groups ───────────────────────────────────────────────────────────────
+- (NSInteger)nextGroupColorIdx {
+  // Match an existing group's color when possible; otherwise pick the lowest unused slot.
+  NSMutableSet<NSNumber *> *used=[NSMutableSet set];
+  for (BBTab *t in self.tabs) if (t.groupName.length) [used addObject:@(t.groupColorIdx)];
+  for (NSInteger k=0;k<8;k++) if (![used containsObject:@(k)]) return k;
+  return 0;
+}
+- (void)ctxAddTabToGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  NSString *g=mi.representedObject; if (!g.length) return;
+  NSInteger colorIdx=0; BOOL found=NO;
+  for (BBTab *t in self.tabs) if ([t.groupName isEqualToString:g]) { colorIdx=t.groupColorIdx; found=YES; break; }
+  if (!found) colorIdx=[self nextGroupColorIdx];
+  self.tabs[i].groupName=g; self.tabs[i].groupColorIdx=colorIdx;
+  [self reloadTabBar];
+}
+- (void)ctxAddTabToNewGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"New Tab Group";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.placeholderString=@"Group name"; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Create"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *g=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!g.length) return;
+    self.tabs[i].groupName=g; self.tabs[i].groupColorIdx=[self nextGroupColorIdx];
+    [self reloadTabBar];
+  }];
+}
+- (void)ctxRemoveTabFromGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  self.tabs[i].groupName=nil; self.tabs[i].groupColorIdx=0; [self reloadTabBar];
+}
+- (void)ctxCloseGroup:(NSMenuItem *)mi {
+  NSInteger i=mi.tag; if (![self validTabIndex:i]) return;
+  NSString *g=self.tabs[i].groupName; if (!g.length) return;
+  // Walk backwards so removals don't shift the indices in front of us.
+  for (NSInteger k=(NSInteger)self.tabs.count-1;k>=0;k--) {
+    if ([self.tabs[k].groupName isEqualToString:g] && !self.tabs[k].pinned) [self teardownTabAtIndex:k];
+  }
+  if (!self.tabs.count) { [self.window performClose:nil]; return; }
+  NSInteger newActive=MIN(self.activeTabIndex,(NSInteger)self.tabs.count-1);
+  self.activeTabIndex=newActive; [self activateTab:newActive]; [self reloadTabBar];
+}
+
+// Drag-to-reorder: move the tab and keep the same tab active.
+- (void)tabItemMovedFrom:(NSInteger)from to:(NSInteger)to {
+  NSInteger n=self.tabs.count;
+  if (from<0||from>=n||to<0||to>=n||from==to) { [self reloadTabBar]; return; }
+  BBTab *t=self.tabs[from];
+  [self.tabs removeObjectAtIndex:from];
+  [self.tabs insertObject:t atIndex:to];
+  NSInteger act=self.activeTabIndex;
+  if (act==from) act=to;
+  else if (from<act && to>=act) act--;
+  else if (from>act && to<=act) act++;
+  self.activeTabIndex=act;
+  [self reloadTabBar];
+}
+// ── Tab hover thumbnails ──────────────────────────────────────────────────────
+- (void)tabItemDidHoverEnter:(NSInteger)i fromView:(NSView *)v {
+  [self.tabHoverTimer invalidate];
+  if (i<0||i>=(NSInteger)self.tabs.count||!v) return;
+  if (i==self.activeTabIndex) return; // active tab already on screen
+  NSValue *vp=[NSValue valueWithPointer:(__bridge void *)v];
+  self.tabHoverTimer=[NSTimer scheduledTimerWithTimeInterval:0.45
+    target:self selector:@selector(showHoverThumbnail:) userInfo:@{@"idx":@(i),@"view":vp} repeats:NO];
+}
+- (void)tabItemDidHoverExit:(NSInteger)i {
+  [self.tabHoverTimer invalidate]; self.tabHoverTimer=nil;
+  [self.tabHoverPanel orderOut:nil];
+}
+- (void)showHoverThumbnail:(NSTimer *)t {
+  NSDictionary *info=t.userInfo;
+  NSInteger i=[info[@"idx"] integerValue];
+  NSView *v=(__bridge NSView *)[info[@"view"] pointerValue];
+  if (i<0||i>=(NSInteger)self.tabs.count||!v||!v.window) return;
+  BBTab *tab=self.tabs[i];
+  WKSnapshotConfiguration *cfg=[[WKSnapshotConfiguration alloc]init];
+  cfg.rect=CGRectMake(0,0,MIN(tab.webView.bounds.size.width,1200),MIN(tab.webView.bounds.size.height,800));
+  cfg.snapshotWidth=@(280);
+  [tab.webView takeSnapshotWithConfiguration:cfg completionHandler:^(NSImage *img,NSError *e){
+    if (!img||!v.window) return;
+    dispatch_async(dispatch_get_main_queue(),^{ [self displayHoverImage:img belowView:v title:tab.title]; });
+  }];
+}
+- (void)displayHoverImage:(NSImage *)img belowView:(NSView *)v title:(NSString *)title {
+  NSRect winRect=[v convertRect:v.bounds toView:nil];
+  NSRect scrRect=[v.window convertRectToScreen:winRect];
+  CGFloat thumbW=280, thumbH=MIN(180,thumbW*img.size.height/MAX(img.size.width,1));
+  CGFloat panelW=thumbW+16, panelH=thumbH+32;
+  NSRect panelFrame=NSMakeRect(scrRect.origin.x+(scrRect.size.width-panelW)/2,
+                               scrRect.origin.y-panelH-6, panelW, panelH);
+  if (!self.tabHoverPanel) {
+    self.tabHoverPanel=[[NSPanel alloc]initWithContentRect:panelFrame
+      styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    self.tabHoverPanel.opaque=NO; self.tabHoverPanel.backgroundColor=[NSColor clearColor];
+    self.tabHoverPanel.hasShadow=YES; self.tabHoverPanel.level=NSPopUpMenuWindowLevel;
+    self.tabHoverPanel.ignoresMouseEvents=YES;
+  }
+  [self.tabHoverPanel setFrame:panelFrame display:NO];
+  NSVisualEffectView *bg=[[NSVisualEffectView alloc]initWithFrame:NSMakeRect(0,0,panelW,panelH)];
+  bg.material=NSVisualEffectMaterialHUDWindow; bg.blendingMode=NSVisualEffectBlendingModeBehindWindow;
+  bg.wantsLayer=YES; bg.layer.cornerRadius=10;
+  NSImageView *iv=[[NSImageView alloc]initWithFrame:NSMakeRect(8,24,thumbW,thumbH)];
+  iv.image=img; iv.imageScaling=NSImageScaleProportionallyUpOrDown;
+  iv.wantsLayer=YES; iv.layer.cornerRadius=6; iv.layer.masksToBounds=YES;
+  [bg addSubview:iv];
+  NSTextField *t=[NSTextField labelWithString:title.length?title:@"Untitled"];
+  t.frame=NSMakeRect(10,4,panelW-20,18); t.font=[NSFont systemFontOfSize:11];
+  t.lineBreakMode=NSLineBreakByTruncatingTail; [bg addSubview:t];
+  self.tabHoverPanel.contentView=bg;
+  [self.tabHoverPanel orderFront:nil];
+}
+- (void)tabBarDidDropURL:(NSString *)dropped {
+  // Resolve raw URL or fall back to search-engine query (matches address bar Enter behaviour).
+  if (!dropped.length) return;
+  NSURL *u=[NSURL URLWithString:dropped];
+  if (!u.scheme.length) {
+    NSURL *https=[NSURL URLWithString:[@"https://" stringByAppendingString:dropped]];
+    if (https.host.length) u=https;
+  }
+  if (!u) return;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+
+// Right-click tab menu (Chrome's set + BearBrowser extensions).
+- (NSMenu *)tabItemContextMenu:(NSInteger)i {
+  if (![self validTabIndex:i]) return nil;
+  BBTab *tab=self.tabs[i];
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  void(^add)(NSString*,SEL,BOOL)=^(NSString*title,SEL sel,BOOL enabled){
+    NSMenuItem *it=[m addItemWithTitle:title action:sel keyEquivalent:@""];
+    it.target=self; it.tag=i; it.enabled=enabled;
+  };
+  add(tab.pinned?@"Unpin Tab":@"Pin Tab", @selector(ctxTogglePinTab:), YES);
+  add(tab.muted?@"Unmute Tab":@"Mute Tab", @selector(ctxToggleMuteTab:), YES);
+  {
+    NSString *host=(tab.suspended?[NSURL URLWithString:tab.suspendedURL].host:tab.webView.URL.host)?:@"";
+    BOOL siteMuted=host.length && [[NSUserDefaults standardUserDefaults] boolForKey:[NSString stringWithFormat:@"BBMuteSite_%@",host.lowercaseString]];
+    if (host.length) add(siteMuted?@"Unmute Site":@"Mute Site", @selector(ctxToggleMuteSite:), YES);
+  }
+  add(tab.suspended?@"Reload (Wake) Tab":@"Suspend Tab", @selector(ctxToggleSuspendTab:), YES);
+  [m addItem:[NSMenuItem separatorItem]];
+  // Tab group submenu — list existing groups + "Add to New Group…" + (if grouped) Remove
+  NSMenuItem *grpRoot=[m addItemWithTitle:tab.groupName.length?[NSString stringWithFormat:@"Group: %@",tab.groupName]:@"Group"
+                                   action:nil keyEquivalent:@""];
+  NSMenu *grpM=[[NSMenu alloc]initWithTitle:@""];
+  NSMutableOrderedSet *existing=[NSMutableOrderedSet orderedSet];
+  for (BBTab *t in self.tabs) if (t.groupName.length) [existing addObject:t.groupName];
+  for (NSString *g in existing) {
+    NSMenuItem *gi=[grpM addItemWithTitle:g action:@selector(ctxAddTabToGroup:) keyEquivalent:@""];
+    gi.target=self; gi.tag=i; gi.representedObject=g;
+    if ([tab.groupName isEqualToString:g]) gi.state=NSControlStateValueOn;
+  }
+  if (existing.count) [grpM addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *newG=[grpM addItemWithTitle:@"New Group…" action:@selector(ctxAddTabToNewGroup:) keyEquivalent:@""];
+  newG.target=self; newG.tag=i;
+  if (tab.groupName.length) {
+    NSMenuItem *rm=[grpM addItemWithTitle:@"Remove from Group" action:@selector(ctxRemoveTabFromGroup:) keyEquivalent:@""];
+    rm.target=self; rm.tag=i;
+    NSMenuItem *closeG=[grpM addItemWithTitle:[NSString stringWithFormat:@"Close “%@” Group",tab.groupName]
+                                       action:@selector(ctxCloseGroup:) keyEquivalent:@""];
+    closeG.target=self; closeG.tag=i;
+  }
+  grpRoot.submenu=grpM;
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"Move Tab Left", @selector(ctxMoveTabLeft:), i>0);
+  add(@"Move Tab Right",@selector(ctxMoveTabRight:),i<(NSInteger)self.tabs.count-1);
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"New Tab to the Right",@selector(ctxNewTabRight:),YES);
+  add(@"Move Tab to New Window",@selector(ctxMoveTabToNewWindow:),self.tabs.count>1);
+  add(@"Duplicate Tab",@selector(ctxDuplicateTab:),YES);
+  add(@"Add to Research Session…",@selector(addCurrentTabToSession:),YES);
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"Reload Tab",@selector(ctxReloadTab:),YES);
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"Close Tab",@selector(ctxCloseTab:),!tab.pinned);
+  add(@"Close Other Tabs",@selector(ctxCloseOthers:),self.tabs.count>1);
+  add(@"Close Tabs to the Right",@selector(ctxCloseRight:),i<(NSInteger)self.tabs.count-1);
+  [m addItem:[NSMenuItem separatorItem]];
+  add(@"Reopen Closed Tab",@selector(reopenClosedTab:),self.recentlyClosed.count>0);
+  return m;
+}
+- (BOOL)validTabIndex:(NSInteger)i { return i>=0 && i<(NSInteger)self.tabs.count; }
+- (void)ctxMoveTabToNewWindow:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i]||self.tabs.count<2) return;
+  BBTab *tab=self.tabs[i];
+  // Remove from this window
+  if (self.activeTabIndex==i) {
+    NSInteger next=i>0?i-1:1;
+    [self tabItemDidSelect:next];
+  } else if (self.activeTabIndex>i) self.activeTabIndex--;
+  [self.tabs removeObjectAtIndex:i];
+  [self reloadTabBar];
+  // Open a new window carrying the tab's URL
+  BBDelegate *w=[[BBDelegate alloc]init];
+  NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+  [w applicationDidFinishLaunching:dummy];
+  NSURL *u=tab.suspended?[NSURL URLWithString:tab.suspendedURL]:tab.webView.URL;
+  if (u) [w.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)ctxMoveTabLeft:(id)s  { NSInteger i=[(NSMenuItem*)s tag]; if(i<=0||![self validTabIndex:i])return; [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i-1]; if(self.activeTabIndex==i)self.activeTabIndex=i-1; [self reloadTabBar]; }
+- (void)ctxMoveTabRight:(id)s { NSInteger i=[(NSMenuItem*)s tag]; if(i>=(NSInteger)self.tabs.count-1||![self validTabIndex:i])return; [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i+1]; if(self.activeTabIndex==i)self.activeTabIndex=i+1; [self reloadTabBar]; }
+- (void)ctxNewTabRight:(id)s   { NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return; [self insertTabAt:i+1 private:self.tabs[i].isPrivate url:nil]; }
+- (void)ctxDuplicateTab:(id)s  {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return;
+  [self insertTabAt:i+1 private:self.tabs[i].isPrivate url:self.tabs[i].webView.URL.absoluteString];
+}
+- (void)ctxReloadTab:(id)s     { NSInteger i=[(NSMenuItem*)s tag]; if([self validTabIndex:i])[self.tabs[i].webView reload]; }
+- (void)ctxCloseTab:(id)s      { NSInteger i=[(NSMenuItem*)s tag]; if([self validTabIndex:i])[self tabItemDidClose:i]; }
+- (void)ctxCloseOthers:(id)s {
+  NSInteger i=[(NSMenuItem*)s tag]; if(![self validTabIndex:i])return;
+  BBTab *keep=self.tabs[i];
+  for (NSInteger j=(NSInteger)self.tabs.count-1;j>=0;j--) if (self.tabs[j]!=keep) [self teardownTabAtIndex:j];
+  self.activeTabIndex=0; [self activateTab:0]; [self reloadTabBar];
+}
+- (void)ctxCloseRight:(id)s {
+  NSInteger from=[(NSMenuItem*)s tag];
+  for (NSInteger j=(NSInteger)self.tabs.count-1;j>from;j--) [self teardownTabAtIndex:j];
+  if (self.activeTabIndex>from) self.activeTabIndex=from;
+  [self activateTab:self.activeTabIndex]; [self reloadTabBar];
+}
+- (void)duplicateCurrentTab:(id)s {
+  [self insertTabAt:self.activeTabIndex+1 private:self.activeTab.isPrivate url:self.webView.URL.absoluteString];
+}
+
+// Insert a new tab at a specific position (used by New Tab to Right / Duplicate).
+- (void)insertTabAt:(NSInteger)idx private:(BOOL)priv url:(NSString *)url {
+  if (idx<0) idx=0; if (idx>(NSInteger)self.tabs.count) idx=self.tabs.count;
+  BBTab *tab=[[BBTab alloc]init]; tab.isPrivate=priv;
+  tab.webView=[self makeWebViewPrivate:priv];
+  [self.tabs insertObject:tab atIndex:idx];
+  self.activeTabIndex=idx;
+  [self activateTab:idx];
+  NSURL *u=url.length?[NSURL URLWithString:url]:nil;
+  if (u) [tab.webView loadRequest:[NSURLRequest requestWithURL:u]]; else [self loadStartPage:tab.webView];
+  [self reloadTabBar];
+}
+- (void)pushRecentlyClosed:(NSString *)url title:(NSString *)title {
+  if (!url.length) return;
+  [self.recentlyClosed addObject:@{@"url":url,@"title":title?:url}];
+  if (self.recentlyClosed.count>25) [self.recentlyClosed removeObjectAtIndex:0];
 }
 
 - (void)loadStartPage:(WKWebView *)wv {
@@ -3899,7 +6096,95 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   if (landing) [wv loadFileURL:landing allowingReadAccessToURL:[landing URLByDeletingLastPathComponent]];
   else [wv loadHTMLString:@"<h1>BearBrowser</h1>" baseURL:nil];
 }
+- (BOOL)isStartPage:(NSURL *)url {
+  if (!url) return NO;
+  NSURL *landing=[[NSBundle mainBundle] URLForResource:@"BearBrowser-start" withExtension:@"html"];
+  return landing && [url.absoluteString isEqualToString:landing.absoluteString];
+}
+- (NSString *)htmlEscape:(NSString *)s {
+  s=[s stringByReplacingOccurrencesOfString:@"&" withString:@"&amp;"];
+  s=[s stringByReplacingOccurrencesOfString:@"<" withString:@"&lt;"];
+  s=[s stringByReplacingOccurrencesOfString:@">" withString:@"&gt;"];
+  s=[s stringByReplacingOccurrencesOfString:@"\"" withString:@"&quot;"];
+  return s;
+}
+// Top sites by visit frequency for the New Tab Page (non-private history only).
+- (NSArray<NSDictionary*> *)topSitesLimit:(NSInteger)n {
+  NSSet *hidden=[NSSet setWithArray:([[NSUserDefaults standardUserDefaults] arrayForKey:@"BBHiddenTopSites"]?:@[])];
+  NSMutableDictionary<NSString*,NSMutableDictionary*> *byHost=[NSMutableDictionary dictionary];
+  for (BBHistoryEntry *e in [BBHistoryStore shared].entries) {
+    NSURL *u=[NSURL URLWithString:e.urlString]; NSString *host=u.host; if(!host.length) continue;
+    if([host hasPrefix:@"www."]) host=[host substringFromIndex:4];
+    if ([hidden containsObject:host]) continue;
+    NSMutableDictionary *d=byHost[host];
+    if(!d){ d=[@{@"count":@0} mutableCopy]; byHost[host]=d; }
+    d[@"count"]=@([d[@"count"] integerValue]+1);
+    d[@"url"]=e.urlString; d[@"host"]=host; if(e.title.length) d[@"title"]=e.title;
+  }
+  NSArray *sorted=[byHost.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary*a,NSDictionary*b){
+    return [b[@"count"] compare:a[@"count"]];
+  }];
+  return sorted.count>n?[sorted subarrayWithRange:NSMakeRange(0,n)]:sorted;
+}
+// Replace the start page's curated grid with the user's most-visited sites.
+- (void)injectTopSitesInto:(WKWebView *)wv {
+  [self injectReadingListInto:wv];
+  NSArray *sites=[self topSitesLimit:8];
+  if (sites.count<4) return; // not enough history yet — keep the curated defaults
+  NSMutableString *html=[NSMutableString string];
+  for (NSDictionary *d in sites) {
+    NSString *host=d[@"host"]?:@""; NSString *url=d[@"url"]?:@"";
+    NSString *letter=host.length?[[host substringToIndex:1] uppercaseString]:@"•";
+    // Use real favicon.ico; fall back to the letter initial on error (privacy-safe: only fetches
+    // from sites the user has already visited, same as Chrome's top-sites favicons behaviour).
+    NSString *faviconSrc=[NSString stringWithFormat:@"https://%@/favicon.ico",[self htmlEscape:host]];
+    [html appendFormat:
+      @"<a class=\"shortcut\" href=\"%@\" data-host=\"%@\" style=\"position:relative\">"
+      @"<button type=\"button\" class=\"shortcut-x\" title=\"Remove\" onclick=\"event.preventDefault();event.stopPropagation();"
+      @"try{window.webkit.messageHandlers.ntpHide.postMessage(this.parentNode.getAttribute('data-host'));}catch(e){}"
+      @"this.parentNode.style.display='none';return false;\" "
+      @"style=\"position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%%;"
+      @"background:rgba(0,0,0,.55);color:#fff;border:none;cursor:pointer;font-size:11px;line-height:1;"
+      @"display:none;align-items:center;justify-content:center\">×</button>"
+      @"<div class=\"shortcut-icon\" style=\"position:relative;overflow:hidden\">"
+      @"<img src=\"%@\" width=\"32\" height=\"32\" style=\"object-fit:contain\" "
+      @"onerror=\"this.style.display='none';this.nextElementSibling.style.display='flex'\">"
+      @"<span style=\"display:none;width:100%%;height:100%%;align-items:center;justify-content:center;font-size:24px\">%@</span>"
+      @"</div><span class=\"shortcut-label\">%@</span></a>",
+      [self htmlEscape:url], [self htmlEscape:host], faviconSrc, [self htmlEscape:letter], [self htmlEscape:host]];
+  }
+  NSString *js=[NSString stringWithFormat:
+    @"(function(){var g=document.querySelector('.grid');if(!g)return;g.innerHTML=%@;"
+    @"if(!document.getElementById('bb-x-style')){var s=document.createElement('style');s.id='bb-x-style';"
+    @"s.textContent='.shortcut:hover .shortcut-x{display:flex!important}';document.head.appendChild(s);}})();",
+    [self jsStringLiteral:html]];
+  [wv evaluateJavaScript:js completionHandler:nil];
+}
+- (void)injectReadingListInto:(WKWebView *)wv {
+  NSMutableArray *unread=[NSMutableArray array];
+  for (BBReadingItem *it in [BBReadingList shared].items.reverseObjectEnumerator) {
+    if (it.read) continue; if (unread.count>=6) break; [unread addObject:it];
+  }
+  if (!unread.count) return;
+  NSMutableString *rlHtml=[NSMutableString string];
+  [rlHtml appendString:@"<div style=\"max-width:520px;margin:8px auto 0;padding:12px 16px;border-radius:14px;background:var(--surface);border:1px solid var(--border);\">"
+                        "<div style=\"font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;font-weight:600\">Reading List</div>"
+                        "<ul style=\"list-style:none;margin:0;padding:0\">"];
+  for (BBReadingItem *it in unread) {
+    [rlHtml appendFormat:@"<li style=\"margin:.35em 0\"><a href=\"%@\" style=\"color:var(--text);text-decoration:none\">%@</a></li>",
+      [self htmlEscape:it.urlString],[self htmlEscape:it.title.length?it.title:it.urlString]];
+  }
+  [rlHtml appendString:@"</ul></div>"];
+  NSString *rlJs=[NSString stringWithFormat:
+    @"(function(){var g=document.querySelector('.grid'),c=%@;if(g&&!document.getElementById('bb-rl')){var d=document.createElement('div');d.id='bb-rl';d.innerHTML=c;g.parentNode.insertBefore(d,g.nextSibling);}})();",
+    [self jsStringLiteral:rlHtml]];
+  [wv evaluateJavaScript:rlJs completionHandler:nil];
+}
 
+- (NSString *)windowTitleForTab:(BBTab *)tab {
+  NSString *base=tab.title.length?tab.title:@"BearBrowser";
+  return tab.isPrivate?[@"\U0001F575 Private — " stringByAppendingString:base]:base;
+}
 - (BBTab *)tabForWebView:(WKWebView *)wv {
   for (BBTab *t in self.tabs) if(t.webView==wv) return t;
   return nil;
@@ -3907,56 +6192,857 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 
 // ── Actions ───────────────────────────────────────────────────────────────────
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)s { return YES; }
+- (void)restartApp:(id)s {
+  NSString *appPath=[[NSBundle mainBundle] bundlePath];
+  if (!appPath.length) return;
+  NSTask *t=[NSTask new];
+  t.launchPath=@"/usr/bin/open";
+  t.arguments=@[@"-n",appPath]; // -n = new instance
+  @try { [t launch]; } @catch(NSException *e) { NSBeep(); return; }
+  // Give /usr/bin/open a moment to spawn before we exit.
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.3*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    [NSApp terminate:nil];
+  });
+}
+- (NSMenu *)applicationDockMenu:(NSApplication *)sender {
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  [m addItemWithTitle:@"New Tab"             action:@selector(newTab:)            keyEquivalent:@""].target=self;
+  [m addItemWithTitle:@"New Window"          action:@selector(newWindow:)         keyEquivalent:@""].target=self;
+  [m addItemWithTitle:@"New Incognito Window" action:@selector(newPrivateWindow:)  keyEquivalent:@""].target=self;
+  if (self.recentlyClosed.count) {
+    [m addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *rcRoot=[m addItemWithTitle:@"Recently Closed" action:nil keyEquivalent:@""];
+    NSMenu *sub=[[NSMenu alloc]initWithTitle:@""];
+    for (NSInteger k=(NSInteger)self.recentlyClosed.count-1;k>=0&&k>=(NSInteger)self.recentlyClosed.count-10;k--) {
+      NSDictionary *e=self.recentlyClosed[k];
+      NSString *t=e[@"title"]?:e[@"url"];
+      NSMenuItem *it=[sub addItemWithTitle:t.length>60?[[t substringToIndex:60] stringByAppendingString:@"…"]:t
+                                    action:@selector(reopenSpecificClosed:) keyEquivalent:@""];
+      it.target=self; it.tag=k;
+    }
+    rcRoot.submenu=sub;
+  }
+  return m;
+}
+- (void)applicationWillTerminate:(NSNotification *)n {
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:@"BBClearOnQuit"]) [[BBHistoryStore shared] clearAll];
+}
+// ── beforeunload dialog (sites that need to confirm navigation away) ──────────
+- (void)webView:(WKWebView *)wv runBeforeUnloadConfirmPanelWithMessage:(NSString *)message
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void(^)(BOOL))done {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Leave site?";
+  a.informativeText=message.length?message:@"Changes you made may not be saved.";
+  [a addButtonWithTitle:@"Leave"]; [a addButtonWithTitle:@"Stay"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    done(rc==NSAlertFirstButtonReturn);
+  }];
+}
+// ── Warn when closing a window with multiple tabs ─────────────────────────────
+- (BOOL)windowShouldClose:(NSWindow *)w {
+  NSInteger count=[self.tabs count];
+  NSInteger nonPinned=0;
+  for (BBTab *t in self.tabs) if (!t.pinned) nonPinned++;
+  if (nonPinned < 2) return YES; // 0 or 1 closeable tabs: close without dialog
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Close %ld tabs?", (long)count];
+  a.informativeText=@"Your tabs will be saved and restored next time you launch BearBrowser.";
+  [a addButtonWithTitle:@"Close All"]; [a addButtonWithTitle:@"Cancel"];
+  a.alertStyle=NSAlertStyleWarning;
+  return [a runModal]==NSAlertFirstButtonReturn;
+}
 - (void)windowWillClose:(NSNotification *)n {
   [[NSUserDefaults standardUserDefaults] setObject:NSStringFromRect(self.window.frame) forKey:@"BBWindowFrame"];
-  // Persist non-private tab URLs for session restore
-  NSMutableArray<NSString*> *urls=[NSMutableArray array];
+  // Persist non-private tab metadata (url + pinned + muted + favicon) for session restore
+  NSMutableArray *tabDicts=[NSMutableArray array];
   for (BBTab *t in self.tabs) {
     if (t.isPrivate) continue;
-    NSString *u=t.webView.URL.absoluteString;
-    if (u.length && ![self isInternalURL:u]) [urls addObject:u];
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!u.length || [self isInternalURL:u]) continue;
+    NSMutableDictionary *d=[NSMutableDictionary dictionaryWithDictionary:
+      @{@"url":u,@"pinned":@(t.pinned),@"muted":@(t.muted),@"title":t.title?:@"",
+        @"group":t.groupName?:@"",@"groupColor":@(t.groupColorIdx)}];
+    if (t.favicon) {
+      NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[t.favicon TIFFRepresentation]];
+      NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (png) d[@"favicon"]=[png base64EncodedStringWithOptions:0];
+    }
+    [tabDicts addObject:d];
   }
-  [[NSUserDefaults standardUserDefaults] setObject:urls forKey:@"BBSessionURLs"];
+  [[NSUserDefaults standardUserDefaults] setObject:tabDicts forKey:@"BBSessionURLs"];
+  // Tear down local event monitors so they stop firing against torn-down state.
+  if (self.addrDismissMonitor) { [NSEvent removeMonitor:self.addrDismissMonitor]; self.addrDismissMonitor=nil; }
+  if (self.contextMenuMonitor) { [NSEvent removeMonitor:self.contextMenuMonitor]; self.contextMenuMonitor=nil; }
+  if (self.middleClickMonitor) { [NSEvent removeMonitor:self.middleClickMonitor]; self.middleClickMonitor=nil; }
+  if (self.ctrlScrollMonitor)  { [NSEvent removeMonitor:self.ctrlScrollMonitor];  self.ctrlScrollMonitor=nil; }
+  [self.suspendTimer invalidate]; self.suspendTimer=nil;
+  [self.sessionAutosaveTimer invalidate]; self.sessionAutosaveTimer=nil;
+  [self.tabHoverTimer invalidate]; self.tabHoverTimer=nil;
+  [self.tabHoverPanel close]; self.tabHoverPanel=nil;
+  // Release this window's controller. Deferred so we never dealloc self midway
+  // through this very method (the removal can drop the last strong reference).
+  dispatch_async(dispatch_get_main_queue(),^{ [gBBWindowControllers removeObject:self]; });
 }
 - (void)readAloud:(id)s           { [[BBVoice shared] readPage:self.webView]; }
+// ── Login autofill UI ─────────────────────────────────────────────────────────
+- (void)offerSaveLoginForHost:(NSString *)host username:(NSString *)user password:(NSString *)pass {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Save password for %@?",host];
+  a.informativeText=[NSString stringWithFormat:@"BearBrowser will store the password for “%@” in your macOS Keychain.",user];
+  [a addButtonWithTitle:@"Save"];
+  [a addButtonWithTitle:@"Never for this site"];
+  [a addButtonWithTitle:@"Not now"];
+  // Per-host opt-out persists in user defaults; lookup short-circuits if set.
+  NSString *neverKey=[NSString stringWithFormat:@"BBLoginNever_%@",host.lowercaseString];
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:neverKey]) return;
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc==NSAlertFirstButtonReturn) {
+      [[BBPasswordStore shared] saveHost:host username:user password:pass];
+      [self showToast:@"Password saved to Keychain"];
+    } else if (rc==NSAlertSecondButtonReturn) {
+      [[NSUserDefaults standardUserDefaults] setBool:YES forKey:neverKey];
+    }
+  }];
+}
+- (void)offerFillForTab:(BBTab *)tab webView:(WKWebView *)wv entries:(NSArray<BBPasswordEntry *> *)entries {
+  if (!entries.count||!wv) return;
+  // Single match: silent auto-fill (Chrome's behaviour). Multiple: prompt the user.
+  if (entries.count==1) {
+    [self fillCredential:entries[0] intoWebView:wv]; return;
+  }
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Sign in with a saved account?";
+  a.informativeText=@"BearBrowser has more than one saved login for this site.";
+  for (NSInteger k=0;k<MIN((NSInteger)entries.count,3);k++) [a addButtonWithTitle:entries[k].username];
+  [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    NSInteger idx=rc-NSAlertFirstButtonReturn;
+    if (idx>=0&&idx<(NSInteger)entries.count) [self fillCredential:entries[idx] intoWebView:wv];
+  }];
+}
+- (NSString *)generateStrongPassword:(NSInteger)len {
+  // Cryptographic random via SecRandomCopyBytes; charset is letters+digits+symbols
+  // chosen for max-compatibility with site password policies (no quotes/backslashes).
+  static const char *cs="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*-_=+?";
+  size_t csLen=strlen(cs);
+  if (len<8) len=20;
+  uint8_t *buf=(uint8_t *)malloc((size_t)len);
+  if (!buf) return @"";
+  if (SecRandomCopyBytes(kSecRandomDefault,(size_t)len,buf)!=errSecSuccess) { free(buf); return @""; }
+  NSMutableString *out=[NSMutableString stringWithCapacity:(NSUInteger)len];
+  for (NSInteger i=0;i<len;i++) [out appendFormat:@"%c",cs[buf[i]%csLen]];
+  free(buf);
+  return out;
+}
+- (NSString *)generatePassphrase:(NSInteger)words {
+  // 200-word EFF short-ish list; each word ≥ 4.5 bits of entropy. ~52 bits at 5 words.
+  static NSArray *lst=nil; static dispatch_once_t o; dispatch_once(&o,^{
+    lst=@[@"acorn",@"amber",@"anchor",@"apple",@"arrow",@"aspen",@"atlas",@"august",@"aurora",@"badge",
+          @"basil",@"beach",@"bison",@"bloom",@"boat",@"bold",@"brave",@"brick",@"bright",@"brook",
+          @"canvas",@"carbon",@"castle",@"cedar",@"chalk",@"cherry",@"cloud",@"clover",@"coast",@"cobalt",
+          @"comet",@"copper",@"coral",@"cosmos",@"crane",@"crest",@"crisp",@"cyan",@"daisy",@"dawn",
+          @"delta",@"denim",@"desert",@"diesel",@"dolphin",@"dome",@"drift",@"dune",@"echo",@"ember",
+          @"emerald",@"epic",@"ether",@"fable",@"falcon",@"fern",@"finch",@"flame",@"flint",@"forest",
+          @"fossil",@"frost",@"garnet",@"giant",@"glade",@"glass",@"glow",@"gold",@"gorge",@"grain",
+          @"grand",@"granite",@"grasp",@"grove",@"gulf",@"harbor",@"harvest",@"hawk",@"haze",@"heron",
+          @"hollow",@"honey",@"horizon",@"ivory",@"jade",@"jasper",@"jubilee",@"kite",@"knot",@"lagoon",
+          @"laurel",@"ledger",@"lemon",@"lily",@"linen",@"lion",@"lotus",@"lumen",@"lynx",@"maple",
+          @"marble",@"marine",@"meadow",@"melody",@"metal",@"midnight",@"mint",@"mist",@"moon",@"moss",
+          @"mountain",@"nectar",@"neon",@"nimbus",@"nova",@"oasis",@"ocean",@"olive",@"onyx",@"opal",
+          @"orbit",@"orchard",@"otter",@"oxide",@"pearl",@"pebble",@"phoenix",@"pine",@"pixel",@"planet",
+          @"plum",@"pond",@"poppy",@"prism",@"pulse",@"quartz",@"quill",@"quilt",@"quorum",@"rain",
+          @"ranger",@"raven",@"reef",@"relay",@"river",@"rocket",@"rune",@"sable",@"saffron",@"salt",
+          @"sapphire",@"scarlet",@"scout",@"seal",@"sequoia",@"shadow",@"shore",@"silver",@"skiff",@"sky",
+          @"slate",@"solar",@"solstice",@"sonic",@"sparrow",@"spire",@"spring",@"spruce",@"stellar",@"stone",
+          @"storm",@"summit",@"swan",@"sylph",@"talon",@"terra",@"thistle",@"thunder",@"tide",@"tiger",
+          @"timber",@"topaz",@"trellis",@"trout",@"tulip",@"tundra",@"turtle",@"umber",@"valley",@"vector",
+          @"velvet",@"venue",@"verde",@"violet",@"vortex",@"walnut",@"wander",@"warm",@"weave",@"whale",
+          @"willow",@"wind",@"wisp",@"wolf",@"woodland",@"wren",@"yarrow",@"yield",@"zenith",@"zephyr"];
+  });
+  if (words<3) words=5;
+  uint8_t *buf=(uint8_t *)malloc((size_t)words*2); if (!buf) return @"";
+  if (SecRandomCopyBytes(kSecRandomDefault,(size_t)words*2,buf)!=errSecSuccess) { free(buf); return @""; }
+  NSMutableArray *pick=[NSMutableArray array];
+  NSUInteger n=lst.count;
+  for (NSInteger i=0;i<words;i++) {
+    uint16_t idx=((uint16_t)buf[i*2]<<8)|buf[i*2+1];
+    [pick addObject:lst[idx%n]];
+  }
+  free(buf);
+  return [pick componentsJoinedByString:@"-"];
+}
+// Rough entropy estimate: bits = log2(charset^length). Buckets: <60 weak, <80 fair, ≥80 strong.
+- (NSString *)passwordStrengthLabel:(NSString *)pw {
+  NSInteger cs=0;
+  BOOL lo=NO,up=NO,dg=NO,sy=NO;
+  for (NSUInteger i=0;i<pw.length;i++) {
+    unichar c=[pw characterAtIndex:i];
+    if (c>='a'&&c<='z') lo=YES;
+    else if (c>='A'&&c<='Z') up=YES;
+    else if (c>='0'&&c<='9') dg=YES;
+    else sy=YES;
+  }
+  if (lo) cs+=26; if (up) cs+=26; if (dg) cs+=10; if (sy) cs+=32;
+  if (cs<2) cs=26;
+  double bits=(double)pw.length*log2((double)cs);
+  if (bits>=100) return @"Excellent";
+  if (bits>=80)  return @"Strong";
+  if (bits>=60)  return @"Fair";
+  return @"Weak";
+}
+- (void)offerGenPassForHost:(NSString *)host webView:(WKWebView *)wv {
+  if (!wv) return;
+  BOOL prefPassphrase=[[NSUserDefaults standardUserDefaults] boolForKey:@"BBGenPassphrase"];
+  NSString *pw=prefPassphrase?[self generatePassphrase:5]:[self generateStrongPassword:20];
+  if (!pw.length) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Use a strong password?";
+  a.informativeText=[NSString stringWithFormat:@"%@\n\nStrength: %@\nBearBrowser will fill this and offer to save on submit.",
+    pw, [self passwordStrengthLabel:pw]];
+  [a addButtonWithTitle:@"Use Password"];
+  [a addButtonWithTitle:prefPassphrase?@"Random Chars Instead":@"Passphrase Instead"];
+  [a addButtonWithTitle:@"Not now"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc==NSAlertSecondButtonReturn) {
+      // Toggle preference and re-offer with the alternate style.
+      [[NSUserDefaults standardUserDefaults] setBool:!prefPassphrase forKey:@"BBGenPassphrase"];
+      self.activeTab.genpassOffered=NO;
+      [self offerGenPassForHost:host webView:wv];
+      return;
+    }
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *js=[NSString stringWithFormat:
+      @"if(typeof window.__bbApplyGenPass==='function')window.__bbApplyGenPass(%@);",
+      [self jsStringLiteral:pw]];
+    [wv evaluateJavaScript:js completionHandler:nil];
+  }];
+}
+- (void)fillCredential:(BBPasswordEntry *)e intoWebView:(WKWebView *)wv {
+  if (!e||!wv) return;
+  NSString *js=[NSString stringWithFormat:
+    @"if(typeof window.__bbAutofill==='function')window.__bbAutofill({user:%@,pass:%@});",
+    [self jsStringLiteral:e.username], [self jsStringLiteral:e.password]];
+  [wv evaluateJavaScript:js completionHandler:nil];
+}
+- (void)muteTab:(id)s {
+  BBTab *tab=self.activeTab; if (!tab) return;
+  tab.muted=!tab.muted;
+  BOOL muted=tab.muted;
+  [tab.webView evaluateJavaScript:
+    [NSString stringWithFormat:@"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",muted?@"true":@"false"]
+    completionHandler:nil];
+  [self reloadTabBar];
+}
+- (void)setAllTabsMuted:(BOOL)muted {
+  NSString *js=[NSString stringWithFormat:
+    @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=%@;})",muted?@"true":@"false"];
+  for (BBTab *tab in self.tabs) {
+    tab.muted=muted;
+    [tab.webView evaluateJavaScript:js completionHandler:nil];
+  }
+  [self reloadTabBar];
+}
+- (void)copyURLsOfAllTabs:(id)s {
+  NSMutableArray *lines=[NSMutableArray array];
+  for (BBTab *t in self.tabs) {
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (u.length && ![self isInternalURL:u]) [lines addObject:u];
+  }
+  if (!lines.count) { NSBeep(); return; }
+  NSString *joined=[lines componentsJoinedByString:@"\n"];
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:joined forType:NSPasteboardTypeString];
+  [self showToast:[NSString stringWithFormat:@"Copied %ld URL%@",(long)lines.count,lines.count==1?@"":@"s"]];
+}
+- (void)muteAllTabs:(id)s   { [self setAllTabsMuted:YES]; }
+- (void)unmuteAllTabs:(id)s { [self setAllTabsMuted:NO];  }
+- (void)contextSaveLink:(id)sender {
+  NSMenuItem *mi=(NSMenuItem *)sender; NSString *urlStr=mi.representedObject;
+  if (!urlStr.length) return;
+  NSURL *src=[NSURL URLWithString:urlStr]; if (!src) return;
+  NSURLRequest *req=[NSURLRequest requestWithURL:src];
+  // Route through WKWebView so it inherits cookies/UA + uses our download delegate.
+  [self.webView startDownloadUsingRequest:req completionHandler:^(WKDownload *dl){
+    dl.delegate=self;
+  }];
+}
+- (void)contextSearchImageOnLens:(NSMenuItem *)item {
+  NSString *u=item.representedObject; if (![u isKindOfClass:[NSString class]]||!u.length) return;
+  NSString *enc=[u stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *lens=[NSURL URLWithString:[NSString stringWithFormat:@"https://lens.google.com/uploadbyurl?url=%@",enc]];
+  if (!lens) return;
+  NSInteger prev=self.activeTabIndex;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:lens]];
+  (void)prev;
+}
+- (void)contextSearchImageOnTinEye:(NSMenuItem *)item {
+  NSString *u=item.representedObject; if (![u isKindOfClass:[NSString class]]||!u.length) return;
+  NSString *enc=[u stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *tin=[NSURL URLWithString:[NSString stringWithFormat:@"https://tineye.com/search?url=%@",enc]];
+  if (!tin) return;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:tin]];
+}
+- (void)contextSaveImage:(id)sender {
+  NSMenuItem *mi=(NSMenuItem *)sender; NSString *urlStr=mi.representedObject;
+  if (!urlStr.length) return;
+  NSURL *src=[NSURL URLWithString:urlStr]; if (!src) return;
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=src.lastPathComponent.length?src.lastPathComponent:@"image";
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK) return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+      NSData *data=[NSData dataWithContentsOfURL:src];
+      if (data) [data writeToURL:sp.URL atomically:YES];
+    });
+  }];
+}
+// ── Reading List ────────────────────────────────────────────────────────────
+// ── Saved workspaces (bookmarked tab sets) ────────────────────────────────────
+// ── Bookmarks HTML import/export (Netscape Bookmark File Format) ─────────────
+- (void)exportBookmarksHTML:(id)s {
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=@"bearbrowser-bookmarks.html";
+  sp.allowedFileTypes=@[@"html"];
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!sp.URL) return;
+    NSMutableString *html=[NSMutableString stringWithString:
+      @"<!DOCTYPE NETSCAPE-Bookmark-file-1>\n"
+       "<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n"
+       "<TITLE>BearBrowser Bookmarks</TITLE>\n"
+       "<H1>Bookmarks</H1>\n<DL><p>\n"];
+    // Group by folder (root first, then named folders).
+    NSMutableArray *root=[NSMutableArray array];
+    NSMutableDictionary<NSString *,NSMutableArray<BBBookmark *> *> *byFolder=[NSMutableDictionary dictionary];
+    for (BBBookmark *b in [BBBookmarksStore shared].items) {
+      if (b.folder.length) {
+        NSMutableArray *arr=byFolder[b.folder]; if (!arr) { arr=[NSMutableArray array]; byFolder[b.folder]=arr; }
+        [arr addObject:b];
+      } else [root addObject:b];
+    }
+    for (BBBookmark *b in root) {
+      [html appendFormat:@"  <DT><A HREF=\"%@\" ADD_DATE=\"%lld\">%@</A>\n",
+        [self htmlEscape:b.urlString], (long long)b.addedAt.timeIntervalSince1970,
+        [self htmlEscape:b.title.length?b.title:b.urlString]];
+    }
+    for (NSString *f in byFolder) {
+      [html appendFormat:@"  <DT><H3>%@</H3>\n  <DL><p>\n",[self htmlEscape:f]];
+      for (BBBookmark *b in byFolder[f]) {
+        [html appendFormat:@"    <DT><A HREF=\"%@\" ADD_DATE=\"%lld\">%@</A>\n",
+          [self htmlEscape:b.urlString], (long long)b.addedAt.timeIntervalSince1970,
+          [self htmlEscape:b.title.length?b.title:b.urlString]];
+      }
+      [html appendString:@"  </DL><p>\n"];
+    }
+    [html appendString:@"</DL><p>\n"];
+    [html writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self showToast:@"Bookmarks exported"];
+  }];
+}
+- (NSInteger)importChromeBookmarkNode:(NSDictionary *)node folder:(NSString *)folder {
+  if (![node isKindOfClass:[NSDictionary class]]) return 0;
+  NSString *type=node[@"type"];
+  NSInteger added=0;
+  if ([type isEqualToString:@"url"]) {
+    NSString *u=node[@"url"], *t=node[@"name"];
+    if ([u isKindOfClass:[NSString class]] && u.length && ![[BBBookmarksStore shared] isBookmarked:u]) {
+      [[BBBookmarksStore shared] addTitle:t?:u url:u folder:folder];
+      added=1;
+    }
+  } else if ([type isEqualToString:@"folder"]) {
+    NSString *name=node[@"name"];
+    NSArray *children=node[@"children"];
+    // Flatten one level of nesting to fit our single-level model.
+    NSString *sub=[name isKindOfClass:[NSString class]]?name:folder;
+    for (NSDictionary *c in children) added+=[self importChromeBookmarkNode:c folder:sub];
+  }
+  return added;
+}
+- (void)importBookmarksFromChrome:(id)s {
+  NSString *path=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Google/Chrome/Default/Bookmarks"];
+  NSData *d=[NSData dataWithContentsOfFile:path];
+  if (!d.length) { [self showToast:@"No Chrome bookmarks file found"]; return; }
+  NSDictionary *root=[NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+  NSDictionary *roots=root[@"roots"]; if (![roots isKindOfClass:[NSDictionary class]]) { [self showToast:@"Unrecognised Chrome format"]; return; }
+  NSInteger added=0;
+  for (NSString *k in @[@"bookmark_bar",@"other",@"synced"]) {
+    NSDictionary *sec=roots[k]; if (![sec isKindOfClass:[NSDictionary class]]) continue;
+    added+=[self importChromeBookmarkNode:sec folder:@""];
+  }
+  [self reloadBookmarksBar];
+  [self showToast:[NSString stringWithFormat:@"Imported %ld from Chrome",(long)added]];
+}
+- (void)importBookmarksFromSafari:(id)s {
+  // Safari's Bookmarks.plist is protected by TCC (Full Disk Access) on modern
+  // macOS. Attempt to read; on permission error, tell the user to use HTML export.
+  NSString *path=[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Safari/Bookmarks.plist"];
+  NSError *err=nil;
+  NSData *d=[NSData dataWithContentsOfFile:path options:0 error:&err];
+  if (!d.length) {
+    [self showToast:@"Safari bookmarks locked — File ▸ Export Bookmarks in Safari, then Import HTML"];
+    return;
+  }
+  NSDictionary *plist=[NSPropertyListSerialization propertyListWithData:d options:0 format:nil error:nil];
+  if (![plist isKindOfClass:[NSDictionary class]]) { [self showToast:@"Unrecognised Safari format"]; return; }
+  NSInteger added=[self importSafariNode:plist folder:@""];
+  [self reloadBookmarksBar];
+  [self showToast:[NSString stringWithFormat:@"Imported %ld from Safari",(long)added]];
+}
+- (NSInteger)importSafariNode:(NSDictionary *)node folder:(NSString *)folder {
+  if (![node isKindOfClass:[NSDictionary class]]) return 0;
+  NSString *type=node[@"WebBookmarkType"];
+  NSInteger added=0;
+  if ([type isEqualToString:@"WebBookmarkTypeLeaf"]) {
+    NSString *u=node[@"URLString"];
+    NSDictionary *uri=node[@"URIDictionary"];
+    NSString *t=[uri isKindOfClass:[NSDictionary class]]?uri[@"title"]:nil;
+    if (u.length && ![[BBBookmarksStore shared] isBookmarked:u]) {
+      [[BBBookmarksStore shared] addTitle:t?:u url:u folder:folder]; added=1;
+    }
+  } else if ([type isEqualToString:@"WebBookmarkTypeList"]) {
+    NSString *name=node[@"Title"];
+    NSString *sub=[name isKindOfClass:[NSString class]]&&name.length?name:folder;
+    for (NSDictionary *c in node[@"Children"]) added+=[self importSafariNode:c folder:sub];
+  }
+  return added;
+}
+- (void)importBookmarksHTML:(id)s {
+  NSOpenPanel *op=[NSOpenPanel openPanel];
+  op.allowedFileTypes=@[@"html",@"htm"];
+  op.canChooseFiles=YES; op.canChooseDirectories=NO;
+  [op beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!op.URL) return;
+    NSString *html=[NSString stringWithContentsOfURL:op.URL encoding:NSUTF8StringEncoding error:nil];
+    if (!html.length) { [self showToast:@"Import failed"]; return; }
+    // Extract <H3>Folder</H3> blocks and <A HREF>links</A>. Regex is intentionally
+    // loose — Chrome and Firefox both emit slightly different attribute orders.
+    NSRegularExpression *rxA=[NSRegularExpression regularExpressionWithPattern:@"<a\\s+[^>]*href=\"([^\"]+)\"[^>]*>([^<]*)</a>" options:NSRegularExpressionCaseInsensitive error:nil];
+    NSRegularExpression *rxH=[NSRegularExpression regularExpressionWithPattern:@"<h3[^>]*>([^<]*)</h3>" options:NSRegularExpressionCaseInsensitive error:nil];
+    NSArray *lines=[html componentsSeparatedByString:@"\n"];
+    NSString *curFolder=@"Imported"; NSInteger added=0;
+    for (NSString *line in lines) {
+      NSTextCheckingResult *hm=[rxH firstMatchInString:line options:0 range:NSMakeRange(0,line.length)];
+      if (hm) {
+        NSString *f=[[line substringWithRange:[hm rangeAtIndex:1]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (f.length) curFolder=f;
+        continue;
+      }
+      NSTextCheckingResult *am=[rxA firstMatchInString:line options:0 range:NSMakeRange(0,line.length)];
+      if (am) {
+        NSString *u=[line substringWithRange:[am rangeAtIndex:1]];
+        NSString *t=[line substringWithRange:[am rangeAtIndex:2]];
+        u=[u stringByReplacingOccurrencesOfString:@"&amp;" withString:@"&"];
+        t=[t stringByReplacingOccurrencesOfString:@"&amp;" withString:@"&"];
+        if (!u.length) continue;
+        if ([[BBBookmarksStore shared] isBookmarked:u]) continue;
+        [[BBBookmarksStore shared] addTitle:t?:u url:u folder:curFolder];
+        added++;
+      }
+    }
+    [self reloadBookmarksBar];
+    [self showToast:[NSString stringWithFormat:@"Imported %ld bookmark%@",(long)added,added==1?@"":@"s"]];
+  }];
+}
+- (void)saveTabsAsWorkspace:(id)s {
+  NSMutableArray *urls=[NSMutableArray array];
+  for (BBTab *t in self.tabs) {
+    if (t.isPrivate) continue;
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (u.length && ![self isInternalURL:u]) [urls addObject:u];
+  }
+  if (!urls.count) { NSBeep(); return; }
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Save Workspace";
+  a.informativeText=[NSString stringWithFormat:@"Save %ld open tab%@ as a named workspace you can reopen later.",(long)urls.count,urls.count==1?@"":@"s"];
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.placeholderString=@"Workspace name"; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Save"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *name=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!name.length) return;
+    NSMutableDictionary *ws=[[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"]?:@{} mutableCopy];
+    ws[name]=urls;
+    [[NSUserDefaults standardUserDefaults] setObject:ws forKey:@"BBWorkspaces"];
+  }];
+}
+- (void)openWorkspaceByName:(NSMenuItem *)mi {
+  NSString *name=mi.representedObject; if (!name.length) return;
+  NSDictionary *ws=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"];
+  NSArray *urls=ws[name]; if (![urls isKindOfClass:[NSArray class]]||!urls.count) return;
+  BOOL priv=self.activeTab.isPrivate;
+  for (NSString *u in urls) {
+    NSURL *nu=[NSURL URLWithString:u]; if (!nu) continue;
+    [self addTabPrivate:priv];
+    [self.webView loadRequest:[NSURLRequest requestWithURL:nu]];
+  }
+}
+- (void)deleteWorkspaceByName:(NSMenuItem *)mi {
+  NSString *name=mi.representedObject; if (!name.length) return;
+  NSMutableDictionary *ws=[[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"]?:@{} mutableCopy];
+  [ws removeObjectForKey:name];
+  [[NSUserDefaults standardUserDefaults] setObject:ws forKey:@"BBWorkspaces"];
+}
+- (void)exportReadingList:(id)s {
+  NSArray<BBReadingItem *> *items=[BBReadingList shared].items;
+  if (!items.count) { NSBeep(); return; }
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=@"bearbrowser-reading-list.html";
+  sp.allowedFileTypes=@[@"html"];
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!sp.URL) return;
+    NSMutableString *html=[NSMutableString stringWithString:
+      @"<!doctype html><meta charset=utf-8><title>Reading List</title>"
+       "<style>body{font:14px/1.6 -apple-system,BlinkMacSystemFont,sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem;}"
+       "li{margin:.4em 0}a{text-decoration:none;color:#0a58ca}a:hover{text-decoration:underline}.read{color:#888;text-decoration:line-through}</style>"
+       "<h1>Reading List</h1><ul>\n"];
+    for (BBReadingItem *it in items) {
+      [html appendFormat:@"<li class=\"%@\"><a href=\"%@\">%@</a></li>\n",
+        it.read?@"read":@"",
+        [self htmlEscape:it.urlString],
+        [self htmlEscape:it.title.length?it.title:it.urlString]];
+    }
+    [html appendString:@"</ul>"];
+    [html writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self showToast:@"Reading list exported"];
+  }];
+}
+- (void)addToReadingList:(id)s {
+  NSString *url=self.webView.URL.absoluteString; NSString *title=self.activeTab.title?:url;
+  if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
+  [[BBReadingList shared] addTitle:title url:url];
+  [self showStatus:@"Added to Reading List"];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(1.3*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    if ([self.statusBar.stringValue isEqualToString:@"Added to Reading List"]) self.statusBar.hidden=YES;
+  });
+}
+- (void)showReadingList:(id)s {
+  CGFloat W=640,Hh=460;
+  NSWindow *rw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  rw.releasedWhenClosed=NO; rw.title=@"Reading List"; [rw center];
+  NSView *cv=rw.contentView;
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-48)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=30;
+  NSTableColumn *cr=[[NSTableColumn alloc]initWithIdentifier:@"read"];  cr.title=@"";      cr.width=22;
+  NSTableColumn *ct=[[NSTableColumn alloc]initWithIdentifier:@"title"]; ct.title=@"Title"; ct.width=300;
+  NSTableColumn *cu=[[NSTableColumn alloc]initWithIdentifier:@"url"];   cu.title=@"URL";   cu.width=300;
+  [tv addTableColumn:cr]; [tv addTableColumn:ct]; [tv addTableColumn:cu];
+  sv.documentView=tv; [cv addSubview:sv];
+  BBReadingListDS *ds=[[BBReadingListDS alloc]initWithWebView:self.webView window:rw tableView:tv];
+  tv.dataSource=ds; tv.delegate=ds; tv.target=ds; tv.doubleAction=@selector(openSelected);
+  objc_setAssociatedObject(rw,@"rlds",ds,OBJC_ASSOCIATION_RETAIN);
+  [tv reloadData];
+  NSButton *open=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,90,30)];
+  open.title=@"Open"; open.bezelStyle=NSBezelStyleRounded; open.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  open.target=ds; open.action=@selector(openSelected); [cv addSubview:open];
+  NSButton *toggle=[[NSButton alloc]initWithFrame:NSMakeRect(108,10,140,30)];
+  toggle.title=@"Mark Read/Unread"; toggle.bezelStyle=NSBezelStyleRounded; toggle.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  toggle.target=ds; toggle.action=@selector(toggleReadSelected); [cv addSubview:toggle];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(254,10,90,30)];
+  rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *exp=[[NSButton alloc]initWithFrame:NSMakeRect(350,10,90,30)];
+  exp.title=@"Export…"; exp.bezelStyle=NSBezelStyleRounded; exp.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  exp.target=self; exp.action=@selector(exportReadingList:); [cv addSubview:exp];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=rw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:rw completionHandler:nil];
+}
+- (void)bookmarkAllTabs:(id)s {
+  NSInteger added=0;
+  for (BBTab *t in self.tabs) {
+    NSString *url=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!url.length||[self isInternalURL:url]) continue;
+    if (![[BBBookmarksStore shared] isBookmarked:url]) {
+      [[BBBookmarksStore shared] addTitle:t.title.length?t.title:url url:url];
+      added++;
+    }
+  }
+  [[BBBookmarksStore shared] save];
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"%ld tab%@ bookmarked",(long)added,added==1?@"":@"s"];
+  [a addButtonWithTitle:@"OK"]; [a runModal];
+}
 
 // ── Bookmarks ─────────────────────────────────────────────────────────────────
 - (void)addBookmark:(id)s {
   NSString *url=self.webView.URL.absoluteString; NSString *title=self.activeTab.title?:url;
   if (!url.length||[url hasPrefix:@"bearbrowser://"]) return;
   NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Add Bookmark";
-  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,300,24)];
-  tf.stringValue=title; tf.font=[NSFont systemFontOfSize:13]; a.accessoryView=tf;
+  NSView *acc=[[NSView alloc]initWithFrame:NSMakeRect(0,0,320,82)];
+  NSTextField *titleLbl=[NSTextField labelWithString:@"Name:"];
+  titleLbl.frame=NSMakeRect(0,52,60,20); titleLbl.alignment=NSTextAlignmentRight; [acc addSubview:titleLbl];
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(64,50,256,24)];
+  tf.stringValue=title; tf.font=[NSFont systemFontOfSize:13]; [acc addSubview:tf];
+  NSTextField *folderLbl=[NSTextField labelWithString:@"Folder:"];
+  folderLbl.frame=NSMakeRect(0,18,60,20); folderLbl.alignment=NSTextAlignmentRight; [acc addSubview:folderLbl];
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(64,16,256,24)];
+  cb.usesDataSource=NO; cb.completes=YES; cb.placeholderString=@"(bookmarks bar root)";
+  [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  [acc addSubview:cb];
+  a.accessoryView=acc;
   [a addButtonWithTitle:@"Add"]; [a addButtonWithTitle:@"Cancel"];
   [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
     if(rc!=NSAlertFirstButtonReturn) return;
-    [[BBBookmarksStore shared] addTitle:tf.stringValue?:title url:url];
+    NSString *folder=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [[BBBookmarksStore shared] addTitle:tf.stringValue?:title url:url folder:folder];
     [self reloadBookmarksBar];
   }];
 }
 - (void)toggleBookmarksBar:(id)s {
   self.bookmarksBarVisible=!self.bookmarksBarVisible;
   self.bookmarksBar.hidden=!self.bookmarksBarVisible;
+  [[NSUserDefaults standardUserDefaults] setBool:self.bookmarksBarVisible forKey:@"BBShowBookmarksBar"];
+  if (self.bookmarksBarVisible) [self reloadBookmarksBar];
   [self resizeWebViewForCurrentTab];
 }
 - (void)reloadBookmarksBar {
   for (NSView *v in self.bookmarksBar.subviews.copy) [v removeFromSuperview];
   CGFloat x=8;
-  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+  CGFloat barW=self.bookmarksBar.bounds.size.width;
+  CGFloat overflowReserve=32;
+  NSArray<BBBookmark *> *all=[BBBookmarksStore shared].items;
+  // Folder buttons first (alphabetical isn't ideal; use first-seen order from store).
+  NSArray<NSString *> *folders=[[BBBookmarksStore shared] folders];
+  NSMutableArray<NSString *> *overflowFolders=[NSMutableArray array];
+  for (NSString *f in folders) {
+    NSButton *btn=[[NSButton alloc]initWithFrame:NSMakeRect(x,3,0,24)];
+    NSImage *folderImg=[NSImage imageWithSystemSymbolName:@"folder" accessibilityDescription:@"Folder"];
+    [folderImg setTemplate:YES];
+    btn.image=folderImg; btn.imagePosition=NSImageLeft;
+    btn.title=f; btn.font=[NSFont systemFontOfSize:11]; btn.bezelStyle=NSBezelStyleRoundRect;
+    btn.target=self; btn.action=@selector(bookmarkFolderClicked:);
+    objc_setAssociatedObject(btn,"BBFolderName",f,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSMenu *fm=[[NSMenu alloc]initWithTitle:@""];
+    NSMenuItem *oa=[fm addItemWithTitle:@"Open All in New Tabs" action:@selector(bookmarkFolderOpenAll:) keyEquivalent:@""];
+    oa.target=self; oa.representedObject=f;
+    [fm addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *rn=[fm addItemWithTitle:@"Rename Folder…" action:@selector(bookmarkFolderRename:) keyEquivalent:@""];
+    rn.target=self; rn.representedObject=f;
+    NSMenuItem *dl=[fm addItemWithTitle:@"Delete Folder (remove bookmarks)" action:@selector(bookmarkFolderDelete:) keyEquivalent:@""];
+    dl.target=self; dl.representedObject=f;
+    NSMenuItem *ur=[fm addItemWithTitle:@"Unfile Folder (send to root)" action:@selector(bookmarkFolderUnfile:) keyEquivalent:@""];
+    ur.target=self; ur.representedObject=f;
+    btn.menu=fm;
+    [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+10,24);
+    if (x+btn.frame.size.width > barW-overflowReserve) { [overflowFolders addObject:f]; continue; }
+    [self.bookmarksBar addSubview:btn];
+    x+=btn.frame.size.width+4;
+  }
+  // Root (no-folder) bookmarks next.
+  NSMutableArray<BBBookmark *> *root=[NSMutableArray array];
+  for (BBBookmark *b in all) if (!b.folder.length) [root addObject:b];
+  NSInteger shownRoot=0;
+  for (BBBookmark *b in root) {
     NSButton *btn=[[NSButton alloc]initWithFrame:NSMakeRect(x,3,0,24)];
     btn.title=b.title.length?b.title:b.urlString;
     btn.font=[NSFont systemFontOfSize:11]; btn.bezelStyle=NSBezelStyleRoundRect;
     btn.target=self; btn.action=@selector(bookmarkButtonClicked:);
-    [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+8,24);
-    btn.toolTip=b.urlString; [self.bookmarksBar addSubview:btn];
-    x+=btn.frame.size.width+4;
-    if(x>self.bookmarksBar.bounds.size.width-8) break;
+    NSImage *fav=[self faviconForBookmarkURL:b.urlString sync:NO];
+    if (fav) { [fav setSize:NSMakeSize(14,14)]; btn.image=fav; btn.imagePosition=NSImageLeft; }
+    [btn sizeToFit]; btn.frame=NSMakeRect(x,3,btn.frame.size.width+(fav?12:8),24);
+    btn.toolTip=b.urlString;
+    // Build the right-click menu eagerly so NSButton's built-in
+    // contextual-menu trigger (right-click / control-click) picks it up.
+    NSMenu *menu=[[NSMenu alloc]initWithTitle:@""];
+    NSMenuItem *(^addItem)(NSString*,SEL)=^NSMenuItem*(NSString*t,SEL a){
+      NSMenuItem *it=[menu addItemWithTitle:t action:a keyEquivalent:@""];
+      it.target=self; it.representedObject=b.urlString; return it;
+    };
+    addItem(@"Open in New Tab",@selector(bookmarkOpenInNewTab:));
+    addItem(@"Open in New Window",@selector(bookmarkOpenInNewWindow:));
+    [menu addItem:[NSMenuItem separatorItem]];
+    addItem(@"Copy Link",@selector(bookmarkCopyLink:));
+    addItem(@"Move to Folder…",@selector(bookmarkMoveToFolder:));
+    [menu addItem:[NSMenuItem separatorItem]];
+    addItem(@"Delete",@selector(bookmarkDelete:));
+    btn.menu=menu;
+    if (x+btn.frame.size.width > barW-overflowReserve) break;
+    [self.bookmarksBar addSubview:btn];
+    x+=btn.frame.size.width+4; shownRoot++;
   }
+  BOOL anyOverflow=(overflowFolders.count>0)||(shownRoot<(NSInteger)root.count);
+  if (anyOverflow) {
+    NSButton *more=[[NSButton alloc]initWithFrame:NSMakeRect(barW-28,3,22,24)];
+    more.autoresizingMask=NSViewMinXMargin;
+    NSImage *ch=[NSImage imageWithSystemSymbolName:@"chevron.right.2" accessibilityDescription:@"More bookmarks"];
+    [ch setTemplate:YES]; more.image=ch; more.imagePosition=NSImageOnly;
+    more.bezelStyle=NSBezelStyleToolbar; more.bordered=NO;
+    more.toolTip=@"More bookmarks";
+    more.target=self; more.action=@selector(showBookmarksOverflow:);
+    objc_setAssociatedObject(more,"BBOverflowFolders",overflowFolders,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    more.tag=shownRoot;
+    [self.bookmarksBar addSubview:more];
+  }
+}
+- (void)bookmarkFolderOpenAll:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  BOOL priv=self.activeTab.isPrivate;
+  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+    if (![b.folder isEqualToString:folder]) continue;
+    NSURL *u=[NSURL URLWithString:b.urlString]; if (!u) continue;
+    [self addTabPrivate:priv];
+    [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  }
+}
+- (void)bookmarkFolderRename:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Rename Folder";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.stringValue=folder; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Rename"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSString *newName=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (!newName.length||[newName isEqualToString:folder]) return;
+  [[BBBookmarksStore shared] renameFolder:folder to:newName];
+  [self reloadBookmarksBar];
+}
+- (void)bookmarkFolderDelete:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Delete folder “%@” and its bookmarks?",folder];
+  [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  [[BBBookmarksStore shared] removeFolderAndBookmarks:folder];
+  [self reloadBookmarksBar]; [self updateStarButton];
+}
+- (void)bookmarkFolderUnfile:(NSMenuItem *)mi {
+  NSString *folder=mi.representedObject; if (!folder.length) return;
+  [[BBBookmarksStore shared] renameFolder:folder to:@""]; // "" = root
+  [self reloadBookmarksBar];
+}
+- (void)bookmarkFolderClicked:(NSButton *)btn {
+  NSString *folder=objc_getAssociatedObject(btn,"BBFolderName");
+  if (!folder.length) return;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:folder];
+  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+    if (![b.folder isEqualToString:folder]) continue;
+    NSMenuItem *mi=[m addItemWithTitle:b.title.length?b.title:b.urlString
+                                action:@selector(bookmarkOverflowSelected:) keyEquivalent:@""];
+    mi.target=self; mi.representedObject=b.urlString; mi.toolTip=b.urlString;
+  }
+  if (!m.itemArray.count)
+    [m addItemWithTitle:@"(empty)" action:nil keyEquivalent:@""].enabled=NO;
+  [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+}
+- (void)showBookmarksOverflow:(NSButton *)btn {
+  NSArray<BBBookmark *> *all=[BBBookmarksStore shared].items;
+  NSArray<NSString *> *overflowFolders=objc_getAssociatedObject(btn,"BBOverflowFolders")?:@[];
+  NSMutableArray<BBBookmark *> *root=[NSMutableArray array];
+  for (BBBookmark *b in all) if (!b.folder.length) [root addObject:b];
+  NSInteger startIdx=btn.tag;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  // Hidden folders first as submenus, then overflowing root bookmarks.
+  for (NSString *f in overflowFolders) {
+    NSMenuItem *fi=[m addItemWithTitle:f action:nil keyEquivalent:@""];
+    NSMenu *sub=[[NSMenu alloc]initWithTitle:f];
+    for (BBBookmark *b in all) {
+      if (![b.folder isEqualToString:f]) continue;
+      NSMenuItem *mi=[sub addItemWithTitle:b.title.length?b.title:b.urlString
+                                    action:@selector(bookmarkOverflowSelected:) keyEquivalent:@""];
+      mi.target=self; mi.representedObject=b.urlString; mi.toolTip=b.urlString;
+    }
+    fi.submenu=sub;
+  }
+  if (overflowFolders.count && startIdx<(NSInteger)root.count) [m addItem:[NSMenuItem separatorItem]];
+  for (NSInteger k=startIdx;k<(NSInteger)root.count;k++) {
+    BBBookmark *b=root[k];
+    NSMenuItem *mi=[m addItemWithTitle:b.title.length?b.title:b.urlString
+                                action:@selector(bookmarkOverflowSelected:) keyEquivalent:@""];
+    mi.target=self; mi.representedObject=b.urlString; mi.toolTip=b.urlString;
+  }
+  [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+}
+- (void)bookmarkOverflowSelected:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  NSURL *url=[NSURL URLWithString:u]; if (!url) return;
+  [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
 }
 - (void)bookmarkButtonClicked:(NSButton *)btn {
   NSString *url=btn.toolTip; if(!url) return;
+  NSEvent *cur=NSApp.currentEvent;
+  NSEventModifierFlags m=cur.modifierFlags;
+  // Right-modifier-click → context menu (Chrome parity).
+  if (cur && (m & NSEventModifierFlagControl)) { [self showBookmarkBarItemMenu:btn]; return; }
   NSURL *u=[NSURL URLWithString:url]; if(!u) return;
+  // ⌘-click / ⌘⇧-click open in new tab (background / foreground) like link clicks.
+  if (cur && (m & NSEventModifierFlagCommand)) {
+    NSInteger prev=self.activeTabIndex;
+    [self addTabPrivate:self.activeTab.isPrivate];
+    [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+    if (!(m & NSEventModifierFlagShift)) [self tabItemDidSelect:prev];
+    return;
+  }
+  if (cur && (m & NSEventModifierFlagShift)) {
+    BBDelegate *w=[[BBDelegate alloc]init];
+    NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+    [w applicationDidFinishLaunching:dummy];
+    [w.webView loadRequest:[NSURLRequest requestWithURL:u]];
+    return;
+  }
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)showBookmarkBarItemMenu:(NSButton *)btn {
+  NSString *url=btn.toolTip; if (!url) return;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *o=[m addItemWithTitle:@"Open in New Tab"   action:@selector(bookmarkOpenInNewTab:)    keyEquivalent:@""];
+  o.target=self; o.representedObject=url;
+  NSMenuItem *w=[m addItemWithTitle:@"Open in New Window" action:@selector(bookmarkOpenInNewWindow:) keyEquivalent:@""];
+  w.target=self; w.representedObject=url;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *c=[m addItemWithTitle:@"Copy Link" action:@selector(bookmarkCopyLink:) keyEquivalent:@""];
+  c.target=self; c.representedObject=url;
+  NSMenuItem *mv=[m addItemWithTitle:@"Move to Folder…" action:@selector(bookmarkMoveToFolder:) keyEquivalent:@""];
+  mv.target=self; mv.representedObject=url;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *rm=[m addItemWithTitle:@"Delete" action:@selector(bookmarkDelete:) keyEquivalent:@""];
+  rm.target=self; rm.representedObject=url;
+  [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,NSHeight(btn.bounds)) inView:btn];
+}
+- (void)bookmarkOpenInNewTab:(NSMenuItem *)mi {
+  NSURL *u=[NSURL URLWithString:mi.representedObject]; if (!u) return;
+  NSInteger prev=self.activeTabIndex;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+  if (prev<self.activeTabIndex) [self tabItemDidSelect:prev]; // background like Chrome
+}
+- (void)bookmarkOpenInNewWindow:(NSMenuItem *)mi {
+  NSURL *u=[NSURL URLWithString:mi.representedObject]; if (!u) return;
+  BBDelegate *w=[[BBDelegate alloc]init];
+  NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+  [w applicationDidFinishLaunching:dummy];
+  [w.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)bookmarkCopyLink:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:u forType:NSPasteboardTypeString];
+}
+- (void)bookmarkDelete:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  [[BBBookmarksStore shared] removeURL:u];
+  [self reloadBookmarksBar]; [self updateStarButton];
+}
+- (void)bookmarkMoveToFolder:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"Move to Folder";
+  a.informativeText=@"Leave blank for the bookmarks-bar root.";
+  NSComboBox *cb=[[NSComboBox alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  cb.usesDataSource=NO; cb.completes=YES;
+  for (BBBookmark *b in [BBBookmarksStore shared].items) if ([b.urlString isEqualToString:u]) { cb.stringValue=b.folder?:@""; break; }
+  [cb addItemWithObjectValue:@""];
+  for (NSString *f in [[BBBookmarksStore shared] folders]) [cb addItemWithObjectValue:f];
+  a.accessoryView=cb;
+  [a addButtonWithTitle:@"Move"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSString *target=[cb.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  [[BBBookmarksStore shared] setFolder:target forURL:u];
+  [self reloadBookmarksBar];
 }
 
 // ── History panel ─────────────────────────────────────────────────────────────
@@ -3964,12 +7050,13 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   NSWindow *hw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,680,500)
     styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
     backing:NSBackingStoreBuffered defer:YES];
+  hw.releasedWhenClosed=NO;
   hw.title=@"History"; [hw center];
   NSView *cv=hw.contentView;
   NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,hw.contentView.bounds.size.height-44,656,28)];
   sf.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
   sf.placeholderString=@"Search history"; [cv addSubview:sf];
-  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,0,680,hw.contentView.bounds.size.height-56)];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,44,680,hw.contentView.bounds.size.height-100)];
   sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
   NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=36;
   NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"title"]; c1.title=@"Title"; c1.width=280;
@@ -3977,18 +7064,300 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
   NSTableColumn *c3=[[NSTableColumn alloc]initWithIdentifier:@"when"];  c3.title=@"When";  c3.width=100;
   [tv addTableColumn:c1]; [tv addTableColumn:c2]; [tv addTableColumn:c3];
   sv.documentView=tv; [cv addSubview:sv];
-  // Use a simple block-based datasource via associated objects
-  NSMutableArray<BBHistoryEntry *> *shown=[[BBHistoryStore shared].entries.reverseObjectEnumerator.allObjects mutableCopy];
+  // Newest-first, deduplicated by URL (keep the most recent visit per site) so the
+  // list reads like Chrome's history rather than a raw per-visit log full of repeats.
+  NSMutableArray<BBHistoryEntry *> *shown=[NSMutableArray array];
+  NSMutableSet<NSString *> *seen=[NSMutableSet set];
+  for (BBHistoryEntry *e in [BBHistoryStore shared].entries.reverseObjectEnumerator) {
+    if (!e.urlString.length || [seen containsObject:e.urlString]) continue;
+    [seen addObject:e.urlString]; [shown addObject:e];
+  }
   __block NSMutableArray<BBHistoryEntry *> *filtered=[shown mutableCopy];
   // Simple datasource object
   BBHistoryPanelDS *ds=[[BBHistoryPanelDS alloc]initWithEntries:filtered tableView:tv searchField:sf window:hw webView:self.webView];
   tv.dataSource=ds; tv.delegate=ds; sf.delegate=ds;
   objc_setAssociatedObject(hw,@"ds",ds,OBJC_ASSOCIATION_RETAIN);
   [tv reloadData];
+  NSButton *del=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,120,30)];
+  del.title=@"Delete Entry"; del.bezelStyle=NSBezelStyleRounded; del.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  del.target=ds; del.action=@selector(deleteSelected); [cv addSubview:del];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(hw.contentView.bounds.size.width-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=hw; done.action=@selector(performClose:); [cv addSubview:done];
   [self.window beginSheet:hw completionHandler:nil];
 }
 
+- (void)clearHistory:(id)s {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Clear Browsing Data?";
+  a.informativeText=@"Removes history, cookies, cached images, and site data. This cannot be undone.";
+  [a addButtonWithTitle:@"Clear Data"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    [[BBHistoryStore shared] clearAll];
+    // Also wipe WebKit's persistent store: cookies, disk cache, local storage, etc.
+    NSSet *all=[WKWebsiteDataStore allWebsiteDataTypes];
+    [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:all modifiedSince:[NSDate distantPast] completionHandler:^{}];
+  }];
+}
+- (void)setCurrentPageAsHome:(id)s {
+  NSURL *u=self.webView.URL;
+  if (!u||[self isInternalURL:u.absoluteString]) { [self showToast:@"Cannot use this page as home"]; return; }
+  [[NSUserDefaults standardUserDefaults] setObject:u.absoluteString forKey:@"BBHomepage"];
+  for (BBDelegate *w in gBBWindowControllers) w.homeButton.hidden=NO;
+  [self showToast:[NSString stringWithFormat:@"Home set to %@",u.host?:u.absoluteString]];
+}
+- (void)goHome:(id)s {
+  NSString *hp=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBHomepage"];
+  if (hp.length) {
+    if (!([hp hasPrefix:@"http://"]||[hp hasPrefix:@"https://"]||[hp hasPrefix:@"file://"]))
+      hp=[@"https://" stringByAppendingString:hp];
+    NSURL *u=[NSURL URLWithString:hp];
+    if (u) { [self.webView loadRequest:[NSURLRequest requestWithURL:u]]; return; }
+  }
+  [self loadStartPage:self.webView];
+}
+- (void)openBearHelp:(id)s { [self addTabPrivate:NO]; [self loadStartPage:self.webView]; }
+- (void)reportIssue:(id)s {
+  NSURL *u=[NSURL URLWithString:@"https://github.com/SourceOS-Linux/BearBrowser/issues/new"];
+  if (u) [[NSWorkspace sharedWorkspace] openURL:u];
+}
+- (void)showKeyboardShortcuts:(id)s {
+  // One-shot, scrollable cheat sheet. Lives in NSAlert so it's modal-light.
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"BearBrowser Keyboard Shortcuts";
+  a.informativeText=
+    @"Navigation\n"
+    @"  ⌘L / ⌘K        Focus address bar\n"
+    @"  ⌘[ / ⌘]        Back / Forward\n"
+    @"  ⌘R              Reload    ⇧⌘R  Hard reload    ⌘.  Stop\n"
+    @"  ⇧⌘H            Home\n\n"
+    @"Tabs\n"
+    @"  ⌘T              New tab    ⇧⌘T  Reopen closed tab\n"
+    @"  ⌘W              Close tab    ⇧⌘W  Close window\n"
+    @"  ⌃⇥ / ⇧⌃⇥      Next / Previous tab\n"
+    @"  ⌘1…⌘8 / ⌘9   Jump to tab / last tab\n"
+    @"  ⇧⌘A            Tab search\n"
+    @"  ⇧⌃[ / ⇧⌃]    Move tab left / right\n\n"
+    @"View\n"
+    @"  ⌘+ / ⌘− / ⌘0  Zoom in / out / reset    ⌃scroll Zoom\n"
+    @"  ⇧⌘B            Toggle bookmarks bar\n"
+    @"  ⌃⌘F             Full screen\n\n"
+    @"Find / Edit\n"
+    @"  ⌘F              Find on page    ⌘G / ⇧⌘G  Next / Previous\n"
+    @"  ⇧⌘C            Copy current URL\n"
+    @"  ⇧⌘V            Paste and go\n\n"
+    @"Windows / Files\n"
+    @"  ⌘N              New window    ⇧⌘N  Incognito window\n"
+    @"  ⌘O              Open file    ⌘S  Save page    ⌘P  Print\n\n"
+    @"History / Downloads\n"
+    @"  ⌘Y              Show history    ⇧⌘J  Downloads\n"
+    @"  ⇧⌘⌫           Clear browsing data";
+  [a addButtonWithTitle:@"Close"];
+  [a beginSheetModalForWindow:self.window completionHandler:nil];
+}
+// Reader mode: extract the main article (best-effort, by paragraph density) and
+// render it in our OWN clean template, so the layout is fully under our control.
+// ── Translation ──────────────────────────────────────────────────────────────
+// We open Google Translate's web translator in a new tab with the page URL
+// as the source. No API key, no third-party SDK; user's browsing language
+// list governs whether we offer the prompt. Override the translator service
+// via the BBTranslateURL default (%@ = source URL).
+- (NSArray<NSString *> *)preferredLanguages {
+  NSArray *saved=[[NSUserDefaults standardUserDefaults] stringArrayForKey:@"BBTranslateNativeLangs"];
+  if (saved.count) return saved;
+  NSMutableArray *out=[NSMutableArray array];
+  for (NSString *l in [NSLocale preferredLanguages]) {
+    NSString *prefix=[l componentsSeparatedByString:@"-"].firstObject.lowercaseString;
+    if (prefix.length && ![out containsObject:prefix]) [out addObject:prefix];
+  }
+  if (!out.count) [out addObject:@"en"];
+  return out;
+}
+- (BOOL)isNativeLanguage:(NSString *)htmlLang {
+  if (!htmlLang.length) return YES;
+  NSString *prefix=[htmlLang componentsSeparatedByString:@"-"].firstObject.lowercaseString;
+  for (NSString *l in [self preferredLanguages]) if ([prefix isEqualToString:l]) return YES;
+  return NO;
+}
+- (void)maybeOfferTranslateForLang:(NSString *)lang tab:(BBTab *)tab {
+  if (!tab||tab.translateOffered) return;
+  if ([self isNativeLanguage:lang]) return;
+  // Per-host opt-out persists across sessions.
+  NSString *host=tab.webView.URL.host?:@"";
+  NSString *neverKey=[NSString stringWithFormat:@"BBTranslateNever_%@",host.lowercaseString];
+  if ([[NSUserDefaults standardUserDefaults] boolForKey:neverKey]) return;
+  tab.translateOffered=YES;
+  dispatch_async(dispatch_get_main_queue(),^{
+    NSAlert *a=[[NSAlert alloc]init];
+    a.messageText=[NSString stringWithFormat:@"Translate this %@ page?",lang.uppercaseString];
+    a.informativeText=@"BearBrowser will open the page in your configured translation service. The page URL is sent to that service.";
+    [a addButtonWithTitle:@"Translate"];
+    [a addButtonWithTitle:@"Never for this site"];
+    [a addButtonWithTitle:@"Not now"];
+    [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+      if (rc==NSAlertFirstButtonReturn) [self translatePage:nil];
+      else if (rc==NSAlertSecondButtonReturn) [[NSUserDefaults standardUserDefaults] setBool:YES forKey:neverKey];
+    }];
+  });
+}
+- (void)translatePage:(id)s {
+  NSURL *u=self.webView.URL; if (!u) return;
+  NSString *fmt=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBTranslateURL"];
+  if (!fmt.length) fmt=@"https://translate.google.com/translate?sl=auto&tl=%1$@&u=%2$@";
+  NSString *target=[self preferredLanguages].firstObject?:@"en";
+  NSString *escaped=[u.absoluteString stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+  // Two-argument format: %1$@ = target lang, %2$@ = URL-escaped source URL.
+  NSString *finalURL=[NSString stringWithFormat:fmt,target,escaped];
+  NSURL *translateURL=[NSURL URLWithString:finalURL];
+  if (!translateURL) return;
+  NSInteger prev=self.activeTabIndex;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:translateURL]];
+  // Foreground the translated page — translation is the user's main intent here.
+  (void)prev;
+}
+- (void)detectReaderable:(WKWebView *)wv {
+  if (self.readerMode) { self.readerButton.hidden=YES; return; }
+  [wv evaluateJavaScript:
+    @"(function(){var a=document.querySelector('article,main,[role=main]');"
+     "if(!a)return 0;var t=0;a.querySelectorAll('p').forEach(function(x){t+=(x.innerText||'').length;});return t;})()"
+    completionHandler:^(id r,NSError *e){
+      NSInteger t=[r isKindOfClass:[NSNumber class]]?[r integerValue]:0;
+      self.readerButton.hidden=(t<600);
+    }];
+}
+- (void)toggleReader:(id)s {
+  if (self.readerMode) {
+    self.readerMode=NO;
+    if (self.readerOriginalURL) [self.webView loadRequest:[NSURLRequest requestWithURL:self.readerOriginalURL]];
+    else [self.webView reload];
+    return;
+  }
+  NSString *js=
+    @"(function(){function sc(el){var t=0;el.querySelectorAll('p').forEach(function(x){t+=(x.innerText||'').length;});return t;}"
+    @"var best=document.body,bs=0;"
+    @"document.querySelectorAll('article,main,[role=main],section,div').forEach(function(el){var s=sc(el);if(s>bs){bs=s;best=el;}});"
+    @"var title=((document.querySelector('h1')||{}).innerText)||document.title||'';"
+    @"var blocks=[];best.querySelectorAll('h1,h2,h3,h4,p,li,blockquote,pre,img').forEach(function(el){"
+    @"if(el.tagName==='IMG'){if(el.src)blocks.push({t:'img',src:el.src});}"
+    @"else{var x=(el.innerText||'').trim();if(x.length>1)blocks.push({t:el.tagName.toLowerCase(),x:x});}});"
+    @"return JSON.stringify({title:title,blocks:blocks});})();";
+  [self.webView evaluateJavaScript:js completionHandler:^(id r,NSError *e){
+    NSString *json=[r isKindOfClass:[NSString class]]?r:nil;
+    NSDictionary *obj=json?[NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]:nil;
+    NSArray *blocks=obj[@"blocks"];
+    if (![blocks isKindOfClass:[NSArray class]] || blocks.count<2) { NSBeep(); return; }
+    NSMutableString *body=[NSMutableString string];
+    for (NSDictionary *b in blocks) {
+      NSString *t=b[@"t"];
+      if ([t isEqualToString:@"img"]) { NSString *src=b[@"src"]; if(src.length)[body appendFormat:@"<img src=\"%@\">",[self htmlEscape:src]]; }
+      else if ([t isEqualToString:@"li"]) [body appendFormat:@"<li>%@</li>",[self htmlEscape:b[@"x"]]];
+      else [body appendFormat:@"<%@>%@</%@>",t,[self htmlEscape:b[@"x"]],t];
+    }
+    NSString *title=[self htmlEscape:obj[@"title"]?:@""];
+    NSInteger fs=[[NSUserDefaults standardUserDefaults] integerForKey:@"BBReaderFontSize"]; if (fs<14||fs>28) fs=18;
+    NSString *html=[NSString stringWithFormat:
+      @"<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\">"
+      @"<style>:root{color-scheme:light dark}"
+      @"body{max-width:42rem;margin:0 auto;padding:48px 24px 96px;"
+      @"font:%ldpx/1.7 -apple-system,Georgia,serif;color:#1d1d1f;background:#fff}"
+      @"@media(prefers-color-scheme:dark){body{color:#e8e8ea;background:#1c1c1e}}"
+      @"h1{font-size:2em;line-height:1.2;margin:0 0 .6em}h2,h3,h4{line-height:1.3;margin:1.4em 0 .4em}"
+      @"p,li,blockquote,pre{margin:0 0 1em}blockquote{padding-left:1em;border-left:3px solid #ccc;color:#666}"
+      @"pre{white-space:pre-wrap;font:14px/1.5 ui-monospace,monospace;background:rgba(127,127,127,.12);padding:12px;border-radius:8px}"
+      @"img{max-width:100%%;height:auto;border-radius:8px;margin:1em 0}"
+      @".bb-reader-bar{position:fixed;top:12px;right:12px;display:flex;gap:6px;"
+      @"padding:6px 10px;border-radius:14px;backdrop-filter:blur(12px);"
+      @"background:rgba(255,255,255,.75);border:1px solid rgba(0,0,0,.08);font:12px -apple-system}"
+      @"@media(prefers-color-scheme:dark){.bb-reader-bar{background:rgba(30,30,30,.75);border-color:rgba(255,255,255,.1);color:#e8e8ea}}"
+      @".bb-reader-bar button{all:unset;cursor:pointer;padding:2px 8px;border-radius:6px;font-weight:600}"
+      @".bb-reader-bar button:hover{background:rgba(0,0,0,.08)}"
+      @"</style>"
+      @"<div class=bb-reader-bar>"
+      @"<button onclick=\"document.body.style.fontSize=Math.max(14,(parseFloat(getComputedStyle(document.body).fontSize)||18)-2)+'px'\">A−</button>"
+      @"<button onclick=\"document.body.style.fontSize=((parseFloat(getComputedStyle(document.body).fontSize)||18))+'px'\">Aa</button>"
+      @"<button onclick=\"document.body.style.fontSize=Math.min(28,(parseFloat(getComputedStyle(document.body).fontSize)||18)+2)+'px'\">A+</button>"
+      @"</div>"
+      @"<h1>%@</h1>%@",(long)fs, title, body];
+    self.readerOriginalURL=self.webView.URL;
+    self.readerMode=YES;
+    [self.webView loadHTMLString:html baseURL:self.webView.URL];
+  }];
+}
+- (void)openBookmarkManager:(id)s {
+  CGFloat W=640,Hh=460;
+  NSWindow *bw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  bw.releasedWhenClosed=NO; bw.title=@"Bookmarks"; [bw center];
+  NSView *cv=bw.contentView;
+  NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,Hh-40,W-24,28)];
+  sf.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
+  sf.placeholderString=@"Search bookmarks"; [cv addSubview:sf];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-96)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=30;
+  NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"title"];  c1.title=@"Title";  c1.width=210;
+  NSTableColumn *cf=[[NSTableColumn alloc]initWithIdentifier:@"folder"]; cf.title=@"Folder"; cf.width=110;
+  NSTableColumn *c2=[[NSTableColumn alloc]initWithIdentifier:@"url"];    c2.title=@"URL";    c2.width=290;
+  [tv addTableColumn:c1]; [tv addTableColumn:cf]; [tv addTableColumn:c2];
+  sv.documentView=tv; [cv addSubview:sv];
+  BBBookmarksPanelDS *ds=[[BBBookmarksPanelDS alloc]init];
+  ds.tv=tv; ds.win=bw; ds.webView=self.webView;
+  tv.dataSource=ds; tv.delegate=ds; tv.target=ds; tv.doubleAction=@selector(openSelected);
+  sf.delegate=ds;
+  objc_setAssociatedObject(bw,@"bmds",ds,OBJC_ASSOCIATION_RETAIN);
+  [tv reloadData];
+  NSButton *open=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,90,30)];
+  open.title=@"Open"; open.bezelStyle=NSBezelStyleRounded; open.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  open.target=ds; open.action=@selector(openSelected); [cv addSubview:open];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(108,10,90,30)];
+  rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *mv=[[NSButton alloc]initWithFrame:NSMakeRect(204,10,130,30)];
+  mv.title=@"Move to Folder…"; mv.bezelStyle=NSBezelStyleRounded; mv.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  mv.target=ds; mv.action=@selector(moveSelectedToFolder); [cv addSubview:mv];
+  NSPopUpButton *sort=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(340,12,150,26) pullsDown:NO];
+  [sort addItemsWithTitles:@[@"Sort: Custom",@"Sort: Title A→Z",@"Sort: Newest first"]];
+  sort.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  sort.target=self; sort.action=@selector(bookmarkSortChanged:);
+  objc_setAssociatedObject(sort,"BBSortTV",tv,OBJC_ASSOCIATION_ASSIGN);
+  [cv addSubview:sort];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=bw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:bw completionHandler:nil];
+}
+
 // ── Downloads ─────────────────────────────────────────────────────────────────
+- (void)dlContextOpen:(NSMenuItem *)mi {
+  NSURL *u=mi.representedObject; if ([u isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] openURL:u];
+}
+- (void)dlContextReveal:(NSMenuItem *)mi {
+  NSURL *u=mi.representedObject; if ([u isKindOfClass:[NSURL class]]) [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[u]];
+}
+- (void)dlCopySourceURL:(NSMenuItem *)mi {
+  NSURL *u=mi.representedObject; if (![u isKindOfClass:[NSURL class]]) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:u.absoluteString forType:NSPasteboardTypeString];
+}
+- (void)dlRemoveFromList:(NSMenuItem *)mi {
+  BBDownloadItem *item=mi.representedObject; if (!item) return;
+  [self.downloadPanel.items removeObject:item];
+  [self.downloadPanel refresh];
+}
+- (void)dlDeleteFile:(NSMenuItem *)mi {
+  BBDownloadItem *item=mi.representedObject; if (!item) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[NSString stringWithFormat:@"Delete “%@”?",item.filename?:@"file"];
+  a.informativeText=@"The file will be moved to the Trash and removed from the download list.";
+  [a addButtonWithTitle:@"Delete"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  if (item.destURL) [[NSFileManager defaultManager] trashItemAtURL:item.destURL resultingItemURL:nil error:nil];
+  [self.downloadPanel.items removeObject:item];
+  [self.downloadPanel refresh];
+}
 - (void)toggleDownloadPanel:(id)s {
   self.downloadPanel.hidden=!self.downloadPanel.hidden;
 }
@@ -3997,22 +7366,365 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 - (void)dropdownSelectedURL:(NSString *)urlString {
   // Called by table click (mouse selection) — navigate immediately
   [self.addressDropdown hide];
+  // Switch-to-tab row: jump to the matched open tab in place of navigating.
+  if ([urlString hasPrefix:@"bb-switch-tab:"]) {
+    NSInteger idx=[[urlString substringFromIndex:14] integerValue];
+    if (idx>=0 && idx<(NSInteger)self.tabs.count) [self tabItemDidSelect:idx];
+    [self.window makeFirstResponder:self.webView];
+    return;
+  }
+  // Calculator row: NSExpression result has no scheme — copy to clipboard and bail.
+  if (urlString.length && [urlString rangeOfString:@"://"].location==NSNotFound &&
+      [urlString rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]].location==NSNotFound) {
+    [[NSPasteboard generalPasteboard] clearContents];
+    [[NSPasteboard generalPasteboard] setString:urlString forType:NSPasteboardTypeString];
+    [self showStatus:[NSString stringWithFormat:@"Copied %@",urlString]];
+    [self.window makeFirstResponder:self.webView];
+    return;
+  }
   NSURL *u=[NSURL URLWithString:urlString]; if(!u) return;
   self.address.stringValue=urlString;
   [self.window makeFirstResponder:self.webView];
-  BBEmitEvent(@"navigation.requested",@"allow",@"Dropdown navigation.",@{@"url":urlString});
+  [self emitNav:@"navigation.requested" url:urlString reason:@"Dropdown navigation." private:self.activeTab.isPrivate];
   [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
 }
+- (void)addressFieldPasteAndGo:(NSString *)raw {
+  raw=[raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (!raw.length) return;
+  NSString *rawLower=raw.lowercaseString;
+  if ([rawLower hasPrefix:@"javascript:"]||[rawLower hasPrefix:@"view-source:"]||
+      [rawLower hasPrefix:@"webkit-"]||[rawLower hasPrefix:@"x-webkit"]) return;
+  BOOL hasScheme=[raw hasPrefix:@"http://"]||[raw hasPrefix:@"https://"]||[raw hasPrefix:@"file://"];
+  BOOL looksLikeURL=[raw rangeOfString:@" "].location==NSNotFound&&[raw rangeOfString:@"."].location!=NSNotFound;
+  NSURL *url=nil;
+  if (hasScheme) url=[NSURL URLWithString:raw];
+  else if (looksLikeURL) url=[NSURL URLWithString:[@"https://" stringByAppendingString:raw]];
+  else url=[NSURL URLWithString:[BBDelegate searchURLForQuery:raw]];
+  if (!url) return;
+  self.address.stringValue=url.absoluteString;
+  [self.window makeFirstResponder:self.webView];
+  [self emitNav:@"navigation.requested" url:url.absoluteString reason:@"Paste and go." private:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+}
 
-- (void)newTab:(id)s              { [self addTabPrivate:NO]; }
+// ── Research Sessions ─────────────────────────────────────────────────────────
+- (NSString *)promptForSessionName:(NSString *)title existing:(BOOL)allowExisting {
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=title;
+  a.informativeText=allowExisting?@"Enter a name (existing session will be appended to).":@"Enter a new session name.";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  tf.placeholderString=@"My Research";
+  // Pre-fill with the first session name if any exist
+  if (allowExisting && [BBResearchStore shared].sessions.count)
+    tf.stringValue=[BBResearchStore shared].sessions.lastObject.name;
+  a.accessoryView=tf;
+  [a addButtonWithTitle:@"Add"]; [a addButtonWithTitle:@"Cancel"];
+  [a layout]; [[a window] makeFirstResponder:tf]; [tf selectAll:nil];
+  NSModalResponse rc=[a runModal];
+  if (rc!=NSAlertFirstButtonReturn) return nil;
+  return [tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+- (void)addCurrentTabToSession:(id)s {
+  NSString *url=self.webView.URL.absoluteString;
+  if (!url.length||[self isInternalURL:url]) { NSBeep(); return; }
+  NSString *name=[self promptForSessionName:@"Add to Research Session" existing:YES];
+  if (!name.length) return;
+  BBResearchSession *sess=[[BBResearchStore shared] sessionNamed:name create:YES];
+  BBResearchItem *it=[BBResearchItem new];
+  it.urlString=url; it.title=self.activeTab.title.length?self.activeTab.title:url;
+  it.note=@""; it.status=BBResearchStatusUnread; it.addedAt=[NSDate date];
+  [sess.items addObject:it]; [[BBResearchStore shared] save];
+  BBLog([NSString stringWithFormat:@"[research] added %@ to %@",url,name]);
+}
+- (void)collectAllTabsToSession:(id)s {
+  NSString *name=[self promptForSessionName:@"Collect All Tabs to Session" existing:YES];
+  if (!name.length) return;
+  BBResearchSession *sess=[[BBResearchStore shared] sessionNamed:name create:YES];
+  NSInteger added=0;
+  for (BBTab *t in self.tabs) {
+    NSString *url=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!url.length||[self isInternalURL:url]) continue;
+    // Deduplicate within session
+    BOOL dup=NO; for (BBResearchItem *x in sess.items) if ([x.urlString isEqualToString:url]) { dup=YES; break; }
+    if (dup) continue;
+    BBResearchItem *it=[BBResearchItem new];
+    it.urlString=url; it.title=t.title.length?t.title:url;
+    it.note=@""; it.status=BBResearchStatusUnread; it.addedAt=[NSDate date];
+    [sess.items addObject:it]; added++;
+  }
+  [[BBResearchStore shared] save];
+  NSAlert *ok=[[NSAlert alloc]init];
+  ok.messageText=[NSString stringWithFormat:@"%ld tab%@ added to \"%@\"", (long)added, added==1?@"":@"s", name];
+  ok.informativeText=@"Open Research Sessions to review, annotate, or hand off to an agent.";
+  [ok addButtonWithTitle:@"Open Sessions"]; [ok addButtonWithTitle:@"Suspend Tabs"]; [ok addButtonWithTitle:@"Done"];
+  NSModalResponse rc=[ok runModal];
+  if (rc==NSAlertFirstButtonReturn) [self openResearchManager:nil];
+  else if (rc==NSAlertSecondButtonReturn) [self suspendInactiveTabs:nil]; // suspend all idle tabs now
+}
+- (void)openResearchManager:(id)s {
+  CGFloat W=900, H=540;
+  NSWindow *rw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,H)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable|NSWindowStyleMaskMiniaturizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  rw.releasedWhenClosed=NO; rw.title=@"Research Sessions"; [rw center];
+  NSView *cv=rw.contentView;
+
+  // Left: session list
+  NSScrollView *sessScroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,200,H-48)];
+  sessScroll.autoresizingMask=NSViewHeightSizable; sessScroll.hasVerticalScroller=YES;
+  NSTableView *sessTV=[[NSTableView alloc]init]; sessTV.rowHeight=28; sessTV.headerView=nil;
+  NSTableColumn *sc=[[NSTableColumn alloc]initWithIdentifier:@"s"]; sc.width=198;
+  [sessTV addTableColumn:sc]; sessScroll.documentView=sessTV;
+  [cv addSubview:sessScroll];
+
+  // Right: item list (status col is clickable to cycle ☐→…→✓→✗)
+  NSScrollView *itemScroll=[[NSScrollView alloc]initWithFrame:NSMakeRect(200,48,W-200,H-48)];
+  itemScroll.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; itemScroll.hasVerticalScroller=YES;
+  NSTableView *itemTV=[[NSTableView alloc]init]; itemTV.rowHeight=32; itemTV.usesAlternatingRowBackgroundColors=YES;
+  for (NSArray *col in @[@[@"status",@"S",@42],@[@"title",@"Title",@420],@[@"url",@"URL",@220]]) {
+    NSTableColumn *c=[[NSTableColumn alloc]initWithIdentifier:col[0]];
+    c.width=[col[2] doubleValue]; c.title=col[1];
+    c.resizingMask=NSTableColumnUserResizingMask|NSTableColumnAutoresizingMask;
+    [itemTV addTableColumn:c];
+  }
+  itemScroll.documentView=itemTV; [cv addSubview:itemScroll];
+
+  // Toolbar buttons at bottom — left: session ops; right: item ops
+  void(^btn)(NSString*,NSRect,SEL)=^(NSString*t,NSRect r,SEL a){
+    NSButton *b=[[NSButton alloc]initWithFrame:r]; b.title=t; b.bezelStyle=NSBezelStyleRounded;
+    b.target=self; b.action=a; [cv addSubview:b];
+  };
+  btn(@"New Session",     NSMakeRect(8,   10,110,28), @selector(researchNewSession:));
+  btn(@"Delete Session",  NSMakeRect(126, 10,110,28), @selector(researchDeleteSession:));
+  btn(@"Export Markdown", NSMakeRect(244, 10,130,28), @selector(researchExportMarkdown:));
+  btn(@"Hand to Agent",   NSMakeRect(382, 10,120,28), @selector(researchHandToAgent:));
+  btn(@"Dismiss",         NSMakeRect(510, 10,100,28), @selector(researchDismissItem:));
+  btn(@"Mark Done",       NSMakeRect(618, 10,100,28), @selector(researchMarkDone:));
+  btn(@"Open Selected",   NSMakeRect(726, 10,130,28), @selector(researchOpenSelected:));
+
+  // Wiring via associated objects: store the two table views on the window so action handlers can reach them
+  objc_setAssociatedObject(rw, "sessTV", sessTV, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(rw, "itemTV", itemTV, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(rw, "rw", rw, OBJC_ASSOCIATION_RETAIN_NONATOMIC); // keep rw alive
+
+  BBResearchManagerDS *ds=[[BBResearchManagerDS alloc] initWithWindow:rw delegate:self];
+  sessTV.dataSource=ds; sessTV.delegate=ds;
+  itemTV.dataSource=ds; itemTV.delegate=ds;
+  // Double-click any item row → open in new tab; single-click on status col → cycle status
+  itemTV.target=ds;
+  itemTV.doubleAction=@selector(openItemDoubleClick:);
+  itemTV.action=@selector(itemTableClicked:);
+  objc_setAssociatedObject(rw, "ds", ds, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+  [rw makeKeyAndOrderFront:nil];
+}
+// Stubs called by research manager buttons — delegate to the DS which has the state
+- (void)researchNewSession:(id)s {
+  NSString *name=[self promptForSessionName:@"New Research Session" existing:NO];
+  if (!name.length) return;
+  [[BBResearchStore shared] sessionNamed:name create:YES];
+  // Reload whichever research window is key
+  NSWindow *rw=[[NSApp keyWindow] isKindOfClass:[NSWindow class]]?[NSApp keyWindow]:nil;
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  [sessTV reloadData];
+}
+- (void)researchDeleteSession:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSInteger row=sessTV.selectedRow;
+  if (row<0||row>=(NSInteger)[BBResearchStore shared].sessions.count) return;
+  [[BBResearchStore shared].sessions removeObjectAtIndex:row];
+  [[BBResearchStore shared] save]; [sessTV reloadData];
+}
+- (void)researchExportMarkdown:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSInteger row=sessTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (row<0||row>=(NSInteger)sessions.count) return;
+  BBResearchSession *sess=sessions[row];
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=[NSString stringWithFormat:@"%@.md",sess.name];
+  sp.allowedContentTypes=@[[UTType typeWithFilenameExtension:@"md"]];
+  [sp beginSheetModalForWindow:rw completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK) return;
+    [[sess exportMarkdown] writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+  }];
+}
+- (void)researchHandToAgent:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSInteger row=sessTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (row<0||row>=(NSInteger)sessions.count) return;
+  BBResearchSession *sess=sessions[row];
+  NSMutableArray *urls=[NSMutableArray array];
+  for (BBResearchItem *it in sess.items)
+    if (it.status==BBResearchStatusUnread) [urls addObject:it.urlString];
+  BBProposeAction(@"research_session_hand_off",@"research",
+    [NSString stringWithFormat:@"Research %ld URLs in \"%@\"",(long)urls.count,sess.name],
+    [urls firstObject]?:@"",@"low",@"hold",YES,
+    [NSString stringWithFormat:@"Agent: summarize and triage %ld URLs from research session \"%@\".",(long)urls.count,sess.name]);
+  NSAlert *ok=[[NSAlert alloc]init];
+  ok.messageText=@"Research Session Queued";
+  ok.informativeText=[NSString stringWithFormat:@"%ld unread URLs from \"%@\" proposed to the agent.",(long)urls.count,sess.name];
+  [ok addButtonWithTitle:@"OK"]; [ok runModal];
+}
+- (void)researchOpenSelected:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSTableView *itemTV=objc_getAssociatedObject(rw,"itemTV");
+  NSInteger srow=sessTV.selectedRow, irow=itemTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (srow<0||srow>=(NSInteger)sessions.count) return;
+  BBResearchSession *sess=sessions[srow];
+  if (irow<0||irow>=(NSInteger)sess.items.count) return;
+  BBResearchItem *it=sess.items[irow];
+  NSURL *u=[NSURL URLWithString:it.urlString]; if(!u) return;
+  it.status=BBResearchStatusReading; [[BBResearchStore shared] save]; [itemTV reloadData];
+  [self addTabPrivate:NO]; [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)researchURLNotification:(NSNotification *)n {
+  NSString *urlStr=n.userInfo[@"url"]; if (!urlStr.length) return;
+  NSURL *u=[NSURL URLWithString:urlStr]; if (!u) return;
+  [self addTabPrivate:NO];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)researchMarkDone:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSTableView *itemTV=objc_getAssociatedObject(rw,"itemTV");
+  NSInteger srow=sessTV.selectedRow, irow=itemTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (srow<0||srow>=(NSInteger)sessions.count||irow<0) return;
+  BBResearchSession *sess=sessions[srow];
+  if (irow>=(NSInteger)sess.items.count) return;
+  sess.items[irow].status=BBResearchStatusDone;
+  [[BBResearchStore shared] save]; [itemTV reloadData];
+}
+- (void)researchDismissItem:(id)s {
+  NSWindow *rw=[NSApp keyWindow];
+  NSTableView *sessTV=objc_getAssociatedObject(rw,"sessTV");
+  NSTableView *itemTV=objc_getAssociatedObject(rw,"itemTV");
+  NSInteger srow=sessTV.selectedRow, irow=itemTV.selectedRow;
+  NSArray *sessions=[BBResearchStore shared].sessions;
+  if (srow<0||srow>=(NSInteger)sessions.count||irow<0) return;
+  BBResearchSession *sess=sessions[srow];
+  if (irow>=(NSInteger)sess.items.count) return;
+  sess.items[irow].status=BBResearchStatusDismissed;
+  [[BBResearchStore shared] save]; [itemTV reloadData];
+}
+
+- (void)newTab:(id)s {
+  [self addTabPrivate:NO];
+  // Chrome's Cmd+T behavior: focus the address bar so the user can type immediately.
+  dispatch_async(dispatch_get_main_queue(),^{
+    [self.window makeFirstResponder:self.address];
+    [self.address selectText:nil];
+  });
+}
 - (void)newPrivateTab:(id)s       { [self addTabPrivate:YES]; }
 - (void)newWindow:(id)s {
   BBDelegate *w=[[BBDelegate alloc]init];
   NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
   [w applicationDidFinishLaunching:dummy];
 }
+- (void)newPrivateWindow:(id)s {
+  BBDelegate *w=[[BBDelegate alloc]init];
+  NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+  [w applicationDidFinishLaunching:dummy];
+  [w addTabPrivate:YES];
+}
+- (void)moveTabLeft:(id)s {
+  NSInteger i=self.activeTabIndex; if (i<=0||self.tabs.count<2) return;
+  [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i-1];
+  self.activeTabIndex=i-1; [self reloadTabBar];
+}
+- (void)moveTabRight:(id)s {
+  NSInteger i=self.activeTabIndex; if (i>=(NSInteger)self.tabs.count-1||self.tabs.count<2) return;
+  [self.tabs exchangeObjectAtIndex:i withObjectAtIndex:i+1];
+  self.activeTabIndex=i+1; [self reloadTabBar];
+}
 
-// ── Camera / Mic permission prompt ───────────────────────────────────────────
+// ── Tab Search (Cmd+Shift+A) ──────────────────────────────────────────────────
+- (void)openTabSearch:(id)s {
+  NSPanel *p=[[NSPanel alloc]initWithContentRect:NSMakeRect(0,0,480,320)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskFullSizeContentView)
+    backing:NSBackingStoreBuffered defer:YES];
+  p.title=@"Search Tabs"; p.titlebarAppearsTransparent=YES; p.movableByWindowBackground=YES;
+  [p center]; p.releasedWhenClosed=NO;
+  NSView *cv=p.contentView;
+
+  NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,274,456,28)];
+  sf.placeholderString=@"Search open tabs…"; sf.autoresizingMask=NSViewWidthSizable;
+  [cv addSubview:sf];
+
+  NSScrollView *sc=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,0,480,268)];
+  sc.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sc.hasVerticalScroller=YES; sc.drawsBackground=NO;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.headerView=nil; tv.rowHeight=38; tv.selectionHighlightStyle=NSTableViewSelectionHighlightStyleSourceList;
+  NSTableColumn *tc=[[NSTableColumn alloc]initWithIdentifier:@"t"]; tc.width=458; [tv addTableColumn:tc];
+  sc.documentView=tv; [cv addSubview:sc];
+
+  NSMutableArray *filtered=[NSMutableArray arrayWithArray:self.tabs];
+  objc_setAssociatedObject(self,"tabSearchFiltered",filtered,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(self,"tabSearchPanel",p,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(p,"tv",tv,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+  tv.dataSource=(id<NSTableViewDataSource>)self;
+  tv.delegate=(id<NSTableViewDelegate>)self;
+  sf.delegate=(id<NSSearchFieldDelegate>)self;
+  tv.tag=0xCAFE; // sentinel to identify tab-search table
+  sf.tag=0xCAFE;
+  tv.doubleAction=@selector(tabSearchConfirm:); tv.target=self;
+  [p makeKeyAndOrderFront:nil];
+  [p makeFirstResponder:sf];
+}
+// Called when user presses Return or double-clicks a row in the tab search table
+- (void)tabSearchConfirm:(id)s {
+  NSPanel *p=(NSPanel *)objc_getAssociatedObject(self,"tabSearchPanel");
+  NSTableView *tv=objc_getAssociatedObject(p,"tv");
+  NSArray *filtered=objc_getAssociatedObject(self,"tabSearchFiltered");
+  NSInteger row=tv.selectedRow; if (row<0||(NSUInteger)row>=filtered.count) return;
+  BBTab *tab=filtered[row];
+  NSInteger idx=[self.tabs indexOfObject:tab];
+  if (idx!=NSNotFound) { [self activateTab:idx]; [self reloadTabBar]; }
+  [p orderOut:nil];
+  objc_setAssociatedObject(self,"tabSearchPanel",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(self,"tabSearchFiltered",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+// NSTableViewDataSource for tab search (detected via tag)
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv {
+  if (tv.tag==0xCAFE) {
+    NSArray *f=objc_getAssociatedObject(self,"tabSearchFiltered");
+    return (NSInteger)(f?f.count:0);
+  }
+  return 0;
+}
+// NSTableViewDelegate for tab search
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+  if (tv.tag!=0xCAFE) return nil;
+  NSArray *filtered=objc_getAssociatedObject(self,"tabSearchFiltered");
+  if (row<0||(NSUInteger)row>=filtered.count) return nil;
+  BBTab *tab=filtered[row];
+  NSTableCellView *cell=[tv makeViewWithIdentifier:@"TSC" owner:nil];
+  if (!cell) {
+    cell=[[NSTableCellView alloc]initWithFrame:NSMakeRect(0,0,456,36)];
+    cell.identifier=@"TSC";
+    NSImageView *iv=[[NSImageView alloc]initWithFrame:NSMakeRect(8,10,16,16)];
+    iv.imageScaling=NSImageScaleProportionallyUpOrDown; iv.tag=1; [cell addSubview:iv];
+    NSTextField *title=[[NSTextField alloc]initWithFrame:NSMakeRect(32,17,410,16)];
+    title.bordered=NO; title.editable=NO; title.selectable=NO; title.backgroundColor=[NSColor clearColor];
+    title.font=[NSFont systemFontOfSize:13 weight:NSFontWeightMedium]; title.lineBreakMode=NSLineBreakByTruncatingTail; title.tag=2; [cell addSubview:title];
+    NSTextField *url=[[NSTextField alloc]initWithFrame:NSMakeRect(32,3,410,13)];
+    url.bordered=NO; url.editable=NO; url.selectable=NO; url.backgroundColor=[NSColor clearColor];
+    url.textColor=[NSColor secondaryLabelColor]; url.font=[NSFont systemFontOfSize:11]; url.lineBreakMode=NSLineBreakByTruncatingMiddle; url.tag=3; [cell addSubview:url];
+  }
+  ((NSImageView *)[cell viewWithTag:1]).image=tab.favicon;
+  ((NSTextField *)[cell viewWithTag:2]).stringValue=tab.title?:@"";
+  NSString *u=tab.suspended?tab.suspendedURL:tab.webView.URL.absoluteString;
+  ((NSTextField *)[cell viewWithTag:3]).stringValue=u?:@"";
+  return cell;
+}
+// ── Camera / Mic permission prompt (with per-host persistence) ───────────────
 - (void)webView:(WKWebView *)wv
     requestMediaCapturePermissionForOrigin:(WKSecurityOrigin *)origin
     initiatedByFrame:(WKFrameInfo *)frame
@@ -4020,53 +7732,411 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     decisionHandler:(void (^)(WKPermissionDecision))decisionHandler {
   NSString *kind = (type==WKMediaCaptureTypeMicrophone)?@"microphone":
                    (type==WKMediaCaptureTypeCamera)?@"camera":@"camera & microphone";
+  // Check persisted decision for this host+kind
+  NSString *prefKey=[NSString stringWithFormat:@"BBMediaPerm_%@_%@",kind,origin.host];
+  NSString *saved=[[NSUserDefaults standardUserDefaults] stringForKey:prefKey];
+  if ([saved isEqualToString:@"allow"]) { decisionHandler(WKPermissionDecisionGrant); return; }
+  if ([saved isEqualToString:@"deny"])  { decisionHandler(WKPermissionDecisionDeny);  return; }
+  // First-time prompt
   NSAlert *a=[[NSAlert alloc]init];
   a.messageText=[NSString stringWithFormat:@"\"%@\" wants to use your %@", origin.host, kind];
-  a.informativeText=@"BearBrowser will ask once per site. You can revoke this in Preferences.";
+  a.informativeText=@"";
   [a addButtonWithTitle:@"Allow"]; [a addButtonWithTitle:@"Deny"];
+  // "Remember this decision" checkbox
+  NSButton *remember=[[NSButton alloc]initWithFrame:NSMakeRect(0,0,260,18)];
+  remember.buttonType=NSButtonTypeSwitch; remember.title=@"Remember for this site";
+  remember.state=NSControlStateValueOn; a.accessoryView=remember;
   a.alertStyle=NSAlertStyleWarning;
   [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse r){
-    decisionHandler(r==NSAlertFirstButtonReturn ? WKPermissionDecisionGrant : WKPermissionDecisionDeny);
+    BOOL granted=(r==NSAlertFirstButtonReturn);
+    if (remember.state==NSControlStateValueOn)
+      [[NSUserDefaults standardUserDefaults] setObject:granted?@"allow":@"deny" forKey:prefKey];
+    decisionHandler(granted ? WKPermissionDecisionGrant : WKPermissionDecisionDeny);
   }];
 }
 
 // ── Search engine preference ──────────────────────────────────────────────────
-+ (NSArray<NSDictionary*> *)searchEngines {
-  return @[
-    @{@"name":@"DuckDuckGo",  @"id":@"ddg",    @"url":@"https://duckduckgo.com/?q=%@"},
-    @{@"name":@"Kagi",        @"id":@"kagi",   @"url":@"https://kagi.com/search?q=%@"},
-    @{@"name":@"Brave",       @"id":@"brave",  @"url":@"https://search.brave.com/search?q=%@"},
-    @{@"name":@"Startpage",   @"id":@"start",  @"url":@"https://www.startpage.com/search?q=%@"},
-  ];
-}
-+ (NSString *)searchURLForQuery:(NSString *)q {
-  NSString *eid=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
-  for (NSDictionary *e in [self searchEngines]) {
-    if ([e[@"id"] isEqualToString:eid])
-      return [NSString stringWithFormat:e[@"url"], [q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-  }
-  return [NSString stringWithFormat:@"https://duckduckgo.com/?q=%@",
-          [q stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-}
+// Thin wrappers over BBSearch (the single source of truth, declared earlier so the
+// address dropdown can reach it too).
++ (NSArray<NSDictionary*> *)searchEngines { return [BBSearch engines]; }
++ (NSString *)searchEngineName { return [BBSearch engineName]; }
++ (NSString *)searchURLForQuery:(NSString *)q { return [BBSearch urlForQuery:q]; }
 - (void)openNetworkMonitor:(id)s { [[BBNetworkMapPanel shared] showOrFocus]; }
 
-- (void)openSearchPreferences:(id)s {
+- (void)settingsAccept:(id)s { [NSApp stopModalWithCode:NSModalResponseOK]; }
+- (void)settingsCancel:(id)s { [NSApp stopModalWithCode:NSModalResponseCancel]; }
+- (void)pickDownloadDir:(id)s {
+  NSOpenPanel *p=[NSOpenPanel openPanel];
+  p.canChooseDirectories=YES; p.canChooseFiles=NO; p.allowsMultipleSelection=NO;
+  p.title=@"Choose Downloads Folder";
+  if ([p runModal]!=NSModalResponseOK || !p.URL) return;
+  NSString *path=p.URL.path;
+  [[NSUserDefaults standardUserDefaults] setObject:path forKey:@"BBDownloadDir"];
+  NSTextField *lbl=(NSTextField *)objc_getAssociatedObject(self,"BBDLPathLabel");
+  if (lbl) { NSString *shown=[path stringByAbbreviatingWithTildeInPath]; lbl.stringValue=shown; lbl.toolTip=shown; }
+}
+- (void)resetAllPreferences:(id)s {
   NSAlert *a=[[NSAlert alloc]init];
-  a.messageText=@"Default Search Engine";
-  NSPopUpButton *pop=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(0,0,240,26) pullsDown:NO];
-  NSString *cur=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBSearchEngine"]?:@"ddg";
+  a.messageText=@"Reset all preferences?";
+  a.informativeText=@"BearBrowser will discard every BB-prefixed setting (homepage, search engine, downloads folder, session data, zoom-per-site memory, mute-site list, "
+                     "hidden NTP shortcuts, translate opt-outs, media permissions, autofill profile, saved workspaces, restore-session choice, generator style). "
+                     "Bookmarks, history, and saved Keychain passwords are NOT touched.";
+  [a addButtonWithTitle:@"Reset Preferences"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
+    if ([key hasPrefix:@"BB"]) [ud removeObjectForKey:key];
+  [self showToast:@"Preferences reset (restart to apply UI changes)"];
+}
+- (void)unhideNTPShortcuts:(id)s {
+  NSArray *hidden=[[NSUserDefaults standardUserDefaults] arrayForKey:@"BBHiddenTopSites"]?:@[];
+  if (!hidden.count) { [self showToast:@"No hidden shortcuts"]; return; }
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Restore Hidden Shortcuts";
+  a.informativeText=[NSString stringWithFormat:@"BearBrowser is hiding %ld host%@ from the New Tab Page:\n\n%@\n\nRestore all?",
+    (long)hidden.count, hidden.count==1?@"":@"s",
+    [hidden componentsJoinedByString:@"\n"]];
+  [a addButtonWithTitle:@"Restore All"]; [a addButtonWithTitle:@"Cancel"];
+  if ([a runModal]!=NSAlertFirstButtonReturn) return;
+  [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"BBHiddenTopSites"];
+  [self showToast:@"Restored"];
+}
+- (void)showSiteDataManager:(id)s {
+  CGFloat W=620,Hh=460;
+  NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  sw.releasedWhenClosed=NO; sw.title=@"Site Data & Cookies"; [sw center];
+  NSView *cv=sw.contentView;
+  NSSearchField *sf=[[NSSearchField alloc]initWithFrame:NSMakeRect(12,Hh-44,W-24,28)];
+  sf.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
+  sf.placeholderString=@"Filter by domain"; [cv addSubview:sf];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,48,W,Hh-100)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=24;
+  NSTableColumn *cd=[[NSTableColumn alloc]initWithIdentifier:@"domain"]; cd.title=@"Domain"; cd.width=380;
+  NSTableColumn *ct=[[NSTableColumn alloc]initWithIdentifier:@"types"];  ct.title=@"Stored data"; ct.width=216;
+  [tv addTableColumn:cd]; [tv addTableColumn:ct];
+  sv.documentView=tv; [cv addSubview:sv];
+  BBSiteDataDS *ds=[[BBSiteDataDS alloc]initWithTableView:tv searchField:sf];
+  tv.dataSource=ds; tv.delegate=ds; sf.delegate=ds;
+  objc_setAssociatedObject(sw,@"sds",ds,OBJC_ASSOCIATION_RETAIN);
+  [ds reload];
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,10,160,30)];
+  rm.title=@"Remove Selected"; rm.bezelStyle=NSBezelStyleRounded; rm.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rm.target=ds; rm.action=@selector(removeSelected); [cv addSubview:rm];
+  NSButton *rmAll=[[NSButton alloc]initWithFrame:NSMakeRect(180,10,140,30)];
+  rmAll.title=@"Remove All…"; rmAll.bezelStyle=NSBezelStyleRounded; rmAll.autoresizingMask=NSViewMaxXMargin|NSViewMaxYMargin;
+  rmAll.target=ds; rmAll.action=@selector(removeAll); [cv addSubview:rmAll];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(W-102,10,90,30)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r"; done.autoresizingMask=NSViewMinXMargin|NSViewMaxYMargin;
+  done.target=sw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:sw completionHandler:nil];
+}
+- (void)bookmarkSortChanged:(NSPopUpButton *)sender {
+  NSMutableArray<BBBookmark *> *items=[[BBBookmarksStore shared].items mutableCopy];
+  if (sender.indexOfSelectedItem==1)
+    [items sortUsingComparator:^NSComparisonResult(BBBookmark *a,BBBookmark *b){ return [a.title caseInsensitiveCompare:b.title]; }];
+  else if (sender.indexOfSelectedItem==2)
+    [items sortUsingComparator:^NSComparisonResult(BBBookmark *a,BBBookmark *b){ return [b.addedAt compare:a.addedAt]; }];
+  else return; // Custom = current insertion order, no-op
+  [BBBookmarksStore shared].items=items;
+  [[BBBookmarksStore shared] save];
+  NSTableView *tv=objc_getAssociatedObject(sender,"BBSortTV");
+  [tv reloadData];
+  [self reloadBookmarksBar];
+}
+- (void)showProfileEditor:(id)s {
+  BBProfile *p=[[BBProfileStore shared] profile];
+  CGFloat W=460,Hh=440;
+  NSWindow *pw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
+  pw.releasedWhenClosed=NO; pw.title=@"Address Profile"; [pw center];
+  NSView *cv=pw.contentView;
+  NSMutableDictionary<NSString *,NSTextField *> *fields=[NSMutableDictionary dictionary];
+  void(^row)(NSString *,NSString *,CGFloat)=^(NSString *lbl,NSString *key,CGFloat yy){
+    NSTextField *l=[NSTextField labelWithString:lbl]; l.frame=NSMakeRect(16,yy,108,20);
+    l.alignment=NSTextAlignmentRight; [cv addSubview:l];
+    NSTextField *t=[[NSTextField alloc]initWithFrame:NSMakeRect(132,yy-2,310,24)];
+    NSString *v=[p valueForKey:key]; if (v.length) t.stringValue=v;
+    [cv addSubview:t]; fields[key]=t;
+  };
+  CGFloat y=Hh-50;
+  row(@"Name:",@"name",y);          y-=32;
+  row(@"Organization:",@"organization",y); y-=32;
+  row(@"Email:",@"email",y);        y-=32;
+  row(@"Phone:",@"phone",y);        y-=32;
+  row(@"Street:",@"street",y);      y-=32;
+  row(@"City:",@"city",y);          y-=32;
+  row(@"State/Region:",@"region",y); y-=32;
+  row(@"Postal code:",@"postal",y); y-=32;
+  row(@"Country:",@"country",y);    y-=32;
+  NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
+  save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
+  objc_setAssociatedObject(save,"BBProfileFields",fields,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  save.target=self; save.action=@selector(saveProfileFromSender:); [cv addSubview:save];
+  NSButton *cancel=[[NSButton alloc]initWithFrame:NSMakeRect(W-196,16,88,32)];
+  cancel.title=@"Cancel"; cancel.bezelStyle=NSBezelStyleRounded; cancel.keyEquivalent=@"\033";
+  cancel.target=pw; cancel.action=@selector(performClose:); [cv addSubview:cancel];
+  [self.window beginSheet:pw completionHandler:nil];
+}
+- (void)saveProfileFromSender:(NSButton *)sender {
+  NSDictionary<NSString *,NSTextField *> *fields=objc_getAssociatedObject(sender,"BBProfileFields");
+  BBProfile *p=[BBProfile new];
+  for (NSString *k in fields) [p setValue:fields[k].stringValue forKey:k];
+  [[BBProfileStore shared] setProfile:p];
+  NSWindow *sheet=sender.window;
+  [self.window endSheet:sheet];
+}
+- (void)showSavedPasswords:(id)s {
+  NSArray<BBPasswordEntry *> *entries=[[BBPasswordStore shared] allEntries];
+  NSWindow *pw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,520,420)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable|NSWindowStyleMaskResizable)
+    backing:NSBackingStoreBuffered defer:YES];
+  pw.releasedWhenClosed=NO; pw.title=@"Saved Passwords"; [pw center];
+  NSView *cv=pw.contentView;
+  NSTextField *hint=[NSTextField labelWithString:
+    @"Saved logins live in the macOS Keychain. Open “Keychain Access” to view the password values."];
+  hint.frame=NSMakeRect(12,pw.contentView.bounds.size.height-40,496,28);
+  hint.autoresizingMask=NSViewWidthSizable|NSViewMinYMargin;
+  hint.textColor=[NSColor secondaryLabelColor]; hint.font=[NSFont systemFontOfSize:11];
+  hint.maximumNumberOfLines=2; [cv addSubview:hint];
+  NSScrollView *sv=[[NSScrollView alloc]initWithFrame:NSMakeRect(0,40,520,pw.contentView.bounds.size.height-80)];
+  sv.autoresizingMask=NSViewWidthSizable|NSViewHeightSizable; sv.hasVerticalScroller=YES;
+  NSTableView *tv=[[NSTableView alloc]init]; tv.rowHeight=26;
+  NSTableColumn *c1=[[NSTableColumn alloc]initWithIdentifier:@"site"]; c1.title=@"Site"; c1.width=240;
+  NSTableColumn *c2=[[NSTableColumn alloc]initWithIdentifier:@"user"]; c2.title=@"Username"; c2.width=240;
+  [tv addTableColumn:c1]; [tv addTableColumn:c2];
+  sv.documentView=tv; [cv addSubview:sv];
+  // Tiny inline datasource using objc_setAssociatedObject — entries cached on the window.
+  BBSavedPasswordsDS *ds=[[BBSavedPasswordsDS alloc]initWithEntries:[entries mutableCopy] tableView:tv];
+  tv.dataSource=ds; tv.delegate=ds;
+  objc_setAssociatedObject(pw,@"ds",ds,OBJC_ASSOCIATION_RETAIN);
+  NSButton *rm=[[NSButton alloc]initWithFrame:NSMakeRect(12,8,80,28)];
+  rm.title=@"Remove"; rm.bezelStyle=NSBezelStyleRounded;
+  rm.target=ds; rm.action=@selector(removeSelected:); [cv addSubview:rm];
+  NSButton *cp=[[NSButton alloc]initWithFrame:NSMakeRect(98,8,120,28)];
+  cp.title=@"Copy Password"; cp.bezelStyle=NSBezelStyleRounded;
+  cp.target=ds; cp.action=@selector(copyPasswordSelected:); [cv addSubview:cp];
+  NSButton *imp=[[NSButton alloc]initWithFrame:NSMakeRect(224,8,90,28)];
+  imp.title=@"Import CSV"; imp.bezelStyle=NSBezelStyleRounded;
+  imp.target=self; imp.action=@selector(importPasswordsCSV:); [cv addSubview:imp];
+  NSButton *exp=[[NSButton alloc]initWithFrame:NSMakeRect(320,8,90,28)];
+  exp.title=@"Export CSV"; exp.bezelStyle=NSBezelStyleRounded;
+  exp.target=self; exp.action=@selector(exportPasswordsCSV:); [cv addSubview:exp];
+  NSButton *done=[[NSButton alloc]initWithFrame:NSMakeRect(420,8,90,28)];
+  done.title=@"Done"; done.bezelStyle=NSBezelStyleRounded; done.keyEquivalent=@"\r";
+  done.target=pw; done.action=@selector(performClose:); [cv addSubview:done];
+  [self.window beginSheet:pw completionHandler:nil];
+}
+- (NSString *)csvEscape:(NSString *)v {
+  if (!v.length) return @"";
+  BOOL needQuote=[v containsString:@","]||[v containsString:@"\""]||[v containsString:@"\n"];
+  NSString *out=[v stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""];
+  return needQuote?[NSString stringWithFormat:@"\"%@\"",out]:out;
+}
+- (NSArray<NSString *> *)csvParseLine:(NSString *)line {
+  NSMutableArray *fields=[NSMutableArray array];
+  NSMutableString *cur=[NSMutableString string];
+  BOOL inQ=NO;
+  for (NSUInteger i=0;i<line.length;i++) {
+    unichar c=[line characterAtIndex:i];
+    if (inQ) {
+      if (c=='"') {
+        if (i+1<line.length && [line characterAtIndex:i+1]=='"') { [cur appendString:@"\""]; i++; }
+        else inQ=NO;
+      } else [cur appendFormat:@"%C",c];
+    } else {
+      if (c==',') { [fields addObject:[cur copy]]; [cur setString:@""]; }
+      else if (c=='"' && cur.length==0) inQ=YES;
+      else [cur appendFormat:@"%C",c];
+    }
+  }
+  [fields addObject:[cur copy]];
+  return fields;
+}
+- (void)exportPasswordsCSV:(id)s {
+  NSAlert *warn=[[NSAlert alloc]init];
+  warn.messageText=@"Export passwords in plain text?";
+  warn.informativeText=@"The CSV file will contain your passwords unencrypted. Store it somewhere safe and delete it after import.";
+  [warn addButtonWithTitle:@"Continue"]; [warn addButtonWithTitle:@"Cancel"];
+  if ([warn runModal]!=NSAlertFirstButtonReturn) return;
+  NSSavePanel *sp=[NSSavePanel savePanel];
+  sp.nameFieldStringValue=@"bearbrowser-passwords.csv";
+  sp.allowedFileTypes=@[@"csv"];
+  [sp beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!sp.URL) return;
+    NSMutableString *csv=[NSMutableString stringWithString:@"name,url,username,password,note\n"];
+    NSArray<BBPasswordEntry *> *all=[[BBPasswordStore shared] allEntries];
+    // allEntries returns entries without passwords (to avoid bulk Keychain prompts);
+    // re-fetch each host once to include the value.
+    for (BBPasswordEntry *e in all) {
+      NSArray<BBPasswordEntry *> *withPw=[[BBPasswordStore shared] entriesForHost:e.host];
+      for (BBPasswordEntry *p in withPw) {
+        [csv appendFormat:@"%@,%@,%@,%@,\n",
+          [self csvEscape:p.host],
+          [self csvEscape:[NSString stringWithFormat:@"https://%@/",p.host]],
+          [self csvEscape:p.username],
+          [self csvEscape:p.password]];
+      }
+    }
+    [csv writeToURL:sp.URL atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [self showToast:@"Passwords exported (delete the file after import)"];
+  }];
+}
+- (void)importPasswordsCSV:(id)s {
+  NSOpenPanel *op=[NSOpenPanel openPanel];
+  op.allowedFileTypes=@[@"csv"];
+  op.canChooseFiles=YES; op.canChooseDirectories=NO;
+  [op beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!op.URL) return;
+    NSString *body=[NSString stringWithContentsOfURL:op.URL encoding:NSUTF8StringEncoding error:nil];
+    if (!body.length) { [self showToast:@"Import failed"]; return; }
+    NSArray *lines=[body componentsSeparatedByString:@"\n"];
+    if (lines.count<2) { [self showToast:@"Empty CSV"]; return; }
+    NSArray *header=[self csvParseLine:[lines firstObject]];
+    NSInteger urlIdx=-1,userIdx=-1,passIdx=-1;
+    for (NSInteger i=0;i<(NSInteger)header.count;i++) {
+      NSString *h=[header[i] lowercaseString];
+      if ([h isEqualToString:@"url"]||[h isEqualToString:@"login_uri"]||[h isEqualToString:@"origin"]) urlIdx=i;
+      else if ([h isEqualToString:@"username"]||[h isEqualToString:@"login_username"]||[h isEqualToString:@"login"]) userIdx=i;
+      else if ([h isEqualToString:@"password"]||[h isEqualToString:@"login_password"]) passIdx=i;
+    }
+    if (urlIdx<0||userIdx<0||passIdx<0) { [self showToast:@"Missing url/username/password columns"]; return; }
+    NSInteger added=0;
+    for (NSInteger i=1;i<(NSInteger)lines.count;i++) {
+      NSString *line=lines[i]; if (!line.length) continue;
+      NSArray *fields=[self csvParseLine:line];
+      if ((NSInteger)fields.count<=MAX(MAX(urlIdx,userIdx),passIdx)) continue;
+      NSString *urlStr=fields[urlIdx];
+      NSString *user=fields[userIdx];
+      NSString *pass=fields[passIdx];
+      NSURL *u=[NSURL URLWithString:urlStr];
+      NSString *host=u.host?:urlStr;
+      if (!host.length||!user.length||!pass.length) continue;
+      if ([[BBPasswordStore shared] saveHost:host username:user password:pass]) added++;
+    }
+    [self showToast:[NSString stringWithFormat:@"Imported %ld password%@",(long)added,added==1?@"":@"s"]];
+  }];
+}
+- (void)clearMediaPermissions:(id)s {
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  for (NSString *key in [ud.dictionaryRepresentation.allKeys copy])
+    if ([key hasPrefix:@"BBMediaPerm_"]) [ud removeObjectForKey:key];
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Site permissions cleared";
+  a.informativeText=@"All saved camera and microphone permissions have been reset. Sites will ask again.";
+  [a addButtonWithTitle:@"OK"]; [a runModal];
+}
+- (void)openSearchPreferences:(id)s {
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  CGFloat W=470,Hh=620;
+  NSWindow *sw=[[NSWindow alloc]initWithContentRect:NSMakeRect(0,0,W,Hh)
+    styleMask:(NSWindowStyleMaskTitled|NSWindowStyleMaskClosable) backing:NSBackingStoreBuffered defer:YES];
+  sw.releasedWhenClosed=NO; sw.title=@"BearBrowser Settings"; [sw center];
+  NSView *cv=sw.contentView;
+  NSTextField*(^label)(NSString*,CGFloat)=^NSTextField*(NSString*t,CGFloat yy){
+    NSTextField *l=[NSTextField labelWithString:t]; l.frame=NSMakeRect(16,yy,168,20);
+    l.alignment=NSTextAlignmentRight; [cv addSubview:l]; return l;
+  };
+  CGFloat y=Hh-58;
+  label(@"Default search engine:",y);
+  NSPopUpButton *pop=[[NSPopUpButton alloc]initWithFrame:NSMakeRect(192,y-3,260,26) pullsDown:NO];
+  NSString *cur=[ud stringForKey:@"BBSearchEngine"]?:@"ddg";
   for (NSDictionary *e in [BBDelegate searchEngines]) {
-    [pop addItemWithTitle:e[@"name"]];
-    pop.lastItem.representedObject=e[@"id"];
+    [pop addItemWithTitle:e[@"name"]]; pop.lastItem.representedObject=e[@"id"];
     if ([e[@"id"] isEqualToString:cur]) [pop selectItem:pop.lastItem];
   }
-  a.accessoryView=pop;
-  [a addButtonWithTitle:@"Save"]; [a addButtonWithTitle:@"Cancel"];
-  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse r){
-    if (r!=NSAlertFirstButtonReturn) return;
-    NSString *eid=pop.selectedItem.representedObject;
-    if (eid) [[NSUserDefaults standardUserDefaults] setObject:eid forKey:@"BBSearchEngine"];
-  }];
+  [cv addSubview:pop]; y-=46;
+  label(@"Homepage:",y);
+  NSTextField *home=[[NSTextField alloc]initWithFrame:NSMakeRect(192,y-2,260,24)];
+  home.stringValue=[ud stringForKey:@"BBHomepage"]?:@""; home.placeholderString=@"Leave blank for the start page";
+  [cv addSubview:home]; y-=44;
+  NSButton *bmBar=[NSButton checkboxWithTitle:@"Show bookmarks bar" target:nil action:nil];
+  bmBar.frame=NSMakeRect(192,y,260,20); bmBar.state=[ud boolForKey:@"BBShowBookmarksBar"]?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:bmBar]; y-=28;
+  NSButton *inline_ac=[NSButton checkboxWithTitle:@"Inline autocomplete in address bar" target:nil action:nil];
+  inline_ac.frame=NSMakeRect(192,y,280,20);
+  inline_ac.state=([ud objectForKey:@"BBInlineAutocomplete"]==nil||[ud boolForKey:@"BBInlineAutocomplete"])?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:inline_ac]; y-=28;
+  NSButton *sug=[NSButton checkboxWithTitle:@"Search suggestions (sends typing to the engine)" target:nil action:nil];
+  sug.frame=NSMakeRect(192,y,280,20); sug.state=[ud boolForKey:@"BBSearchSuggestions"]?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:sug]; y-=28;
+  NSButton *clr=[NSButton checkboxWithTitle:@"Clear history when quitting" target:nil action:nil];
+  clr.frame=NSMakeRect(192,y,260,20); clr.state=[ud boolForKey:@"BBClearOnQuit"]?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:clr]; y-=28;
+  NSButton *rst=[NSButton checkboxWithTitle:@"Restore last session on launch" target:nil action:nil];
+  rst.frame=NSMakeRect(192,y,280,20);
+  rst.state=([ud objectForKey:@"BBRestoreSession"]==nil||[ud boolForKey:@"BBRestoreSession"])?NSControlStateValueOn:NSControlStateValueOff;
+  [cv addSubview:rst]; y-=40;
+  // Download folder picker (Chrome-style)
+  label(@"Downloads folder:",y+4);
+  NSString *curDL=[ud stringForKey:@"BBDownloadDir"];
+  NSString *shownPath=curDL.length?[curDL stringByAbbreviatingWithTildeInPath]:@"~/Downloads";
+  NSTextField *dlPath=[NSTextField labelWithString:shownPath];
+  dlPath.frame=NSMakeRect(192,y-2,180,22);
+  dlPath.lineBreakMode=NSLineBreakByTruncatingMiddle; dlPath.toolTip=shownPath;
+  [cv addSubview:dlPath];
+  NSButton *dlPick=[[NSButton alloc]initWithFrame:NSMakeRect(376,y-4,76,26)];
+  dlPick.title=@"Choose…"; dlPick.bezelStyle=NSBezelStyleRounded;
+  objc_setAssociatedObject(self,"BBDLPathLabel",dlPath,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  dlPick.target=self; dlPick.action=@selector(pickDownloadDir:); [cv addSubview:dlPick];
+  y-=40;
+  // Site permission management
+  label(@"Site permissions:",y+4);
+  NSButton *clearPerms=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  clearPerms.title=@"Clear All Media Permissions…"; clearPerms.bezelStyle=NSBezelStyleRounded;
+  clearPerms.target=self; clearPerms.action=@selector(clearMediaPermissions:); [cv addSubview:clearPerms];
+  y-=38;
+  label(@"Saved passwords:",y+4);
+  NSButton *pwBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  pwBtn.title=@"Manage Saved Passwords…"; pwBtn.bezelStyle=NSBezelStyleRounded;
+  pwBtn.target=self; pwBtn.action=@selector(showSavedPasswords:); [cv addSubview:pwBtn];
+  y-=38;
+  label(@"Address autofill:",y+4);
+  NSButton *prBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  prBtn.title=@"Edit Address Profile…"; prBtn.bezelStyle=NSBezelStyleRounded;
+  prBtn.target=self; prBtn.action=@selector(showProfileEditor:); [cv addSubview:prBtn];
+  y-=38;
+  label(@"Site data:",y+4);
+  NSButton *sdBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  sdBtn.title=@"Manage Site Data & Cookies…"; sdBtn.bezelStyle=NSBezelStyleRounded;
+  sdBtn.target=self; sdBtn.action=@selector(showSiteDataManager:); [cv addSubview:sdBtn];
+  y-=38;
+  label(@"New Tab Page:",y+4);
+  NSButton *unBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  unBtn.title=@"Unhide Removed Shortcuts…"; unBtn.bezelStyle=NSBezelStyleRounded;
+  unBtn.target=self; unBtn.action=@selector(unhideNTPShortcuts:); [cv addSubview:unBtn];
+  y-=38;
+  label(@"Reset:",y+4);
+  NSButton *rsBtn=[[NSButton alloc]initWithFrame:NSMakeRect(192,y-2,260,28)];
+  rsBtn.title=@"Reset All Preferences…"; rsBtn.bezelStyle=NSBezelStyleRounded;
+  rsBtn.target=self; rsBtn.action=@selector(resetAllPreferences:); [cv addSubview:rsBtn];
+  NSButton *save=[[NSButton alloc]initWithFrame:NSMakeRect(W-104,16,88,32)];
+  save.title=@"Save"; save.bezelStyle=NSBezelStyleRounded; save.keyEquivalent=@"\r";
+  save.target=self; save.action=@selector(settingsAccept:); [cv addSubview:save];
+  NSButton *cancel=[[NSButton alloc]initWithFrame:NSMakeRect(W-196,16,88,32)];
+  cancel.title=@"Cancel"; cancel.bezelStyle=NSBezelStyleRounded; cancel.keyEquivalent=@"\033";
+  cancel.target=self; cancel.action=@selector(settingsCancel:); [cv addSubview:cancel];
+
+  NSModalResponse rc=[NSApp runModalForWindow:sw];
+  [sw orderOut:nil];
+  if (rc!=NSModalResponseOK) return;
+  NSString *eid=pop.selectedItem.representedObject; if(eid)[ud setObject:eid forKey:@"BBSearchEngine"];
+  NSString *hp=[home.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  if (hp.length) [ud setObject:hp forKey:@"BBHomepage"]; else [ud removeObjectForKey:@"BBHomepage"];
+  // Toggle the home-button visibility in every open window so the change is immediate.
+  for (BBDelegate *w in gBBWindowControllers) w.homeButton.hidden=(hp.length==0);
+  [ud setBool:(bmBar.state==NSControlStateValueOn) forKey:@"BBShowBookmarksBar"];
+  [ud setBool:(inline_ac.state==NSControlStateValueOn) forKey:@"BBInlineAutocomplete"];
+  [ud setBool:(sug.state==NSControlStateValueOn) forKey:@"BBSearchSuggestions"];
+  [ud setBool:(clr.state==NSControlStateValueOn) forKey:@"BBClearOnQuit"];
+  [ud setBool:(rst.state==NSControlStateValueOn) forKey:@"BBRestoreSession"];
+  // Apply the bookmarks-bar choice immediately.
+  self.bookmarksBarVisible=(bmBar.state==NSControlStateValueOn);
+  self.bookmarksBar.hidden=!self.bookmarksBarVisible;
+  if (self.bookmarksBarVisible) [self reloadBookmarksBar];
+  [self resizeWebViewForCurrentTab];
 }
 
 // ── Quad9 DNS-based safe browsing ────────────────────────────────────────────
@@ -4132,15 +8202,101 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
 }
 - (void)closeCurrentTab:(id)s     { [self tabItemDidClose:self.activeTabIndex]; }
 - (void)reopenClosedTab:(id)s     {
-  if (!self.closedTabURLs.count) return;
-  NSString *url=[self.closedTabURLs lastObject]; [self.closedTabURLs removeLastObject];
-  [self addTabPrivate:NO];
-  [self.webView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:url]]];
+  if (!self.recentlyClosed.count) return;
+  NSDictionary *e=[self.recentlyClosed lastObject]; [self.recentlyClosed removeLastObject];
+  [self insertTabAt:self.activeTabIndex+1 private:NO url:e[@"url"]];
 }
-- (void)nextTab:(id)s { NSInteger next=(self.activeTabIndex+1)%self.tabs.count; [self tabItemDidSelect:next]; }
-- (void)prevTab:(id)s { NSInteger prev=(self.activeTabIndex-1+self.tabs.count)%self.tabs.count; [self tabItemDidSelect:prev]; }
+// Reopen a specific entry chosen from the History ▸ Recently Closed submenu.
+- (void)reopenSpecificClosed:(NSMenuItem *)s {
+  NSInteger idx=s.tag; if (idx<0||idx>=(NSInteger)self.recentlyClosed.count) return;
+  NSDictionary *e=self.recentlyClosed[idx];
+  [self.recentlyClosed removeObjectAtIndex:idx];
+  [self insertTabAt:self.activeTabIndex+1 private:NO url:e[@"url"]];
+}
+// Populate History ▸ Recently Closed when it opens (newest first).
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+  if ([menu.title isEqualToString:@"Recently Closed"]) {
+    [menu removeAllItems];
+    if (!self.recentlyClosed.count) {
+      [menu addItemWithTitle:@"No Recently Closed Tabs" action:nil keyEquivalent:@""].enabled=NO;
+      return;
+    }
+    for (NSInteger k=(NSInteger)self.recentlyClosed.count-1;k>=0;k--) {
+      NSDictionary *e=self.recentlyClosed[k];
+      NSString *t=e[@"title"]; if(!t.length) t=e[@"url"];
+      if (t.length>60) t=[[t substringToIndex:57] stringByAppendingString:@"…"];
+      NSMenuItem *it=[menu addItemWithTitle:t action:@selector(reopenSpecificClosed:) keyEquivalent:@""];
+      it.target=self; it.tag=k; it.toolTip=e[@"url"];
+    }
+    return;
+  }
+  if ([menu.title isEqualToString:@"Workspaces"]) {
+    [menu removeAllItems];
+    NSDictionary *ws=[[NSUserDefaults standardUserDefaults] dictionaryForKey:@"BBWorkspaces"];
+    if (!ws.count) { [menu addItemWithTitle:@"No Saved Workspaces" action:nil keyEquivalent:@""].enabled=NO; return; }
+    NSArray *names=[ws.allKeys sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)];
+    for (NSString *name in names) {
+      NSMenuItem *it=[menu addItemWithTitle:name action:@selector(openWorkspaceByName:) keyEquivalent:@""];
+      it.target=self; it.representedObject=name;
+      NSInteger n=[ws[name] isKindOfClass:[NSArray class]]?[ws[name] count]:0;
+      it.toolTip=[NSString stringWithFormat:@"%ld tab%@",(long)n,n==1?@"":@"s"];
+    }
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *manage=[menu addItemWithTitle:@"Delete Workspace…" action:nil keyEquivalent:@""];
+    NSMenu *rmSub=[[NSMenu alloc]initWithTitle:@""];
+    for (NSString *name in names) {
+      NSMenuItem *ri=[rmSub addItemWithTitle:name action:@selector(deleteWorkspaceByName:) keyEquivalent:@""];
+      ri.target=self; ri.representedObject=name;
+    }
+    manage.submenu=rmSub;
+    return;
+  }
+  if ([menu.title isEqualToString:@"Recent Pages"]) {
+    [menu removeAllItems];
+    // Deduplicate by URL so the same page revisited 5 times doesn't fill the list.
+    NSArray<BBHistoryEntry *> *all=[BBHistoryStore shared].entries;
+    NSMutableArray<BBHistoryEntry *> *shown=[NSMutableArray array];
+    NSMutableSet<NSString *> *seen=[NSMutableSet set];
+    for (NSInteger k=(NSInteger)all.count-1;k>=0&&shown.count<10;k--) {
+      BBHistoryEntry *e=all[k]; if (!e.urlString.length||[seen containsObject:e.urlString]) continue;
+      [seen addObject:e.urlString]; [shown addObject:e];
+    }
+    if (!shown.count) {
+      [menu addItemWithTitle:@"No Recent Pages" action:nil keyEquivalent:@""].enabled=NO;
+      return;
+    }
+    for (BBHistoryEntry *e in shown) {
+      NSString *t=e.title.length?e.title:e.urlString;
+      if (t.length>60) t=[[t substringToIndex:57] stringByAppendingString:@"…"];
+      NSMenuItem *it=[menu addItemWithTitle:t action:@selector(openRecentPage:) keyEquivalent:@""];
+      it.target=self; it.representedObject=e.urlString; it.toolTip=e.urlString;
+    }
+    return;
+  }
+}
+- (void)bookmarksBarDidDropURL:(NSString *)dropped {
+  if (!dropped.length) return;
+  NSURL *u=[NSURL URLWithString:dropped];
+  if (!u.scheme.length) {
+    NSURL *https=[NSURL URLWithString:[@"https://" stringByAppendingString:dropped]];
+    if (https.host.length) u=https;
+  }
+  if (!u.absoluteString.length) return;
+  NSString *title=u.host?:u.absoluteString;
+  if (![[BBBookmarksStore shared] isBookmarked:u.absoluteString])
+    [[BBBookmarksStore shared] addTitle:title url:u.absoluteString folder:nil];
+  [self reloadBookmarksBar]; [self updateStarButton];
+}
+- (void)openRecentPage:(NSMenuItem *)mi {
+  NSString *u=mi.representedObject; if (!u.length) return;
+  NSURL *url=[NSURL URLWithString:u]; if (!url) return;
+  [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+}
+- (void)nextTab:(id)s { NSInteger n=self.tabs.count; if(n<2)return; [self tabItemDidSelect:(self.activeTabIndex+1)%n]; }
+- (void)prevTab:(id)s { NSInteger n=self.tabs.count; if(n<2)return; [self tabItemDidSelect:(self.activeTabIndex-1+n)%n]; }
 - (void)switchToTabByMenuItem:(NSMenuItem *)item {
   NSInteger idx=item.tag;
+  if (idx==8) idx=(NSInteger)self.tabs.count-1; // Cmd+9 = last tab (Chrome behavior)
   if (idx>=0&&idx<(NSInteger)self.tabs.count) [self tabItemDidSelect:idx];
 }
 - (void)focusAddressBar:(id)s { [self.window makeFirstResponder:self.address]; [self.address selectText:nil]; }
@@ -4157,7 +8313,8 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
     // Block any attempt by page JS to navigate to dangerous schemes via this bridge
     NSString *inputLower=input.lowercaseString;
     if ([inputLower hasPrefix:@"javascript:"]||[inputLower hasPrefix:@"view-source:"]||
-        [inputLower hasPrefix:@"webkit-"]||[inputLower hasPrefix:@"x-webkit"]) return;
+        [inputLower hasPrefix:@"webkit-"]||[inputLower hasPrefix:@"x-webkit"]||
+        [inputLower hasPrefix:@"file:"]||[inputLower hasPrefix:@"data:"]) return; // pages can't drive local/data nav via the bridge
     // force: prefix bypasses Quad9 block (user explicitly clicked "Proceed anyway")
     BOOL forceNav=[input hasPrefix:@"force:"];
     if (forceNav) input=[input substringFromIndex:6];
@@ -4192,6 +8349,8 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
       [NSString stringWithFormat:@"Canary '%@' accessed on %@",trap,url],
       @{@"trap":trap,@"url":url,@"time":@([body[@"time"] doubleValue])});
   } else if ([msg.name isEqualToString:@"netmon"]) {
+    BBTab *src=[self tabForWebView:msg.webView];
+    if (src.isPrivate) return; // don't log private-tab connections to the network monitor
     NSDictionary *body=[msg.body isKindOfClass:[NSDictionary class]]?msg.body:@{};
     NSString *domain=body[@"domain"]?:@"";
     NSString *page=body[@"page"]?:@"";
@@ -4214,6 +8373,80 @@ static NSString* BBRandomHexStatic(NSUInteger n){return BBRandomHex(n);}
         [NSString stringWithFormat:@"[%@] %@: %.200@",page,type,detail],
         @{@"type":type,@"page":page});
     [[BBSecurityPanel shared] pushEvent:[BBSecurityMonitor.shared snapshot].lastObject];
+  } else if ([msg.name isEqualToString:@"historynav"]) {
+    // SPA route changes (pushState/replaceState/popstate) never fire
+    // didFinishNavigation, so record them here so in-app navigation on sites like
+    // Gmail/YouTube actually lands in history. The title KVO patches the title.
+    WKWebView *wv=msg.webView; if (wv!=self.webView) return;
+    BBTab *tab=[self tabForWebView:wv]; if (!tab||tab.isPrivate) return;
+    NSString *url=[msg.body isKindOfClass:[NSString class]]?msg.body:(wv.URL.absoluteString?:@"");
+    if (!url.length) return;
+    dispatch_async(dispatch_get_main_queue(),^{
+      if (wv==self.webView) self.address.stringValue=[self isInternalURL:url]?@"":url;
+    });
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+      [[BBHistoryStore shared] recordTitle:wv.title?:@"" url:url];
+    });
+  } else if ([msg.name isEqualToString:@"hoverlink"]) {
+    if (msg.webView!=self.webView) return;
+    NSString *url=[msg.body isKindOfClass:[NSString class]]?msg.body:@"";
+    dispatch_async(dispatch_get_main_queue(),^{ [self showStatus:url]; });
+  } else if ([msg.name isEqualToString:@"audiostate"]) {
+    BBTab *tab=[self tabForWebView:msg.webView]; if (!tab) return;
+    BOOL playing=[[msg.body isKindOfClass:[NSNumber class]]?(NSNumber*)msg.body:@0 boolValue];
+    if (tab.isPlayingAudio!=playing) {
+      tab.isPlayingAudio=playing;
+      dispatch_async(dispatch_get_main_queue(),^{ [self reloadTabBar]; });
+    }
+  } else if ([msg.name isEqualToString:@"ntpHide"]) {
+    NSString *host=[msg.body isKindOfClass:[NSString class]]?(NSString*)msg.body:@"";
+    if (!host.length) return;
+    NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+    NSMutableArray *hidden=[[ud arrayForKey:@"BBHiddenTopSites"]?:@[] mutableCopy];
+    if (![hidden containsObject:host]) { [hidden addObject:host]; [ud setObject:hidden forKey:@"BBHiddenTopSites"]; }
+  } else if ([msg.name isEqualToString:@"loginform"]) {
+    NSDictionary *m=[msg.body isKindOfClass:[NSDictionary class]]?(NSDictionary *)msg.body:@{};
+    NSString *kind=m[@"k"]; NSDictionary *body=m[@"b"]; WKWebView *wv=msg.webView;
+    if (![kind isKindOfClass:[NSString class]]||![body isKindOfClass:[NSDictionary class]]) return;
+    BBTab *tab=[self tabForWebView:wv];
+    // Never autofill/save inside a private tab — private mode should be hands-off.
+    if (tab.isPrivate) return;
+    if ([kind isEqualToString:@"save"]) {
+      NSString *host=body[@"host"], *user=body[@"user"], *pass=body[@"pass"];
+      if (![host isKindOfClass:[NSString class]]||![user isKindOfClass:[NSString class]]||![pass isKindOfClass:[NSString class]]) return;
+      if (!host.length||!user.length||!pass.length) return;
+      // De-dupe: skip the prompt when an identical (host,user,pass) is already saved.
+      NSArray<BBPasswordEntry *> *existing=[[BBPasswordStore shared] entriesForHost:host];
+      for (BBPasswordEntry *e in existing) if ([e.username isEqualToString:user]&&[e.password isEqualToString:pass]) return;
+      dispatch_async(dispatch_get_main_queue(),^{ [self offerSaveLoginForHost:host username:user password:pass]; });
+    } else if ([kind isEqualToString:@"editFocus"]) {
+      BOOL e=[body[@"e"] boolValue];
+      if (tab) tab.editableFocus=e;
+    } else if ([kind isEqualToString:@"profileLookup"]) {
+      BBProfile *p=[[BBProfileStore shared] profile];
+      if (p.isEmpty) return;
+      // Silently fill — same UX as Chrome's autofill once the profile is set.
+      // No prompt: any field with existing value is skipped client-side.
+      NSDictionary *d=[p toDict];
+      NSData *jsonD=[NSJSONSerialization dataWithJSONObject:d options:0 error:nil];
+      NSString *json=[[NSString alloc]initWithData:jsonD encoding:NSUTF8StringEncoding];
+      if (!json.length) return;
+      NSString *js=[NSString stringWithFormat:
+        @"if(typeof window.__bbApplyProfile==='function')window.__bbApplyProfile(%@);",json];
+      dispatch_async(dispatch_get_main_queue(),^{ [wv evaluateJavaScript:js completionHandler:nil]; });
+    } else if ([kind isEqualToString:@"genpassOffer"]) {
+      // Focus on an autocomplete=new-password field — offer to generate one,
+      // but only the first time per page load to avoid prompt-spam on refocus.
+      if (tab.genpassOffered) return;
+      tab.genpassOffered=YES;
+      NSString *host=body[@"host"]?:@"";
+      dispatch_async(dispatch_get_main_queue(),^{ [self offerGenPassForHost:host webView:wv]; });
+    } else if ([kind isEqualToString:@"lookup"]) {
+      NSString *host=body[@"host"]; if (![host isKindOfClass:[NSString class]]||!host.length) return;
+      NSArray<BBPasswordEntry *> *entries=[[BBPasswordStore shared] entriesForHost:host];
+      if (!entries.count) return;
+      dispatch_async(dispatch_get_main_queue(),^{ [self offerFillForTab:tab webView:wv entries:entries]; });
+    }
   }
 }
 static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOOL blocked){
@@ -4224,8 +8457,69 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   r.category=[BBConnectionRecord classify:r.domain];
   [[BBNetworkMapPanel shared] pushRecord:r];
 }
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+  SEL a=item.action;
+  if (a==@selector(goBack:))           return self.webView.canGoBack;
+  if (a==@selector(goForward:))        return self.webView.canGoForward;
+  if (a==@selector(hardReload:))       return self.webView.URL!=nil;
+  if (a==@selector(reopenClosedTab:))  return self.recentlyClosed.count>0;
+  if (a==@selector(reloadOrStop:)) {
+    item.title=self.activeTab.isLoading?@"Stop":@"Reload Page";
+    return YES;
+  }
+  if (a==@selector(toggleReader:))     return self.webView.URL!=nil;
+  if (a==@selector(translatePage:))    return self.webView.URL!=nil && !([self isInternalURL:self.webView.URL.absoluteString]);
+  if (a==@selector(addToReadingList:)) return self.webView.URL!=nil && !([self isInternalURL:self.webView.URL.absoluteString]);
+  if (a==@selector(showReadingList:))  return YES;
+  if (a==@selector(toggleBookmarkCurrent:)) {
+    NSString *url=self.webView.URL.absoluteString;
+    BOOL isBookmarked=url.length&&[[BBBookmarksStore shared] isBookmarked:url];
+    item.title=isBookmarked?@"Remove Bookmark":@"Bookmark This Page";
+    return self.webView.URL!=nil;
+  }
+  if (a==@selector(printPage:))        return self.webView.URL!=nil;
+  if (a==@selector(sharePage:))        return self.webView.URL!=nil;
+  if (a==@selector(viewSource:))       return self.webView.URL!=nil;
+  if (a==@selector(prevTab:)||a==@selector(nextTab:)) return self.tabs.count>1;
+  if (a==@selector(moveTabLeft:))  return self.activeTabIndex>0;
+  if (a==@selector(moveTabRight:)) return self.activeTabIndex<(NSInteger)self.tabs.count-1;
+  if (a==@selector(newPrivateWindow:)) return YES;
+  if (a==@selector(focusAddressBar:))  return YES;
+  if (a==@selector(readAloud:)) {
+    item.title=[BBVoice shared].speaking?@"Stop Reading":@"Read Aloud";
+    return self.webView.URL!=nil;
+  }
+  if (a==@selector(muteTab:)) {
+    item.title=self.activeTab.muted?@"Unmute Tab":@"Mute Tab";
+    return self.webView.URL!=nil;
+  }
+  if (a==@selector(pinCurrentTab:)) {
+    item.title=self.activeTab.pinned?@"Unpin Tab":@"Pin Tab";
+    return YES;
+  }
+  return YES; // default enabled
+}
 - (void)goBack:(id)s    { if(self.webView.canGoBack)    [self.webView goBack]; }
 - (void)goForward:(id)s { if(self.webView.canGoForward) [self.webView goForward]; }
+- (void)showNavHistoryMenu:(BOOL)back at:(NSPoint)winLoc {
+  WKBackForwardList *bfl=self.webView.backForwardList;
+  NSArray<WKBackForwardListItem *> *items=back
+    ? [[bfl.backList reverseObjectEnumerator] allObjects]
+    : bfl.forwardList;
+  if (!items.count) return;
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  for (WKBackForwardListItem *item in items) {
+    NSString *t=item.title.length?item.title:item.URL.absoluteString;
+    NSMenuItem *mi=[[NSMenuItem alloc]initWithTitle:t action:@selector(navHistoryGo:) keyEquivalent:@""];
+    mi.target=self; mi.representedObject=item; [m addItem:mi];
+  }
+  [m popUpMenuPositioningItem:nil atLocation:winLoc inView:nil];
+}
+- (void)navHistoryGo:(NSMenuItem *)mi {
+  WKBackForwardListItem *item=mi.representedObject;
+  if ([item isKindOfClass:[WKBackForwardListItem class]]) [self.webView goToBackForwardListItem:item];
+}
+- (void)stopLoading:(id)s { if (self.activeTab.isLoading) [self.webView stopLoading]; else NSBeep(); }
 - (void)reloadOrStop:(id)s {
   if (self.activeTab.isLoading) [self.webView stopLoading]; else [self.webView reload];
 }
@@ -4235,6 +8529,21 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   NSMutableURLRequest *req=[NSMutableURLRequest requestWithURL:self.webView.URL];
   req.cachePolicy=NSURLRequestReloadIgnoringLocalAndRemoteCacheData;
   [self.webView loadRequest:req];
+}
+- (void)emptyCacheAndHardReload:(id)s {
+  if (!self.webView.URL) return;
+  NSString *host=self.webView.URL.host?:@"";
+  // Wipe every WKWebsiteData record whose display name matches the host, then hard-reload.
+  NSSet *types=[WKWebsiteDataStore allWebsiteDataTypes];
+  [[WKWebsiteDataStore defaultDataStore] fetchDataRecordsOfTypes:types completionHandler:^(NSArray<WKWebsiteDataRecord *> *recs){
+    NSMutableArray *drop=[NSMutableArray array];
+    for (WKWebsiteDataRecord *r in recs)
+      if ([r.displayName caseInsensitiveCompare:host]==NSOrderedSame ||
+          [host hasSuffix:[NSString stringWithFormat:@".%@",r.displayName]]) [drop addObject:r];
+    [[WKWebsiteDataStore defaultDataStore] removeDataOfTypes:types forDataRecords:drop completionHandler:^{
+      dispatch_async(dispatch_get_main_queue(),^{ [self hardReload:nil]; });
+    }];
+  }];
 }
 - (void)pasteAndGo:(id)s {
   NSString *text=[[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
@@ -4255,13 +8564,69 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   if (url) [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
   [self.window makeFirstResponder:self.webView];
 }
-- (void)zoomIn:(id)s    { self.webView.pageZoom=MIN(5.0,self.webView.pageZoom+0.1); }
-- (void)zoomOut:(id)s   { self.webView.pageZoom=MAX(0.2,self.webView.pageZoom-0.1); }
-- (void)zoomReset:(id)s { self.webView.pageZoom=1.0; }
+- (void)zoomIn:(id)s    { [self setZoom:self.webView.pageZoom+0.1]; }
+- (void)zoomOut:(id)s   { [self setZoom:self.webView.pageZoom-0.1]; }
+- (void)zoomReset:(id)s { self.webView.magnification=1.0; [self setZoom:1.0]; }
+- (NSString *)currentHost { return self.webView.URL.host?:@""; }
+// Set zoom for the active tab, remember it per-host, and flash the level.
+- (void)setZoom:(CGFloat)z {
+  z=MAX(0.25,MIN(5.0,round(z*100)/100.0));
+  self.webView.pageZoom=z;
+  NSString *h=self.currentHost;
+  if (h.length) {
+    if (fabs(z-1.0)<0.001) [self.zoomByHost removeObjectForKey:h];
+    else self.zoomByHost[h]=@(z);
+    [[NSUserDefaults standardUserDefaults] setObject:self.zoomByHost forKey:@"BBZoomByHost"];
+  }
+  [self flashZoom:z]; [self updateZoomChip];
+}
+// Re-apply a remembered zoom when navigating to / switching to a page.
+- (void)applyZoomForCurrentTab {
+  NSString *h=self.currentHost;
+  CGFloat z=(h.length && self.zoomByHost[h]) ? self.zoomByHost[h].doubleValue : 1.0;
+  self.webView.pageZoom=z;
+  [self updateZoomChip];
+}
+- (void)updateZoomChip {
+  if (!self.zoomChip) return;
+  CGFloat z=self.webView.pageZoom;
+  BOOL show=fabs(z-1.0)>=0.005;
+  self.zoomChip.title=[NSString stringWithFormat:@"%d%%",(int)lround(z*100)];
+  self.zoomChip.hidden=!show;
+}
+- (void)flashZoom:(CGFloat)z {
+  [self showStatus:[NSString stringWithFormat:@"Zoom %d%%",(int)lround(z*100)]];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(1.3*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+    if ([self.statusBar.stringValue hasPrefix:@"Zoom "]) self.statusBar.hidden=YES;
+  });
+}
 
 - (void)printPage:(id)s {
   NSPrintOperation *op=[self.webView printOperationWithPrintInfo:[NSPrintInfo sharedPrintInfo]];
   [op runOperationModalForWindow:self.window delegate:nil didRunSelector:nil contextInfo:nil];
+}
+- (void)printSelection:(id)s {
+  // Grab the page selection — fall back to the whole page when nothing's selected.
+  [self.webView evaluateJavaScript:
+    @"(function(){var s=window.getSelection?window.getSelection():null;if(!s||s.rangeCount==0)return '';"
+    @"var c=document.createElement('div');for(var i=0;i<s.rangeCount;i++){c.appendChild(s.getRangeAt(i).cloneContents());}return c.innerHTML;})()"
+    completionHandler:^(id r,NSError *e){
+      NSString *html=[r isKindOfClass:[NSString class]]?(NSString*)r:@"";
+      if (!html.length) {
+        [self printPage:nil]; return;
+      }
+      NSString *wrapped=[NSString stringWithFormat:
+        @"<!doctype html><html><head><meta charset=\"utf-8\"><style>body{font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;margin:24px;color:#000;}img{max-width:100%%;}</style></head><body>%@</body></html>",html];
+      WKWebView *temp=[[WKWebView alloc]initWithFrame:NSMakeRect(0,0,800,1100)];
+      [temp loadHTMLString:wrapped baseURL:self.webView.URL];
+      // Defer print until the temp view finishes loading.
+      objc_setAssociatedObject(self,"BBPrintTempWV",temp,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW,(int64_t)(0.4*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        NSPrintOperation *op=[temp printOperationWithPrintInfo:[NSPrintInfo sharedPrintInfo]];
+        [op runOperationModalForWindow:self.window delegate:nil didRunSelector:nil contextInfo:nil];
+        objc_setAssociatedObject(self,"BBPrintTempWV",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      });
+    }];
 }
 - (void)viewSource:(id)s {
   // Fetch source via JS to avoid loading the blocked view-source: scheme through nav policy.
@@ -4287,18 +8652,28 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   }];
 }
 - (void)openDevTools:(id)s {
-  // Use _inspector private API: get the WKInspector and call show: on it.
-  // developerExtrasEnabled must be YES (set in baseConfig) for this to work.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+  // Open the Web Inspector via the private _WKInspector. Requires inspectable=YES
+  // (set on every webview) and developerExtrasEnabled (set in baseConfig).
+  // NOTE: _WKInspector's selector is `show` (no colon) — the old `show:` silently
+  // no-op'd, which is why Dev Tools never opened.
   SEL getInspector=NSSelectorFromString(@"_inspector");
-  if([self.webView respondsToSelector:getInspector]){
-    id inspector=((id(*)(id,SEL))objc_msgSend)(self.webView,getInspector);
-    SEL show=NSSelectorFromString(@"show:");
-    if([inspector respondsToSelector:show])
-      ((void(*)(id,SEL,id))objc_msgSend)(inspector,show,nil);
+  if(![self.webView respondsToSelector:getInspector]) {
+    [self showDevToolsUnavailable]; return;
   }
-#pragma clang diagnostic pop
+  id inspector=((id(*)(id,SEL))objc_msgSend)(self.webView,getInspector);
+  SEL show=NSSelectorFromString(@"show");
+  if(inspector && [inspector respondsToSelector:show]) {
+    ((void(*)(id,SEL))objc_msgSend)(inspector,show);
+  } else {
+    [self showDevToolsUnavailable];
+  }
+}
+- (void)showDevToolsUnavailable {
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=@"Developer Tools unavailable";
+  a.informativeText=@"The Web Inspector could not be opened on this WebKit build. Right-click ▸ Inspect Element also requires it.";
+  [a addButtonWithTitle:@"OK"];
+  [a beginSheetModalForWindow:self.window completionHandler:nil];
 }
 - (void)openFile:(id)s {
   NSOpenPanel *p=[NSOpenPanel openPanel];
@@ -4310,6 +8685,52 @@ static void BBNetworkRecord_push(NSString*domain,NSString*page,NSString*type,BOO
   [p beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc) {
     if (rc==NSModalResponseOK&&p.URL)
       [self.webView loadFileURL:p.URL allowingReadAccessToURL:[p.URL URLByDeletingLastPathComponent]];
+  }];
+}
+- (void)sharePage:(id)s {
+  NSURL *url=self.webView.URL; if (!url) return;
+  NSString *title=self.webView.title?:url.absoluteString;
+  NSSharingServicePicker *pick=[[NSSharingServicePicker alloc]initWithItems:@[url,title]];
+  // Show picker anchored to the ellipsis (bear panel) button if available, else center of toolbar
+  NSView *anchor=self.securityButton?:self.toolbarBg;
+  [pick showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMinY];
+}
+- (void)takePageScreenshot:(id)s {
+  NSSavePanel *p=[NSSavePanel savePanel];
+  p.nameFieldStringValue=[self.webView.title?:@"screenshot" stringByAppendingString:@".png"];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  p.allowedFileTypes=@[@"png"];
+#pragma clang diagnostic pop
+  [p beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!p.URL) return;
+    WKSnapshotConfiguration *cfg=[[WKSnapshotConfiguration alloc]init];
+    // Full visible area at 2x for retina; leave rect at CGRectZero to capture the current viewport.
+    cfg.snapshotWidth=@(self.webView.bounds.size.width*2);
+    [self.webView takeSnapshotWithConfiguration:cfg completionHandler:^(NSImage *img,NSError *e){
+      if (e||!img) { [self showToast:@"Screenshot failed"]; return; }
+      NSBitmapImageRep *rep=[NSBitmapImageRep imageRepWithData:[img TIFFRepresentation]];
+      NSData *png=[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+      if (!png) { [self showToast:@"Screenshot failed"]; return; }
+      [png writeToURL:p.URL atomically:YES];
+      [self showToast:@"Screenshot saved"];
+    }];
+  }];
+}
+- (void)savePageAsPDF:(id)s {
+  NSSavePanel *p=[NSSavePanel savePanel];
+  p.nameFieldStringValue=[self.webView.title?:@"page" stringByAppendingString:@".pdf"];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  p.allowedFileTypes=@[@"pdf"];
+#pragma clang diagnostic pop
+  [p beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSModalResponseOK||!p.URL) return;
+    [self.webView createPDFWithConfiguration:nil completionHandler:^(NSData *d,NSError *e){
+      if (e||!d.length) { [self showToast:@"PDF save failed"]; return; }
+      [d writeToURL:p.URL atomically:YES];
+      [self showToast:@"Saved as PDF"];
+    }];
   }];
 }
 - (void)savePage:(id)s {
@@ -4336,6 +8757,40 @@ static NSString *kFaviconJS=@"(function(){"
   @"return (location.origin&&location.origin!=='null')?location.origin+'/favicon.ico':'';"
   @"})()";
 
+// Shared, host-keyed favicon cache used by the bookmarks bar / manager.
++ (NSCache<NSString *,NSImage *> *)faviconCache {
+  static NSCache *c; static dispatch_once_t o; dispatch_once(&o,^{
+    c=[NSCache new]; c.countLimit=200;
+  });
+  return c;
+}
+- (NSImage *)faviconForBookmarkURL:(NSString *)urlStr sync:(BOOL)sync {
+  NSURL *u=[NSURL URLWithString:urlStr]; if (!u.host.length) return nil;
+  NSString *host=u.host.lowercaseString;
+  NSImage *hit=[[BBDelegate faviconCache] objectForKey:host];
+  if (hit) return hit;
+  // Look for a cached tab favicon for this host so we don't refetch.
+  for (BBTab *t in self.tabs) {
+    NSString *th=t.webView.URL.host.lowercaseString?:@"";
+    if ([th isEqualToString:host] && t.favicon) {
+      [[BBDelegate faviconCache] setObject:t.favicon forKey:host];
+      return t.favicon;
+    }
+  }
+  if (sync) return nil;
+  // Async fetch /favicon.ico; UI can re-ask on reload.
+  NSURL *fav=[NSURL URLWithString:[NSString stringWithFormat:@"https://%@/favicon.ico",host]];
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0),^{
+    NSData *d=[NSData dataWithContentsOfURL:fav];
+    NSImage *img=d?[[NSImage alloc]initWithData:d]:nil;
+    if (!img) return;
+    dispatch_async(dispatch_get_main_queue(),^{
+      [[BBDelegate faviconCache] setObject:img forKey:host];
+      if (self.bookmarksBarVisible) [self reloadBookmarksBar];
+    });
+  });
+  return nil;
+}
 - (void)fetchFaviconForTab:(BBTab *)tab {
   WKWebView *wv=tab.webView;
   [wv evaluateJavaScript:kFaviconJS completionHandler:^(id result,NSError *e) {
@@ -4364,17 +8819,52 @@ static NSString *kFaviconJS=@"(function(){"
   else { [self clearFind]; [self.window makeFirstResponder:self.webView]; }
 }
 - (void)closeFind:(id)s  { if(self.findBarVisible)[self toggleFind:nil]; }
+- (void)useSelectionForFind:(id)s {
+  [self.webView evaluateJavaScript:@"window.getSelection?String(window.getSelection()):''" completionHandler:^(id r,NSError *e){
+    NSString *sel=[r isKindOfClass:[NSString class]]?(NSString*)r:@"";
+    sel=[sel stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!sel.length) { NSBeep(); return; }
+    dispatch_async(dispatch_get_main_queue(),^{
+      if (!self.findBarVisible) [self toggleFind:nil];
+      self.findBar.queryField.stringValue=sel;
+      [self findNext:nil];
+    });
+  }];
+}
 - (void)doFind:(BOOL)back {
   NSString *q=self.findBar.queryField.stringValue; if(!q.length){[self clearFind];return;}
   WKFindConfiguration *cfg=[[WKFindConfiguration alloc]init];
-  cfg.backwards=back; cfg.wraps=YES; cfg.caseSensitive=NO;
+  cfg.backwards=back; cfg.wraps=YES;
+  cfg.caseSensitive=(self.findBar.caseButton.state==NSControlStateValueOn);
   [self.webView findString:q withConfiguration:cfg completionHandler:^(WKFindResult *r){
-    self.findBar.resultLabel.stringValue=r.matchFound?@"":@"Not found";
-    self.findBar.resultLabel.textColor=r.matchFound?[NSColor secondaryLabelColor]:[NSColor systemRedColor];
+    if (!r.matchFound) {
+      self.findBar.resultLabel.stringValue=@"Not found";
+      self.findBar.resultLabel.textColor=[NSColor systemRedColor];
+      return;
+    }
+    self.findBar.resultLabel.textColor=[NSColor secondaryLabelColor];
+    [self updateFindCount:q];
+  }];
+}
+// WKFindResult exposes no match count, so count occurrences in the page text.
+// Approximate (visible text only; excludes inputs/shadow DOM) but Chrome-like.
+- (void)updateFindCount:(NSString *)q {
+  BOOL cs=(self.findBar.caseButton.state==NSControlStateValueOn);
+  NSString *js=[NSString stringWithFormat:
+    @"(function(){try{var t=(document.body&&document.body.innerText)||'';"
+    @"var q=%@;if(!q)return 0;var n=0,i=0,%@;"
+    @"while((i=tl.indexOf(ql,i))!==-1){n++;i+=ql.length;}return n;}catch(e){return -1;}})();",
+    [self jsStringLiteral:q],
+    cs?@"ql=q,tl=t":@"ql=q.toLowerCase(),tl=t.toLowerCase()"];
+  [self.webView evaluateJavaScript:js completionHandler:^(id r,NSError *e){
+    NSInteger n=[r isKindOfClass:[NSNumber class]]?[r integerValue]:-1;
+    if (n<0) { self.findBar.resultLabel.stringValue=@""; return; }
+    self.findBar.resultLabel.stringValue=(n==1)?@"1 match":[NSString stringWithFormat:@"%ld matches",(long)n];
   }];
 }
 - (void)findNext:(id)s { [self doFind:NO]; }
 - (void)findPrev:(id)s { [self doFind:YES]; }
+- (void)findToggleCase:(id)s { if (self.findBar.queryField.stringValue.length) [self doFind:NO]; }
 - (void)clearFind {
   WKFindConfiguration *cfg=[[WKFindConfiguration alloc]init];
   [self.webView findString:@"" withConfiguration:cfg completionHandler:^(WKFindResult *r){}];
@@ -4383,16 +8873,124 @@ static NSString *kFaviconJS=@"(function(){"
 
 // ── Address bar ───────────────────────────────────────────────────────────────
 - (void)controlTextDidBeginEditing:(NSNotification *)n { (void)n; }
+- (NSString *)bestURLCompletionFor:(NSString *)prefix {
+  // Strip scheme from prefix so "git" matches "https://github.com"
+  NSString *pl=prefix.lowercaseString;
+  NSArray *schemes=@[@"https://www.",@"http://www.",@"https://",@"http://"];
+  // Bookmarks first (user explicitly saved = high confidence)
+  for (BBBookmark *b in [BBBookmarksStore shared].items) {
+    NSString *url=b.urlString; NSString *urlL=url.lowercaseString;
+    NSString *bare=urlL;
+    for (NSString *sc in schemes) { if ([urlL hasPrefix:sc]){bare=[urlL substringFromIndex:sc.length];break;} }
+    if ([bare hasPrefix:pl]||[urlL hasPrefix:pl]) return b.urlString;
+  }
+  // Then history
+  for (BBHistoryEntry *e in [[BBHistoryStore shared] search:prefix limit:5]) {
+    NSString *url=e.urlString; NSString *urlL=url.lowercaseString;
+    NSString *bare=urlL;
+    for (NSString *sc in schemes) { if ([urlL hasPrefix:sc]){bare=[urlL substringFromIndex:sc.length];break;} }
+    if ([bare hasPrefix:pl]||[urlL hasPrefix:pl]) return e.urlString;
+  }
+  return nil;
+}
 - (void)controlTextDidChange:(NSNotification *)n {
+  // Tab Search panel intercept — must be first so we return before the address-bar path
+  if ([n.object isKindOfClass:[NSSearchField class]] && ((NSSearchField*)n.object).tag==0xCAFE) {
+    NSString *q=((NSSearchField*)n.object).stringValue.lowercaseString;
+    NSMutableArray *filtered=[NSMutableArray array];
+    for (BBTab *t in self.tabs) {
+      NSString *title=(t.title?:@"").lowercaseString;
+      NSString *u=(t.suspended?t.suspendedURL:t.webView.URL.absoluteString)?:@"";
+      if (!q.length||[title containsString:q]||[u.lowercaseString containsString:q]) [filtered addObject:t];
+    }
+    objc_setAssociatedObject(self,"tabSearchFiltered",filtered,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSPanel *p=(NSPanel *)objc_getAssociatedObject(self,"tabSearchPanel");
+    NSTableView *tv2=(NSTableView *)objc_getAssociatedObject(p,"tv");
+    [tv2 reloadData];
+    if (filtered.count>0) [tv2 selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+    return;
+  }
   if (n.object!=self.address) return;
+  if (self.suppressInlineCompletion) return;
   NSString *q=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+  // Remote suggestions only when enabled in Settings AND not in a private tab — never
+  // send incognito keystrokes to the suggest endpoint.
+  self.addressDropdown.remoteSuggestEnabled =
+    [[NSUserDefaults standardUserDefaults] boolForKey:@"BBSearchSuggestions"] && !self.activeTab.isPrivate;
+  NSMutableArray *snap=[NSMutableArray array];
+  for (NSInteger k=0;k<(NSInteger)self.tabs.count;k++) {
+    if (k==self.activeTabIndex) continue;
+    BBTab *t=self.tabs[k];
+    NSString *u=t.suspended?t.suspendedURL:t.webView.URL.absoluteString;
+    if (!u.length || [self isInternalURL:u]) continue;
+    [snap addObject:@{@"idx":@(k),@"title":t.title?:@"",@"url":u}];
+  }
+  self.addressDropdown.openTabsSnapshot=snap;
   if (q.length) [self.addressDropdown updateForQuery:q belowField:self.address inWindow:self.window];
   else [self.addressDropdown hide];
+  // Inline autocomplete (default ON, disabled by user pref or private mode)
+  // Only attempt if the typed text is URL-like (no spaces) and at least 2 chars.
+  NSUserDefaults *ud=[NSUserDefaults standardUserDefaults];
+  BOOL inlineON=([ud objectForKey:@"BBInlineAutocomplete"]==nil||[ud boolForKey:@"BBInlineAutocomplete"])
+                && !self.activeTab.isPrivate && q.length>=2 && ![q containsString:@" "];
+  if (inlineON) {
+    NSString *full=[self bestURLCompletionFor:q];
+    if (full) {
+      // Determine what to show inline: strip scheme to match what the user typed
+      NSString *display=full;
+      NSArray *schemes=@[@"https://www.",@"http://www.",@"https://",@"http://"];
+      for (NSString *sc in schemes) {
+        if ([full.lowercaseString hasPrefix:sc.lowercaseString]) {
+          display=[full substringFromIndex:sc.length]; break;
+        }
+      }
+      if (display.length>q.length && [display.lowercaseString hasPrefix:q.lowercaseString]) {
+        NSTextView *tv=(NSTextView*)[self.address currentEditor];
+        if (tv) {
+          self.suppressInlineCompletion=YES;
+          // Set text to the completion, select only the appended portion
+          NSString *prev=tv.string;
+          tv.string=display;
+          // Only select the appended tail — so typing replaces it, Delete undoes it
+          NSRange tail=NSMakeRange(q.length, display.length-q.length);
+          [tv setSelectedRange:tail];
+          self.suppressInlineCompletion=NO;
+          // If we changed the field's displayed text, update again with the typed part
+          if (![prev isEqualToString:display]) {
+            [self.addressDropdown updateForQuery:q belowField:self.address inWindow:self.window];
+          }
+        }
+      }
+    }
+  }
 }
 - (void)controlTextDidEndEditing:(NSNotification *)n {
   if (n.object==self.address) [self.addressDropdown hide];
 }
 - (BOOL)control:(NSControl *)ctrl textView:(NSTextView *)tv doCommandBySelector:(SEL)sel {
+  // Tab Search field — Enter confirms, Escape closes, arrows navigate the list
+  if ([ctrl isKindOfClass:[NSSearchField class]] && ((NSSearchField *)ctrl).tag==0xCAFE) {
+    NSPanel *p=(NSPanel *)objc_getAssociatedObject(self,"tabSearchPanel");
+    NSTableView *tsv=(NSTableView *)objc_getAssociatedObject(p,"tv");
+    if (sel==@selector(insertNewline:))   { [self tabSearchConfirm:nil]; return YES; }
+    if (sel==@selector(cancelOperation:)) {
+      [p orderOut:nil];
+      objc_setAssociatedObject(self,"tabSearchPanel",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      objc_setAssociatedObject(self,"tabSearchFiltered",nil,OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+      return YES;
+    }
+    if (sel==@selector(moveDown:)) {
+      NSInteger row=tsv.selectedRow; NSInteger n=(NSInteger)tsv.numberOfRows;
+      if (n>0) { NSInteger nr=MIN(row+1,n-1); [tsv selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)nr] byExtendingSelection:NO]; [tsv scrollRowToVisible:nr]; }
+      return YES;
+    }
+    if (sel==@selector(moveUp:)) {
+      NSInteger row=tsv.selectedRow;
+      if (row>0) { NSInteger nr=row-1; [tsv selectRowIndexes:[NSIndexSet indexSetWithIndex:(NSUInteger)nr] byExtendingSelection:NO]; [tsv scrollRowToVisible:nr]; }
+      return YES;
+    }
+    return NO;
+  }
   if (ctrl==self.findBar.queryField) {
     if (sel==@selector(insertNewline:))   { [self findNext:nil]; return YES; }
     if (sel==@selector(cancelOperation:)) { [self closeFind:nil]; return YES; }
@@ -4403,6 +9001,18 @@ static NSString *kFaviconJS=@"(function(){"
     if (sel==@selector(moveUp:))     { [self.addressDropdown selectPrev]; return YES; }
     if (sel==@selector(insertNewline:)) {
       if ([self.addressDropdown confirmSelection]) return YES;
+      // Ctrl+Return → www.{text}.com expansion (Chrome behavior)
+      NSUInteger mods=[NSApp currentEvent].modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+      if (mods & NSEventModifierFlagControl) {
+        NSString *t=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (t.length && ![t containsString:@"."] && ![t containsString:@" "]) {
+          NSString *expanded=[NSString stringWithFormat:@"https://www.%@.com",t];
+          NSURL *eu=[NSURL URLWithString:expanded];
+          if (eu) { [self.webView loadRequest:[NSURLRequest requestWithURL:eu]]; [self.window makeFirstResponder:self.webView]; return YES; }
+        }
+      }
+      // Open in new tab when either Cmd (Chrome standard on macOS) or Option is held with Enter.
+      BOOL openInNewTab=((mods & NSEventModifierFlagOption) | (mods & NSEventModifierFlagCommand)) != 0;
       NSString *raw=[self.address.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
       // Reject any dangerous scheme typed directly into the address bar
       NSString *rawLower=raw.lowercaseString;
@@ -4420,7 +9030,8 @@ static NSString *kFaviconJS=@"(function(){"
         url=[NSURL URLWithString:[BBDelegate searchURLForQuery:raw]];
       }
       if (url) {
-        BBEmitEvent(@"navigation.requested",@"allow",@"User navigation.",@{@"url":url.absoluteString});
+        [self emitNav:@"navigation.requested" url:url.absoluteString reason:@"User navigation." private:self.activeTab.isPrivate];
+        if (openInNewTab) { [self addTabPrivate:self.activeTab.isPrivate]; }
         [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
       }
       [self.window makeFirstResponder:self.webView]; return YES;
@@ -4435,27 +9046,6 @@ static NSString *kFaviconJS=@"(function(){"
 }
 
 // ── Navigation delegate ───────────────────────────────────────────────────────
-// ── JS dialog suppression ─────────────────────────────────────────────────────
-// Pages cannot trigger alert(), confirm(), or prompt() — these are classic attack
-// vectors: infinite alert loops, phishing via confirm, credential harvest via prompt.
-// All three are silently swallowed. The completion handlers are called immediately
-// so the page's JS execution continues normally (no hang).
-- (void)webView:(WKWebView*)wv runJavaScriptAlertPanelWithMessage:(NSString*)msg
-    initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void(^)(void))done {
-  BBLog([NSString stringWithFormat:@"[BLOCKED] JS alert() from %@: %@", frame.request.URL.host?:@"?", msg]);
-  done();
-}
-- (void)webView:(WKWebView*)wv runJavaScriptConfirmPanelWithMessage:(NSString*)msg
-    initiatedByFrame:(WKFrameInfo*)frame completionHandler:(void(^)(BOOL))done {
-  BBLog([NSString stringWithFormat:@"[BLOCKED] JS confirm() from %@: %@", frame.request.URL.host?:@"?", msg]);
-  done(NO);
-}
-- (void)webView:(WKWebView*)wv runJavaScriptTextInputPanelWithPrompt:(NSString*)prompt
-    defaultText:(NSString*)def initiatedByFrame:(WKFrameInfo*)frame
-    completionHandler:(void(^)(NSString*))done {
-  BBLog([NSString stringWithFormat:@"[BLOCKED] JS prompt() from %@: %@", frame.request.URL.host?:@"?", prompt]);
-  done(nil);
-}
 // beforeunload dialogs — suppress "are you sure you want to leave?" gates
 - (void)webViewDidClose:(WKWebView*)wv { /* no action — suppresses beforeunload UI */ }
 
@@ -4475,10 +9065,17 @@ static NSString *kFaviconJS=@"(function(){"
   newWV.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
   newWV.navigationDelegate=self; newWV.UIDelegate=self;
   newWV.allowsBackForwardNavigationGestures=YES; newWV.allowsLinkPreview=YES;
+  newWV.allowsMagnification=YES; // trackpad pinch-to-zoom (Chrome parity)
+  if (@available(macOS 13.3, *)) newWV.inspectable=YES;
   [newWV addObserver:self forKeyPath:@"estimatedProgress" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
   [newWV addObserver:self forKeyPath:@"title" options:NSKeyValueObservingOptionNew context:(__bridge void *)newWV];
 
   BBTab *tab=[[BBTab alloc]init];
+  // Inherit private-ness from the opener: window.open/target=_blank reuse the
+  // opener's configuration, so a popup from a private tab shares its ephemeral
+  // data store. Mark the tab private to match — otherwise its navigations would
+  // leak into history and session restore. (A non-persistent store == private.)
+  tab.isPrivate = !cfg.websiteDataStore.persistent;
   tab.webView=newWV;
   [self.tabs addObject:tab];
   if (action.request.URL) [tab.webView loadRequest:action.request];
@@ -4486,11 +9083,159 @@ static NSString *kFaviconJS=@"(function(){"
   dispatch_async(dispatch_get_main_queue(),^{[self activateTab:ni];[self reloadTabBar];});
   return newWV;
 }
+// ── JS dialogs + file upload (WKUIDelegate) ───────────────────────────────────
+// Real NSAlert sheets for alert/confirm/prompt and NSOpenPanel for file upload.
+// Chrome-style abuse protection: after 3 dialogs without navigation the user gets
+// a "Block additional dialogs" checkbox. Once suppressed, dialogs no-op until nav.
+static const NSInteger kDialogAbuseThreshold = 3;
+
+- (NSString *)jsDialogTitleForFrame:(WKFrameInfo *)frame {
+  NSString *host=frame.request.URL.host;
+  return host.length?[NSString stringWithFormat:@"%@ says",host]:@"This page says";
+}
+- (BOOL)checkDialogAbuseForWebView:(WKWebView *)wv voidCompletion:(void(^)(void))voidDone
+    boolCompletion:(void(^)(BOOL))boolDone stringCompletion:(void(^)(NSString*))strDone {
+  BBTab *tab=[self tabForWebView:wv]; if (!tab) return NO;
+  if (tab.dialogsSuppressed) {
+    if (voidDone) voidDone();
+    else if (boolDone) boolDone(NO);
+    else if (strDone) strDone(nil);
+    return YES;
+  }
+  tab.dialogCount++;
+  return NO;
+}
+- (void)addSuppressCheckboxIfNeeded:(NSAlert *)alert webView:(WKWebView *)wv {
+  BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
+  if (tab.dialogCount < kDialogAbuseThreshold) return;
+  NSButton *cb=[NSButton checkboxWithTitle:@"Block additional dialogs from this page" target:nil action:nil];
+  alert.accessoryView=cb;
+}
+- (void)handleSuppressCheckbox:(NSAlert *)alert webView:(WKWebView *)wv {
+  if (![alert.accessoryView isKindOfClass:[NSButton class]]) return;
+  NSButton *cb=(NSButton *)alert.accessoryView;
+  if (cb.state==NSControlStateValueOn) {
+    BBTab *tab=[self tabForWebView:wv];
+    if (tab) tab.dialogsSuppressed=YES;
+  }
+}
+- (void)webView:(WKWebView *)wv runJavaScriptAlertPanelWithMessage:(NSString *)message
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(void))completionHandler {
+  if ([self checkDialogAbuseForWebView:wv voidCompletion:completionHandler boolCompletion:nil stringCompletion:nil]) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[self jsDialogTitleForFrame:frame]; a.informativeText=message?:@"";
+  [a addButtonWithTitle:@"OK"];
+  [self addSuppressCheckboxIfNeeded:a webView:wv];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    [self handleSuppressCheckbox:a webView:wv];
+    completionHandler();
+  }];
+}
+- (void)webView:(WKWebView *)wv runJavaScriptConfirmPanelWithMessage:(NSString *)message
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(BOOL))completionHandler {
+  if ([self checkDialogAbuseForWebView:wv voidCompletion:nil boolCompletion:completionHandler stringCompletion:nil]) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[self jsDialogTitleForFrame:frame]; a.informativeText=message?:@"";
+  [a addButtonWithTitle:@"OK"]; [a addButtonWithTitle:@"Cancel"];
+  [self addSuppressCheckboxIfNeeded:a webView:wv];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    [self handleSuppressCheckbox:a webView:wv];
+    completionHandler(rc==NSAlertFirstButtonReturn);
+  }];
+}
+- (void)webView:(WKWebView *)wv runJavaScriptTextInputPanelWithPrompt:(NSString *)prompt
+    defaultText:(NSString *)defaultText initiatedByFrame:(WKFrameInfo *)frame
+    completionHandler:(void (^)(NSString *))completionHandler {
+  if ([self checkDialogAbuseForWebView:wv voidCompletion:nil boolCompletion:nil stringCompletion:completionHandler]) return;
+  NSAlert *a=[[NSAlert alloc]init];
+  a.messageText=[self jsDialogTitleForFrame:frame]; a.informativeText=prompt?:@"";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,260,24)];
+  tf.stringValue=defaultText?:@"";
+  // accessoryView is the text field; suppress checkbox only applies when count < threshold
+  BBTab *tab=[self tabForWebView:wv];
+  if (tab && tab.dialogCount >= kDialogAbuseThreshold) {
+    NSStackView *sv=[NSStackView stackViewWithViews:@[tf,
+      [NSButton checkboxWithTitle:@"Block additional dialogs from this page" target:nil action:nil]]];
+    sv.orientation=NSUserInterfaceLayoutOrientationVertical; sv.alignment=NSLayoutAttributeLeading;
+    sv.spacing=6; a.accessoryView=sv;
+  } else {
+    a.accessoryView=tf;
+  }
+  [a addButtonWithTitle:@"OK"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if ([a.accessoryView isKindOfClass:[NSStackView class]]) {
+      NSStackView *sv=(NSStackView *)a.accessoryView;
+      for (NSView *v in sv.arrangedSubviews) {
+        if ([v isKindOfClass:[NSButton class]] && ((NSButton*)v).state==NSControlStateValueOn) {
+          if (tab) tab.dialogsSuppressed=YES;
+        }
+      }
+    }
+    completionHandler(rc==NSAlertFirstButtonReturn?tf.stringValue:nil);
+  }];
+}
+- (void)webView:(WKWebView *)wv runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
+    initiatedByFrame:(WKFrameInfo *)frame completionHandler:(void (^)(NSArray<NSURL *> *))completionHandler {
+  NSOpenPanel *p=[NSOpenPanel openPanel];
+  p.canChooseFiles=YES; p.canChooseDirectories=NO;
+  p.allowsMultipleSelection=parameters.allowsMultipleSelection;
+  [p beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    completionHandler(rc==NSModalResponseOK?p.URLs:nil);
+  }];
+}
 - (void)webView:(WKWebView *)wv navigationAction:(WKNavigationAction *)action didBecomeDownload:(WKDownload *)download {
   download.delegate=self;
 }
 - (void)webView:(WKWebView *)wv navigationResponse:(WKNavigationResponse *)response didBecomeDownload:(WKDownload *)download {
   download.delegate=self;
+}
+// ── Navigation response policy — trigger download for Content-Disposition: attachment ────
+- (void)webView:(WKWebView *)wv decidePolicyForNavigationResponse:(WKNavigationResponse *)response
+    decisionHandler:(void(^)(WKNavigationResponsePolicy))decisionHandler {
+  NSHTTPURLResponse *http=(NSHTTPURLResponse *)response.response;
+  if ([http isKindOfClass:[NSHTTPURLResponse class]]) {
+    NSString *cd=http.allHeaderFields[@"Content-Disposition"]?:@"";
+    if ([cd hasPrefix:@"attachment"]) { decisionHandler(WKNavigationResponsePolicyDownload); return; }
+  }
+  decisionHandler(response.canShowMIMEType ? WKNavigationResponsePolicyAllow : WKNavigationResponsePolicyDownload);
+}
+// ── HTTP Basic / Digest auth challenge ────────────────────────────────────────
+- (void)webView:(WKWebView *)wv didReceiveAuthenticationChallenge:(NSURLAuthenticationChallenge *)challenge
+    completionHandler:(void(^)(NSURLSessionAuthChallengeDisposition,NSURLCredential*))done {
+  NSString *method=challenge.protectionSpace.authenticationMethod;
+  if ([method isEqualToString:NSURLAuthenticationMethodHTTPBasic] ||
+      [method isEqualToString:NSURLAuthenticationMethodHTTPDigest] ||
+      [method isEqualToString:NSURLAuthenticationMethodNTLM]) {
+    dispatch_async(dispatch_get_main_queue(),^{
+      NSAlert *a=[[NSAlert alloc]init];
+      a.messageText=[NSString stringWithFormat:@"Sign in to %@",challenge.protectionSpace.host];
+      a.informativeText=challenge.protectionSpace.realm.length?
+        [NSString stringWithFormat:@"Realm: %@",challenge.protectionSpace.realm]:@"";
+      NSTextField *user=[[NSTextField alloc]initWithFrame:NSMakeRect(0,30,260,22)];
+      user.placeholderString=@"Username";
+      NSSecureTextField *pass=[[NSSecureTextField alloc]initWithFrame:NSMakeRect(0,0,260,22)];
+      pass.placeholderString=@"Password";
+      NSView *acc=[[NSView alloc]initWithFrame:NSMakeRect(0,0,260,58)];
+      [acc addSubview:user]; [acc addSubview:pass];
+      a.accessoryView=acc;
+      [a addButtonWithTitle:@"Sign In"]; [a addButtonWithTitle:@"Cancel"];
+      [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+        if (rc==NSAlertFirstButtonReturn && user.stringValue.length) {
+          NSURLCredential *cred=[NSURLCredential credentialWithUser:user.stringValue
+            password:pass.stringValue persistence:NSURLCredentialPersistenceForSession];
+          done(NSURLSessionAuthChallengeUseCredential,cred);
+        } else {
+          done(NSURLSessionAuthChallengeCancelAuthenticationChallenge,nil);
+        }
+      }];
+    });
+    return;
+  }
+  // Server trust (HTTPS) — default WebKit handling
+  if ([method isEqualToString:NSURLAuthenticationMethodServerTrust])
+    done(NSURLSessionAuthChallengePerformDefaultHandling,nil);
+  else
+    done(NSURLSessionAuthChallengeCancelAuthenticationChallenge,nil);
 }
 // ── HTTPS upgrade + mixed-content guard ───────────────────────────────────────
 - (void)webView:(WKWebView *)wv decidePolicyForNavigationAction:(WKNavigationAction *)action
@@ -4512,17 +9257,34 @@ static NSString *kFaviconJS=@"(function(){"
     return;
   }
 
-  // Cmd+click → open in new background tab
-  if (action.navigationType==WKNavigationTypeLinkActivated &&
-      (action.modifierFlags & NSEventModifierFlagCommand)) {
-    decisionHandler(WKNavigationActionPolicyCancel);
-    dispatch_async(dispatch_get_main_queue(),^{
-      NSInteger prev=self.activeTabIndex;
-      [self addTabPrivate:self.activeTab.isPrivate];
-      [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
-      [self tabItemDidSelect:prev]; // stay on current tab
-    });
-    return;
+  // Modifier-click behaviors on links (Chrome parity):
+  //   ⌘⇧-click → new tab AND switch to it (foreground)
+  //   ⌘-click  → new background tab (stay on current)
+  //   ⇧-click  → new window
+  if (action.navigationType==WKNavigationTypeLinkActivated) {
+    NSEventModifierFlags m=action.modifierFlags;
+    BOOL cmd=(m & NSEventModifierFlagCommand)!=0;
+    BOOL shift=(m & NSEventModifierFlagShift)!=0;
+    if (cmd) {
+      decisionHandler(WKNavigationActionPolicyCancel);
+      dispatch_async(dispatch_get_main_queue(),^{
+        NSInteger prev=self.activeTabIndex;
+        [self addTabPrivate:self.activeTab.isPrivate];
+        [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+        if (!shift) [self tabItemDidSelect:prev]; // ⌘+click stays, ⌘⇧+click foregrounds
+      });
+      return;
+    }
+    if (shift) {
+      decisionHandler(WKNavigationActionPolicyCancel);
+      dispatch_async(dispatch_get_main_queue(),^{
+        BBDelegate *w=[[BBDelegate alloc]init];
+        NSNotification *dummy=[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp];
+        [w applicationDidFinishLaunching:dummy];
+        [w.webView loadRequest:[NSURLRequest requestWithURL:url]];
+      });
+      return;
+    }
   }
 
   // Tracking-parameter strip — remove well-known analytics tags before loading
@@ -4556,6 +9318,17 @@ static NSString *kFaviconJS=@"(function(){"
         }
       }
     }
+  }
+
+  // Non-http(s) external schemes (mailto:, tel:, sms:, ftp:, magnet:, etc.) — hand off to the OS.
+  BOOL isWebScheme=[scheme isEqualToString:@"https"]||[scheme isEqualToString:@"http"]
+                   ||[scheme isEqualToString:@"file"]||[scheme isEqualToString:@"blob"]
+                   ||[scheme isEqualToString:@"about"]||[scheme isEqualToString:@"data"]
+                   ||[scheme isEqualToString:@"bbfont"]||[scheme isEqualToString:@"bearbrowser"];
+  if (!isWebScheme && scheme.length) {
+    decisionHandler(WKNavigationActionPolicyCancel);
+    [[NSWorkspace sharedWorkspace] openURL:url];
+    return;
   }
 
   // Auto-upgrade plain HTTP to HTTPS (skip localhost and .local)
@@ -4595,8 +9368,11 @@ static NSString *kFaviconJS=@"(function(){"
 
 - (void)contextOpenLinkNewTab:(NSMenuItem *)item {
   NSURL *url=item.representedObject; if (!url) return;
+  // Chrome's "Open Link in New Tab" opens in BACKGROUND — current tab stays focused.
+  NSInteger prev=self.activeTabIndex;
   [self addTabPrivate:self.activeTab.isPrivate];
   [self.webView loadRequest:[NSURLRequest requestWithURL:url]];
+  if (prev>=0 && prev<(NSInteger)self.tabs.count-1) [self tabItemDidSelect:prev];
 }
 - (void)contextCopyLink:(NSMenuItem *)item {
   NSURL *url=item.representedObject; if (!url) return;
@@ -4608,52 +9384,317 @@ static NSString *kFaviconJS=@"(function(){"
   [[NSPasteboard generalPasteboard] clearContents];
   [[NSPasteboard generalPasteboard] setString:u forType:NSPasteboardTypeString];
 }
-// Install a right-click monitor so we can show our own context menu on the webview
+- (void)contextAddLinkToSession:(NSMenuItem *)item {
+  NSURL *url=item.representedObject; if (!url) return;
+  NSString *name=[self promptForSessionName:@"Add Link to Research Session" existing:YES];
+  if (!name.length) return;
+  BBResearchSession *sess=[[BBResearchStore shared] sessionNamed:name create:YES];
+  BBResearchItem *it=[BBResearchItem new];
+  it.urlString=url.absoluteString; it.title=url.host?:url.absoluteString;
+  it.note=@""; it.status=BBResearchStatusUnread; it.addedAt=[NSDate date];
+  [sess.items addObject:it]; [[BBResearchStore shared] save];
+}
+- (void)contextOpenLinkNewWindow:(NSMenuItem *)item {
+  NSURL *url=item.representedObject; if (!url) return;
+  [self openURLInNewWindow:url];
+}
+- (void)contextOpenLinkIncognito:(NSMenuItem *)item {
+  NSURL *url=item.representedObject; if (!url) return;
+  BBDelegate *w=[[BBDelegate alloc]init];
+  [w applicationDidFinishLaunching:[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+  if (url) { [w addTabPrivate:YES]; [w.webView loadRequest:[NSURLRequest requestWithURL:url]]; }
+}
+- (void)contextCopyImage:(NSMenuItem *)item {
+  NSString *urlStr=item.representedObject; if (!urlStr) return;
+  NSURL *src=[NSURL URLWithString:urlStr]; if (!src) return;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+    NSData *data=[NSData dataWithContentsOfURL:src]; if (!data) return;
+    NSImage *img=[[NSImage alloc]initWithData:data]; if (!img) return;
+    dispatch_async(dispatch_get_main_queue(),^{
+      [[NSPasteboard generalPasteboard] clearContents];
+      [[NSPasteboard generalPasteboard] writeObjects:@[img]];
+    });
+  });
+}
+- (void)openURLInNewWindow:(NSURL *)url {
+  BBDelegate *w=[[BBDelegate alloc]init]; // retained by gBBWindowControllers in launch
+  [w applicationDidFinishLaunching:[NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:NSApp]];
+  if (url) [w.webView loadRequest:[NSURLRequest requestWithURL:url]];
+}
+- (void)contextCopySelection:(NSMenuItem *)item {
+  NSString *t=item.representedObject; if(!t.length) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:t forType:NSPasteboardTypeString];
+}
+- (void)contextSearchSelection:(NSMenuItem *)item {
+  NSString *t=item.representedObject; if(!t.length) return;
+  NSURL *u=[NSURL URLWithString:[BBDelegate searchURLForQuery:t]]; if(!u) return;
+  [self addTabPrivate:self.activeTab.isPrivate];
+  [self.webView loadRequest:[NSURLRequest requestWithURL:u]];
+}
+- (void)contextSpeakSelection:(NSMenuItem *)item {
+  NSString *t=item.representedObject; if (!t.length) return;
+  AVSpeechUtterance *u=[AVSpeechUtterance speechUtteranceWithString:t];
+  u.voice=[BBVoice preferredVoiceForGender:AVSpeechSynthesisVoiceGenderUnspecified];
+  u.rate=AVSpeechUtteranceDefaultSpeechRate;
+  [[BBVoice shared].synth speakUtterance:u];
+}
+- (void)contextCopyPageTitle:(NSMenuItem *)item {
+  NSString *t=self.activeTab.title?:@""; if (!t.length) t=self.webView.URL.absoluteString?:@""; if (!t.length) return;
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:t forType:NSPasteboardTypeString];
+}
+- (void)contextCopyPageAsMarkdown:(NSMenuItem *)item {
+  NSString *u=self.webView.URL.absoluteString?:@""; if (!u.length) return;
+  NSString *t=self.activeTab.title.length?self.activeTab.title:u;
+  // Escape any ] in the title so it doesn't break the link syntax.
+  t=[t stringByReplacingOccurrencesOfString:@"]" withString:@"\\]"];
+  NSString *md=[NSString stringWithFormat:@"[%@](%@)",t,u];
+  [[NSPasteboard generalPasteboard] clearContents];
+  [[NSPasteboard generalPasteboard] setString:md forType:NSPasteboardTypeString];
+  [self showToast:@"Copied as Markdown"];
+}
+- (void)contextEmailPage:(NSMenuItem *)item {
+  NSURL *url=self.webView.URL; if (!url) return;
+  NSString *subj=[(self.activeTab.title.length?self.activeTab.title:url.host?:@"BearBrowser") stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSString *body=[url.absoluteString stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *mailto=[NSURL URLWithString:[NSString stringWithFormat:@"mailto:?subject=%@&body=%@",subj,body]];
+  if (mailto) [[NSWorkspace sharedWorkspace] openURL:mailto];
+}
+- (void)contextEmailSelection:(NSMenuItem *)item {
+  NSString *sel=item.representedObject; if (!sel.length) return;
+  NSURL *pageURL=self.webView.URL;
+  NSString *subj=[(self.activeTab.title.length?self.activeTab.title:@"BearBrowser") stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSString *bodyRaw=pageURL?[NSString stringWithFormat:@"%@\n\n— from %@",sel,pageURL.absoluteString]:sel;
+  NSString *body=[bodyRaw stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]?:@"";
+  NSURL *mailto=[NSURL URLWithString:[NSString stringWithFormat:@"mailto:?subject=%@&body=%@",subj,body]];
+  if (mailto) [[NSWorkspace sharedWorkspace] openURL:mailto];
+}
+// Install a right-click monitor so we can show our own Chrome-style context menu.
+- (void)showBookmarksBarContextMenuAt:(NSPoint)winLoc {
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *add=[m addItemWithTitle:@"Add Current Page…" action:@selector(addBookmark:) keyEquivalent:@""];
+  add.target=self; add.enabled=(self.webView.URL!=nil && ![self isInternalURL:self.webView.URL.absoluteString]);
+  NSMenuItem *ba=[m addItemWithTitle:@"Bookmark All Tabs…" action:@selector(bookmarkAllTabs:) keyEquivalent:@""];
+  ba.target=self;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *nf=[m addItemWithTitle:@"New Folder…" action:@selector(bmBarNewFolder:) keyEquivalent:@""];
+  nf.target=self;
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *hide=[m addItemWithTitle:@"Hide Bookmarks Bar" action:@selector(toggleBookmarksBar:) keyEquivalent:@""];
+  hide.target=self;
+  NSMenuItem *mgr=[m addItemWithTitle:@"Show Bookmark Manager" action:@selector(openBookmarkManager:) keyEquivalent:@""];
+  mgr.target=self;
+  [m popUpMenuPositioningItem:nil atLocation:winLoc inView:nil];
+}
+- (void)bmBarNewFolder:(id)s {
+  NSAlert *a=[[NSAlert alloc]init]; a.messageText=@"New Bookmark Folder";
+  a.informativeText=@"Folders appear on the bookmarks bar as buttons that pop out their bookmarks.";
+  NSTextField *tf=[[NSTextField alloc]initWithFrame:NSMakeRect(0,0,280,24)];
+  tf.placeholderString=@"Folder name"; a.accessoryView=tf;
+  [a addButtonWithTitle:@"Create"]; [a addButtonWithTitle:@"Cancel"];
+  [a beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse rc){
+    if (rc!=NSAlertFirstButtonReturn) return;
+    NSString *name=[tf.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!name.length) return;
+    // Empty folders don't persist unless there's a bookmark; add a placeholder note.
+    NSString *placeholderURL=[NSString stringWithFormat:@"bearbrowser://folder-placeholder/%@",name];
+    if (![[BBBookmarksStore shared] isBookmarked:placeholderURL])
+      [[BBBookmarksStore shared] addTitle:@"(empty)" url:placeholderURL folder:name];
+    [self reloadBookmarksBar];
+  }];
+}
+- (void)showTabBarContextMenuAt:(NSPoint)winLoc {
+  NSMenu *m=[[NSMenu alloc]initWithTitle:@""];
+  NSMenuItem *nt=[m addItemWithTitle:@"New Tab" action:@selector(newTab:) keyEquivalent:@""];
+  nt.target=self;
+  NSMenuItem *rc=[m addItemWithTitle:@"Reopen Closed Tab" action:@selector(reopenClosedTab:) keyEquivalent:@""];
+  rc.target=self; rc.enabled=(self.recentlyClosed.count>0);
+  if (self.recentlyClosed.count) {
+    NSMenuItem *sub=[m addItemWithTitle:@"Recently Closed" action:nil keyEquivalent:@""];
+    NSMenu *subM=[[NSMenu alloc]initWithTitle:@"Recently Closed"]; subM.delegate=self; sub.submenu=subM;
+  }
+  [m addItem:[NSMenuItem separatorItem]];
+  NSMenuItem *bmAll=[m addItemWithTitle:@"Bookmark All Tabs…" action:@selector(bookmarkAllTabs:) keyEquivalent:@""];
+  bmAll.target=self;
+  NSMenuItem *sw=[m addItemWithTitle:@"Save Tabs as Workspace…" action:@selector(saveTabsAsWorkspace:) keyEquivalent:@""];
+  sw.target=self;
+  [m popUpMenuPositioningItem:nil atLocation:winLoc inView:nil];
+}
 - (void)installContextMenuMonitor {
   __weak BBDelegate *weak=self;
-  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent *e){
+  self.contextMenuMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskRightMouseDown handler:^NSEvent*(NSEvent *e){
     BBDelegate *s=weak; if (!s||e.window!=s.window) return e;
+    // Right-click on back / forward button → show nav-history dropdown (Chrome UX).
+    NSPoint toolPt=[s.toolbarBg convertPoint:e.locationInWindow fromView:nil];
+    if (NSPointInRect(toolPt,s.backButton.frame))    { [s showNavHistoryMenu:YES  at:e.locationInWindow]; return nil; }
+    if (NSPointInRect(toolPt,s.forwardButton.frame)) { [s showNavHistoryMenu:NO   at:e.locationInWindow]; return nil; }
+    // Right-click on the tab bar itself (empty area or the "+" button) shows a
+    // small menu with New Tab / Reopen Closed / Recent Closed submenu.
+    NSPoint tabBarPt=[s.tabBarView convertPoint:e.locationInWindow fromView:nil];
+    if (NSPointInRect(tabBarPt,s.tabBarView.bounds)) {
+      BOOL onItem=NO;
+      for (NSView *v in s.tabBarView.tabStrip.subviews) {
+        if ([v isKindOfClass:[BBTabItemView class]] &&
+            NSPointInRect([s.tabBarView.tabStrip convertPoint:e.locationInWindow fromView:nil],v.frame)) { onItem=YES; break; }
+      }
+      if (!onItem) { [s showTabBarContextMenuAt:e.locationInWindow]; return nil; }
+    }
+    // Right-click on empty bookmarks-bar area → Add Current Page / New Folder / etc.
+    if (s.bookmarksBarVisible) {
+      NSPoint bmPt=[s.bookmarksBar convertPoint:e.locationInWindow fromView:nil];
+      if (NSPointInRect(bmPt,s.bookmarksBar.bounds)) {
+        BOOL onBtn=NO;
+        for (NSView *v in s.bookmarksBar.subviews)
+          if ([v isKindOfClass:[NSButton class]] && NSPointInRect(bmPt,v.frame)) { onBtn=YES; break; }
+        if (!onBtn) { [s showBookmarksBarContextMenuAt:e.locationInWindow]; return nil; }
+      }
+    }
     NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
     if (!NSPointInRect(pt,s.webView.bounds)) return e;
-    // Ask the page for the link URL at this point, then show menu
+    // If the focused element is editable (input/textarea/contentEditable), defer to
+    // the native WKWebView context menu so the OS spell-check items remain reachable.
+    if (s.activeTab.editableFocus) return e;
+    // Probe the page at the click point for a link, an image, any selection, AND
+    // whether the click target is an editable input (so native spell-check stays
+    // available on misspelled words in text fields).
     NSString *js=[NSString stringWithFormat:
-      @"(function(){var el=document.elementFromPoint(%f,%f);"
-      @"while(el){if(el.tagName==='A'&&el.href)return el.href;el=el.parentElement;}"
-      @"return '';})();", pt.x, s.webView.bounds.size.height-pt.y];
+      @"(function(){var el=document.elementFromPoint(%f,%f);var link='',img='',n=el,edit=false;"
+      @"while(n){if(n.tagName==='A'&&n.href){link=n.href;break;}n=n.parentElement;}"
+      @"n=el;while(n){if(n.tagName==='IMG'&&n.src){img=n.src;break;}n=n.parentElement;}"
+      @"n=el;while(n){if(n.isContentEditable||n.tagName==='INPUT'||n.tagName==='TEXTAREA'){edit=true;break;}n=n.parentElement;}"
+      @"var sel=(window.getSelection?String(window.getSelection()):'')||'';"
+      @"return {link:link,image:img,sel:sel,edit:edit};})();", pt.x, s.webView.bounds.size.height-pt.y];
     [s.webView evaluateJavaScript:js completionHandler:^(id result,NSError *err){
       dispatch_async(dispatch_get_main_queue(),^{
-        NSString *href=[result isKindOfClass:[NSString class]]?result:@"";
+        NSDictionary *r=[result isKindOfClass:[NSDictionary class]]?result:@{};
+        NSString *href=[r[@"link"] isKindOfClass:[NSString class]]?r[@"link"]:@"";
+        NSString *imgSrc=[r[@"image"] isKindOfClass:[NSString class]]?r[@"image"]:@"";
+        NSString *sel=[r[@"sel"] isKindOfClass:[NSString class]]?r[@"sel"]:@"";
+        sel=[sel stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         NSURL *linkURL=href.length?[NSURL URLWithString:href]:nil;
+        NSURL *imgURL=imgSrc.length?[NSURL URLWithString:imgSrc]:nil;
         NSMenu *menu=[[NSMenu alloc]initWithTitle:@""];
-        if (linkURL) {
-          NSMenuItem *ot=[[NSMenuItem alloc]initWithTitle:@"Open Link in New Tab" action:@selector(contextOpenLinkNewTab:) keyEquivalent:@""];
-          ot.target=s; ot.representedObject=linkURL; [menu addItem:ot];
-          NSMenuItem *cl=[[NSMenuItem alloc]initWithTitle:@"Copy Link" action:@selector(contextCopyLink:) keyEquivalent:@""];
-          cl.target=s; cl.representedObject=linkURL; [menu addItem:cl];
+        NSMenuItem*(^add)(NSString*,SEL,id)=^NSMenuItem*(NSString*t,SEL a,id rep){
+          NSMenuItem *it=[[NSMenuItem alloc]initWithTitle:t action:a keyEquivalent:@""];
+          it.target=s; it.representedObject=rep; [menu addItem:it]; return it;
+        };
+        if (sel.length) {
+          add(@"Copy",@selector(contextCopySelection:),sel);
+          NSString *shown=sel.length>24?[[sel substringToIndex:24] stringByAppendingString:@"…"]:sel;
+          add([NSString stringWithFormat:@"Search for “%@”",shown],@selector(contextSearchSelection:),sel);
+          add(@"Speak Selection",@selector(contextSpeakSelection:),sel);
+          add(@"Email Selection…",@selector(contextEmailSelection:),sel);
           [menu addItem:[NSMenuItem separatorItem]];
         }
-        NSMenuItem *back=[[NSMenuItem alloc]initWithTitle:@"Back" action:@selector(goBack:) keyEquivalent:@""];
-        back.target=s; back.enabled=s.webView.canGoBack; [menu addItem:back];
-        NSMenuItem *fwd=[[NSMenuItem alloc]initWithTitle:@"Forward" action:@selector(goForward:) keyEquivalent:@""];
-        fwd.target=s; fwd.enabled=s.webView.canGoForward; [menu addItem:fwd];
-        NSMenuItem *rl=[[NSMenuItem alloc]initWithTitle:@"Reload" action:@selector(reloadOrStop:) keyEquivalent:@""];
-        rl.target=s; [menu addItem:rl];
+        if (linkURL) {
+          add(@"Open Link in New Tab",@selector(contextOpenLinkNewTab:),linkURL);
+          add(@"Open Link in New Window",@selector(contextOpenLinkNewWindow:),linkURL);
+          add(@"Open Link in Incognito Window",@selector(contextOpenLinkIncognito:),linkURL);
+          add(@"Copy Link Address",@selector(contextCopyLink:),linkURL);
+          add(@"Save Link As…",@selector(contextSaveLink:),linkURL);
+          add(@"Add Link to Research Session…",@selector(contextAddLinkToSession:),linkURL);
+          [menu addItem:[NSMenuItem separatorItem]];
+        }
+        if (imgURL) {
+          add(@"Open Image in New Tab",@selector(contextOpenLinkNewTab:),imgURL);
+          add(@"Copy Image",@selector(contextCopyImage:),imgURL);
+          add(@"Copy Image Address",@selector(contextCopyLink:),imgURL);
+          add(@"Save Image As…",@selector(contextSaveImage:),imgURL);
+          add(@"Search Image on Google Lens",@selector(contextSearchImageOnLens:),imgURL);
+          add(@"Search Image on TinEye",@selector(contextSearchImageOnTinEye:),imgURL);
+          [menu addItem:[NSMenuItem separatorItem]];
+        }
+        NSMenuItem *back=add(@"Back",@selector(goBack:),nil); back.enabled=s.webView.canGoBack;
+        NSMenuItem *fwd=add(@"Forward",@selector(goForward:),nil); fwd.enabled=s.webView.canGoForward;
+        add(@"Reload",@selector(reloadOrStop:),nil);
         [menu addItem:[NSMenuItem separatorItem]];
-        NSMenuItem *cu=[[NSMenuItem alloc]initWithTitle:@"Copy Page URL" action:@selector(contextCopyPageURL:) keyEquivalent:@""];
-        cu.target=s; [menu addItem:cu];
-        NSMenuItem *src=[[NSMenuItem alloc]initWithTitle:@"View Page Source" action:@selector(viewSource:) keyEquivalent:@""];
-        src.target=s; [menu addItem:src];
-        NSMenuItem *ins=[[NSMenuItem alloc]initWithTitle:@"Inspect Element" action:@selector(openDevTools:) keyEquivalent:@""];
-        ins.target=s; [menu addItem:ins];
+        add(@"Copy Page URL",@selector(contextCopyPageURL:),nil);
+        add(@"Copy Page Title",@selector(contextCopyPageTitle:),nil);
+        add(@"Copy Page as Markdown Link",@selector(contextCopyPageAsMarkdown:),nil);
+        add(@"Email Link to Page…",@selector(contextEmailPage:),nil);
+        add(@"Add Page to Research Session…",@selector(addCurrentTabToSession:),nil);
+        add(@"Add to Reading List",@selector(addToReadingList:),nil);
+        add(@"Save Page As…",@selector(savePage:),nil);
+        add(@"Share Page…",@selector(sharePage:),nil);
+        add(@"Print…",@selector(printPage:),nil);
+        [menu addItem:[NSMenuItem separatorItem]];
+        add(@"View Page Source",@selector(viewSource:),nil);
+        add(@"Inspect Element",@selector(openDevTools:),nil);
         [menu popUpMenuPositioningItem:nil atLocation:e.locationInWindow inView:nil];
       });
     }];
     return nil; // swallow the original right-click
   }];
+  // Middle-click a link → open in a new background tab (Chrome behavior).
+  self.middleClickMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskOtherMouseDown handler:^NSEvent*(NSEvent *e){
+    if (e.buttonNumber!=2) return e;
+    BBDelegate *s=weak; if(!s||e.window!=s.window) return e;
+    // Middle-click on a bookmark-bar button → open bookmark in a new background tab.
+    // Middle-click on a folder → open every bookmark in that folder in background tabs.
+    if (s.bookmarksBarVisible) {
+      NSPoint barPt=[s.bookmarksBar convertPoint:e.locationInWindow fromView:nil];
+      if (NSPointInRect(barPt,s.bookmarksBar.bounds)) {
+        for (NSView *v in s.bookmarksBar.subviews) {
+          if (![v isKindOfClass:[NSButton class]]) continue;
+          if (!NSPointInRect(barPt,v.frame)) continue;
+          NSString *folder=objc_getAssociatedObject(v,"BBFolderName");
+          if (folder.length) {
+            NSInteger prev=s.activeTabIndex;
+            BOOL priv=s.activeTab.isPrivate;
+            for (BBBookmark *b in [BBBookmarksStore shared].items) {
+              if (![b.folder isEqualToString:folder]) continue;
+              if ([b.urlString hasPrefix:@"bearbrowser://folder-placeholder/"]) continue;
+              NSURL *u=[NSURL URLWithString:b.urlString]; if (!u) continue;
+              [s addTabPrivate:priv];
+              [s.webView loadRequest:[NSURLRequest requestWithURL:u]];
+            }
+            [s tabItemDidSelect:prev];
+            return (NSEvent *)nil;
+          }
+          NSString *url=((NSButton*)v).toolTip;
+          NSURL *u=url?[NSURL URLWithString:url]:nil;
+          if (u) {
+            NSInteger prev=s.activeTabIndex;
+            [s addTabPrivate:s.activeTab.isPrivate];
+            [s.webView loadRequest:[NSURLRequest requestWithURL:u]];
+            [s tabItemDidSelect:prev];
+            return (NSEvent *)nil;
+          }
+        }
+      }
+    }
+    NSPoint pt=[s.webView convertPoint:e.locationInWindow fromView:nil];
+    if(!NSPointInRect(pt,s.webView.bounds)) return e;
+    NSString *js=[NSString stringWithFormat:
+      @"(function(){var el=document.elementFromPoint(%f,%f);"
+      @"while(el){if(el.tagName==='A'&&el.href)return el.href;el=el.parentElement;}return '';})();",
+      pt.x, s.webView.bounds.size.height-pt.y];
+    [s.webView evaluateJavaScript:js completionHandler:^(id r,NSError *err){
+      NSString *href=[r isKindOfClass:[NSString class]]?r:@""; if(!href.length) return;
+      NSURL *u=[NSURL URLWithString:href]; if(!u) return;
+      dispatch_async(dispatch_get_main_queue(),^{
+        NSInteger prev=s.activeTabIndex;
+        [s addTabPrivate:s.activeTab.isPrivate];
+        [s.webView loadRequest:[NSURLRequest requestWithURL:u]];
+        [s tabItemDidSelect:prev]; // stay on the current tab (open in background)
+      });
+    }];
+    return e;
+  }];
 }
 
 - (void)webView:(WKWebView *)wv didStartProvisionalNavigation:(WKNavigation *)nav {
   BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
+  tab.dialogCount=0; tab.dialogsSuppressed=NO; // reset per-page dialog abuse state
+  tab.genpassOffered=NO;                       // re-arm the password-generator prompt
+  tab.translateOffered=NO;                     // re-arm the translate prompt
+  tab.editableFocus=NO;                        // a new page starts with no editable focus
+  // Auto-close the find bar on navigation — find state from the previous page is stale.
+  if (wv==self.webView && self.findBarVisible) {
+    self.findBarVisible=NO; self.findBar.hidden=YES; [self clearFind];
+    [self resizeWebViewForCurrentTab];
+  }
   tab.isLoading=YES;
   if (wv==self.webView) {
     self.progressBar.doubleValue=0; self.progressBar.hidden=NO;
@@ -4664,11 +9705,36 @@ static NSString *kFaviconJS=@"(function(){"
   }
   [self reloadTabBar];
 }
+// Fires when the response has committed and the new page has begun rendering.
+// Update URL bar here to catch redirect chains: provisional URL might differ from the final one.
+- (void)webView:(WKWebView *)wv didCommitNavigation:(WKNavigation *)nav {
+  if (wv!=self.webView) return;
+  NSString *url=wv.URL.absoluteString?:@"";
+  self.address.stringValue=[self isInternalURL:url]?@"":url;
+  [self updateSecurityIndicator:wv.URL];
+}
 - (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)nav {
   BBTab *tab=[self tabForWebView:wv]; if (!tab) return;
   tab.isLoading=NO;
   tab.title=wv.title.length?wv.title:@"New Tab";
   [self fetchFaviconForTab:tab];
+  // Re-apply mute across page navigations so a muted tab stays muted on a fresh URL.
+  // Persistent per-site mute (BBMuteSite_<host>) also honored here.
+  NSString *hostForMute=wv.URL.host.lowercaseString?:@"";
+  BOOL siteMuted=hostForMute.length && [[NSUserDefaults standardUserDefaults] boolForKey:
+    [NSString stringWithFormat:@"BBMuteSite_%@",hostForMute]];
+  if (siteMuted && !tab.muted) { tab.muted=YES; [self reloadTabBar]; }
+  if (tab.muted) [wv evaluateJavaScript:
+    @"document.querySelectorAll('audio,video').forEach(function(m){m.muted=true;})"
+    completionHandler:nil];
+  // Translate offer: peek <html lang>, suggest translation if not in user's prefs.
+  if (wv==self.webView && !tab.translateOffered) {
+    [wv evaluateJavaScript:@"document.documentElement.lang||document.documentElement.getAttribute('xml:lang')||''"
+      completionHandler:^(id r,NSError *e){
+        NSString *lang=[r isKindOfClass:[NSString class]]?(NSString*)r:@"";
+        if (lang.length) [self maybeOfferTranslateForLang:lang tab:tab];
+      }];
+  }
   NSString *url=wv.URL.absoluteString?:@"";
   if (wv==self.webView) {
     self.progressBar.hidden=YES;
@@ -4677,8 +9743,11 @@ static NSString *kFaviconJS=@"(function(){"
     [ri setTemplate:YES]; self.reloadButton.image=ri; self.reloadButton.toolTip=@"Reload";
     self.address.stringValue=[self isInternalURL:url]?@"":url;
     self.backButton.enabled=wv.canGoBack; self.forwardButton.enabled=wv.canGoForward;
-    self.window.title=tab.title;
+    self.window.title=[self windowTitleForTab:tab];
     [self updateSecurityIndicator:wv.URL];
+    [self updateStarButton];
+    [self applyZoomForCurrentTab];
+    [self detectReaderable:wv];
   }
   // Record navigation to network monitor
   if(wv.URL.host.length && !tab.isPrivate)
@@ -4698,10 +9767,51 @@ static NSString *kFaviconJS=@"(function(){"
     if (trust) { CFRetain(trust); if(self.currentTrust) CFRelease(self.currentTrust); self.currentTrust=trust; }
     else        { if(self.currentTrust){ CFRelease(self.currentTrust); self.currentTrust=nil; } }
   }
-  BBEmitEvent(@"navigation.committed",@"allow",@"Navigation committed.",@{@"url":url});
+  if ([self isStartPage:wv.URL]) [self injectTopSitesInto:wv];
+  [self emitNav:@"navigation.committed" url:url reason:@"Navigation committed." private:tab.isPrivate];
   [self reloadTabBar];
 }
-- (void)webView:(WKWebView *)wv didFailNavigation:(WKNavigation *)nav withError:(NSError *)err {
+- (NSString *)errorPageHTMLFor:(NSError *)err url:(NSURL *)url {
+  NSString *title=@"Can't Connect to This Page";
+  NSString *desc=@"BearBrowser can't load the page.";
+  if ([err.domain isEqualToString:NSURLErrorDomain]) {
+    switch (err.code) {
+      case NSURLErrorNotConnectedToInternet:
+      case NSURLErrorNetworkConnectionLost:
+        title=@"No Internet Connection"; desc=@"Your device isn't connected to the internet. Check your network and try again."; break;
+      case NSURLErrorCannotFindHost:
+      case NSURLErrorDNSLookupFailed:
+        title=@"Can't Find the Server"; desc=[NSString stringWithFormat:@"BearBrowser can't find the server at <b>%@</b>. Check the address and try again.",url.host?:@"??"]; break;
+      case NSURLErrorTimedOut:
+        title=@"Connection Timed Out"; desc=@"The server is taking too long to respond."; break;
+      case NSURLErrorSecureConnectionFailed:
+      case NSURLErrorServerCertificateUntrusted:
+        title=@"Your Connection Is Not Private"; desc=@"Attackers might be trying to steal your information. BearBrowser blocked the connection."; break;
+      default: desc=[err.localizedDescription stringByReplacingOccurrencesOfString:@"&" withString:@"&amp;"]; break;
+    }
+  }
+  return [NSString stringWithFormat:
+    @"<!doctype html><html><head><meta charset='utf-8'>"
+    @"<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;"
+    @"display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f0f2f4;color:#1d1d1f}"
+    @".card{max-width:520px;padding:40px;text-align:center}.icon{font-size:56px;margin-bottom:20px}"
+    @"h1{font-size:22px;font-weight:600;margin-bottom:12px;color:#1d1d1f}p{font-size:15px;color:#6e6e73;"
+    @"line-height:1.5;margin-bottom:24px}button{padding:10px 24px;border:none;border-radius:8px;"
+    @"background:#1b6b45;color:#fff;font-size:15px;font-weight:500;cursor:pointer}"
+    @"button:hover{background:#145835}@media(prefers-color-scheme:dark){body{background:#1c1c1e;color:#f5f5f7}"
+    @"h1{color:#f5f5f7}.icon{filter:invert(.9)}}</style></head>"
+    @"<body><div class='card'><div class='icon'>🔌</div><h1>%@</h1><p>%@</p>"
+    @"<button onclick='location.reload()'>Try Again</button></div></body></html>",
+    title, desc];
+}
+- (void)showErrorPage:(NSError *)err inWebView:(WKWebView *)wv {
+  NSURL *url=wv.URL?:[NSURL URLWithString:@"about:blank"];
+  NSString *html=[self errorPageHTMLFor:err url:url];
+  [wv loadHTMLString:html baseURL:url];
+}
+- (void)webView:(WKWebView *)wv didFailProvisionalNavigation:(WKNavigation *)nav withError:(NSError *)err {
+  // Cancelled (e.g., user hit Stop or a redirect cancelled the provisional) — not an error.
+  if (err.code==NSURLErrorCancelled) return;
   BBTab *tab=[self tabForWebView:wv]; if(!tab) return; tab.isLoading=NO;
   if (wv==self.webView) {
     self.progressBar.hidden=YES;
@@ -4709,6 +9819,19 @@ static NSString *kFaviconJS=@"(function(){"
     ri=[ri imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:14 weight:NSFontWeightMedium]];
     [ri setTemplate:YES]; self.reloadButton.image=ri; self.reloadButton.toolTip=@"Reload";
   }
+  [self showErrorPage:err inWebView:wv];
+  [self reloadTabBar];
+}
+- (void)webView:(WKWebView *)wv didFailNavigation:(WKNavigation *)nav withError:(NSError *)err {
+  if (err.code==NSURLErrorCancelled) return;
+  BBTab *tab=[self tabForWebView:wv]; if(!tab) return; tab.isLoading=NO;
+  if (wv==self.webView) {
+    self.progressBar.hidden=YES;
+    NSImage *ri=[NSImage imageWithSystemSymbolName:@"arrow.clockwise" accessibilityDescription:@"Reload"];
+    ri=[ri imageWithSymbolConfiguration:[NSImageSymbolConfiguration configurationWithPointSize:14 weight:NSFontWeightMedium]];
+    [ri setTemplate:YES]; self.reloadButton.image=ri; self.reloadButton.toolTip=@"Reload";
+  }
+  [self showErrorPage:err inWebView:wv];
   [self reloadTabBar];
 }
 - (void)webView:(WKWebView *)wv didReceiveServerRedirectForProvisionalNavigation:(WKNavigation *)nav {
@@ -4721,17 +9844,35 @@ static NSString *kFaviconJS=@"(function(){"
   return nil;
 }
 - (void)download:(WKDownload *)download decideDestinationUsingResponse:(NSURLResponse *)response suggestedFilename:(NSString *)filename completionHandler:(void(^)(NSURL *))completionHandler {
-  NSURL *dlDir=[NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"]];
+  // Honor per-user download dir if Settings has saved one and it still exists.
+  NSString *custom=[[NSUserDefaults standardUserDefaults] stringForKey:@"BBDownloadDir"];
+  BOOL isDir=NO;
+  NSURL *dlDir;
+  if (custom.length && [[NSFileManager defaultManager] fileExistsAtPath:custom isDirectory:&isDir] && isDir)
+    dlDir=[NSURL fileURLWithPath:custom];
+  else
+    dlDir=[NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"]];
   [[NSFileManager defaultManager] createDirectoryAtURL:dlDir withIntermediateDirectories:YES attributes:nil error:nil];
-  NSURL *dest=[dlDir URLByAppendingPathComponent:filename];
-  NSInteger n=0; NSString *base=[filename stringByDeletingPathExtension]; NSString *ext=filename.pathExtension;
+  // SANITIZE the server-supplied filename: take only the last path component and
+  // strip path separators so a malicious Content-Disposition (e.g. "../../foo")
+  // can never escape ~/Downloads (path traversal).
+  NSString *safe=filename.lastPathComponent;
+  safe=[safe stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+  safe=[safe stringByReplacingOccurrencesOfString:@":" withString:@"_"]; // HFS path separator
+  if (!safe.length || [safe isEqualToString:@"."] || [safe isEqualToString:@".."]) safe=@"download";
+  NSURL *dest=[dlDir URLByAppendingPathComponent:safe];
+  NSInteger n=0; NSString *base=[safe stringByDeletingPathExtension]; NSString *ext=safe.pathExtension;
   while ([[NSFileManager defaultManager] fileExistsAtPath:dest.path]) {
     n++;
     dest=[dlDir URLByAppendingPathComponent:ext.length?[NSString stringWithFormat:@"%@ (%ld).%@",base,(long)n,ext]:[NSString stringWithFormat:@"%@ (%ld)",base,(long)n]];
   }
+  // Belt-and-suspenders: never hand back a path outside the Downloads directory.
+  if (![dest.URLByStandardizingPath.path hasPrefix:dlDir.URLByStandardizingPath.path])
+    dest=[dlDir URLByAppendingPathComponent:@"download"];
   // Register in download panel
   BBDownloadItem *item=[BBDownloadItem new];
-  item.filename=filename; item.destURL=dest; item.download=download;
+  item.filename=dest.lastPathComponent; item.destURL=dest; item.download=download;
+  item.sourceURL=response.URL?:download.originalRequest.URL;
   item.state=BBDownloadStateActive; item.startedAt=[NSDate date];
   item.totalBytes=response.expectedContentLength>0?response.expectedContentLength:0;
   dispatch_async(dispatch_get_main_queue(),^{ [self.downloadPanel addItem:item]; });
@@ -4746,6 +9887,7 @@ static NSString *kFaviconJS=@"(function(){"
       NSDictionary *attr=[[NSFileManager defaultManager] attributesOfItemAtPath:item.destURL.path error:nil];
       if (attr) item.writtenBytes=[attr[NSFileSize] longLongValue];
       [self.downloadPanel refresh];
+      [self showToast:[NSString stringWithFormat:@"Downloaded %@",item.filename?:@"file"]];
     }
     BBLog(@"download finished");
   });
