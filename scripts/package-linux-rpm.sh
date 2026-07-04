@@ -5,7 +5,7 @@ runtime_tree="${BEARBROWSER_LINUX_RUNTIME_TREE:-build/linux/runtime-tree}"
 out_dir="${BEARBROWSER_DIST_DIR:-dist/linux}"
 version="${BEARBROWSER_VERSION:-0.1.0}"
 release="${BEARBROWSER_RPM_RELEASE:-0.overlay}"
-arch="${BEARBROWSER_RPM_ARCH:-x86_64}"
+arch="${BEARBROWSER_RPM_ARCH:-$(uname -m)}"
 
 usage() {
   cat <<'USAGE'
@@ -74,8 +74,23 @@ Release: $release%{?dist}
 Summary: SourceOS governed browser for humans and agents
 License: MPL-2.0
 URL: https://github.com/SourceOS-Linux/BearBrowser
-BuildArch: $arch
+ExclusiveArch: $arch
 Source0: bearbrowser-%{version}.tar.gz
+
+Requires: gtk3
+Requires: dbus-glib
+Requires: nss
+Requires: nspr
+Requires: libXt
+Requires: libXcomposite
+Requires: libXdamage
+Requires: libXfixes
+Requires: libXrandr
+Requires: alsa-lib
+Requires: libwayland-client
+Requires: libwayland-egl
+Requires: mesa-libGL
+Requires: mesa-libEGL
 
 %description
 BearBrowser is a SourceOS governed browser with human-secure and agent-runtime profiles.

@@ -1,0 +1,133 @@
+name: Tor-mode ESR build
+
+# Compiles BearBrowser's Tor-mode profile on the current Firefox 140 ESR cohort,
+# on the capable Forgejo runner (epsilon + bsys6 image). A full Gecko compile OOMs
+# / times out on a free GitHub runner; this is its real home.
+#
+# Everything the source needs is wired into apply-sourceos-overlays.sh --profile
+# tor-mode (run below): pin the 140-line mirror tag, retarget the source to the
+# current ESR point release, the esr dirname Makefile fixup, inject the OS-spoof
+# patch, and set -DBEARBROWSER_FORCE_WIN_SPOOF in the mozconfig. The 33-patch stack
+# (LibreWolf + OS-spoof) is already proven to apply in CI (tor-esr-patch-apply).
+#
+# Two stages:
+#   tor-mode-source : overlay prep + `make all` — exercises the whole source
+#                     pipeline on real infra (fetch ~480 MB ESR, dirname mv, apply
+#                     the stack, archive). Fast gate (minutes).
+#   tor-mode-binary : `make build` — the heavy compile, then a real-binary identity
+#                     check (the OS-spoof compile-verification: UA/platform/oscpu
+#                     must report Windows). Gated on the build_binary input.
+
+on:
+  workflow_dispatch:
+    inputs:
+      esr_version:
+        description: 'Firefox ESR point release to build (empty = 140.12.0esr default)'
+        required: false
+        default: '140.12.0esr'
+      build_binary:
+        description: 'Run the heavy mach build + identity measurement (true/false)'
+        required: false
+        default: 'true'
+
+jobs:
+  tor-mode-source:
+    runs-on: epsilon
+    container:
+      image: codeberg.org/bearbrowser/bsys6:dind
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get -y install --no-install-recommends git pigz gnupg python3 wget
+
+      - name: Materialize the Tor-mode ESR workspace (overlay prep)
+        env:
+          BEARBROWSER_TOR_FIREFOX_VERSION: ${{ github.event.inputs.esr_version }}
+        run: |
+          # Retargets to ESR, fixes the dirname, injects the OS-spoof patch, sets
+          # -DBEARBROWSER_FORCE_WIN_SPOOF, and omits the canvas/audio patches.
+          bash scripts/apply-sourceos-overlays.sh --profile tor-mode --ref latest
+          ws="$(find build/workspaces -maxdepth 2 -type d -name source | tail -1)"
+          echo "WS=$ws" >> "$GITHUB_ENV"
+          echo "Tor-mode workspace: $ws (version=$(cat "$ws/version"))"
+          echo "-- mozconfig spoof flag --"; grep -n BEARBROWSER_FORCE_WIN_SPOOF "$ws/assets/mozconfig" || echo "MISSING"
+          echo "-- OS-spoof patch registered --"; grep -n anti-fp-tor-os-spoof "$ws/assets/patches.txt" || echo "MISSING"
+
+      - name: Build patched ESR source archive (make all)
+        run: cd "$WS" && make all
+
+      - name: Verify patches apply with fuzz (make check-fuzz)
+        run: cd "$WS" && make check-fuzz
+
+      - name: Upload Tor-mode ESR source archive
+        uses: https://data.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: bearbrowser-tor-mode-source
+          path: |
+            ${{ env.WS }}/*.source.tar.gz
+            ${{ env.WS }}/patchfail-fuzz.out
+          retention-days: 7
+
+  tor-mode-binary:
+    runs-on: epsilon
+    container:
+      image: codeberg.org/bearbrowser/bsys6:dind
+    needs: [tor-mode-source]
+    if: github.event.inputs.build_binary == 'true'
+    steps:
+      - name: Checkout overlay
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get -y install --no-install-recommends git pigz gnupg python3 wget nodejs npm
+
+      - name: Materialize the Tor-mode ESR workspace
+        env:
+          BEARBROWSER_TOR_FIREFOX_VERSION: ${{ github.event.inputs.esr_version }}
+        run: |
+          bash scripts/apply-sourceos-overlays.sh --profile tor-mode --ref latest
+          ws="$(find build/workspaces -maxdepth 2 -type d -name source | tail -1)"
+          echo "WS=$ws" >> "$GITHUB_ENV"
+
+      - name: Compile (make build — the heavy step)
+        run: cd "$WS" && make build
+
+      - name: Locate the built binary
+        run: |
+          bin="$(find "$WS" -type f \( -name firefox -o -name bearbrowser \) -path '*dist/bin*' | head -1)"
+          if [ -z "$bin" ]; then
+            bin="$(find "$WS" -type f \( -name firefox -o -name bearbrowser \) -path '*obj-*dist*' | grep -vE '\.dSYM' | head -1)"
+          fi
+          [ -n "$bin" ] || { echo "::error::no built binary found under $WS"; exit 1; }
+          echo "BIN=$bin" >> "$GITHUB_ENV"
+          echo "binary: $bin"
+
+      - name: Verify the Windows identity spoof on the REAL binary
+        run: |
+          # The OS-spoof compile-verification: with -DBEARBROWSER_FORCE_WIN_SPOOF
+          # the binary must report the Windows identity on this Linux host.
+          npm ci || npm install
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          node scripts/measure-fingerprint.mjs --profile tor-mode --bin "$BIN" --json > fp-tor-mode.json || true
+          cat fp-tor-mode.json
+          echo "-- identity assertions (UA/platform/oscpu must say Windows) --"
+          node -e '
+            const d=require("./fp-tor-mode.json");
+            const j=JSON.stringify(d);
+            const ok=/Windows NT 10\.0/.test(j) && /Win32/.test(j);
+            console.log("windows-identity:", ok ? "PRESENT" : "MISSING");
+            if(!ok) process.exit(1);
+          '
+
+      - name: Upload Tor-mode scorecard
+        uses: https://data.forgejo.org/forgejo/upload-artifact@v4
+        with:
+          name: bearbrowser-tor-mode-scorecard
+          path: fp-tor-mode.json
+          retention-days: 7

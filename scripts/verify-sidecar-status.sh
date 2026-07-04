@@ -67,7 +67,7 @@ grep -q 'BearBrowser Sidecar Status' "$html"
 grep -q 'local-sidecar-ready' "$json"
 grep -q 'share_page_with_agent' "$html"
 grep -q 'Pending Memory Candidates' "$html"
-grep -q 'ci-sidecar-memory' "$html"
+grep -q 'sidecar status renders pending memory candidates' "$html"
 grep -q '"pendingMemoryCount": 1' "$json"
 
 echo "BearBrowser sidecar status verified"

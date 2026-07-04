@@ -23,10 +23,17 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-verify-actions").write wrapper_for("bearbrowser-verify-actions.py")
     (bin/"bearbrowser-memory-candidate").write wrapper_for("bearbrowser-memory-candidate.py")
     (bin/"bearbrowser-verify-memory").write wrapper_for("bearbrowser-verify-memory.py")
+    (bin/"bearbrowser-page-summary").write wrapper_for("bearbrowser-page-summary.py")
+    (bin/"bearbrowser-verify-summaries").write wrapper_for("bearbrowser-verify-summaries.py")
+    (bin/"bearbrowser-governance-queue").write wrapper_for("bearbrowser-governance-queue.py")
+    (bin/"bearbrowser-sidecar-server").write wrapper_for("bearbrowser-sidecar-server.py")
+    (bin/"bearbrowser-sidecar-open").write wrapper_for("bearbrowser-sidecar-open.sh")
     (bin/"bearbrowser-sidecar-status").write wrapper_for("bearbrowser-sidecar-status.py")
     (bin/"bearbrowser-verify-sidecar-status").write wrapper_for("verify-sidecar-status.sh")
+    (bin/"bearbrowser-verify-interactive-sidecar").write wrapper_for("verify-interactive-sidecar.sh")
     (bin/"bearbrowser-verify-agent-sidecar").write wrapper_for("verify-agent-sidecar-contract.py")
     (bin/"bearbrowser-verify-native-shell").write wrapper_for("verify-native-macos-shell.sh")
+    (bin/"bearbrowser-verify-control-plane").write wrapper_for("verify-sourceos-control-plane.py")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
     (bin/"bearbrowser-install-app-launcher").write wrapper_for("install-macos-app-launcher.sh")
     (bin/"bearbrowser-repair-app-launcher").write wrapper_for("repair-macos-app-launcher.sh")
@@ -47,6 +54,14 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-stagehand").write wrapper_for("bearbrowser-stagehand.sh")
     (bin/"bearbrowser-terminal").write wrapper_for("bearbrowser-terminal.sh")
     (bin/"bearbrowser-history").write wrapper_for("bearbrowser-history.py")
+    (bin/"bearbrowser-policy-engine").write wrapper_for("bearbrowser-policy-engine.py")
+    (bin/"bearbrowser-verify-policy-engine").write wrapper_for("bearbrowser-verify-policy-engine.py")
+    (bin/"bearbrowser-create-receipt").write wrapper_for("bearbrowser-create-receipt.py")
+    (bin/"bearbrowser-update-receipt").write wrapper_for("bearbrowser-update-receipt.py")
+    (bin/"bearbrowser-verify-automation-receipt").write wrapper_for("bearbrowser-verify-automation-receipt.py")
+    (bin/"bearbrowser-fetch-librewolf-base").write wrapper_for("bearbrowser-fetch-librewolf-base.sh")
+    (bin/"bearbrowser-overlay-binary").write wrapper_for("bearbrowser-overlay-binary.sh")
+    (bin/"bearbrowser-verify-macos-app").write wrapper_for("verify-macos-app.sh")
   end
 
   def wrapper_for(script)
@@ -76,10 +91,17 @@ class Bearbrowser < Formula
         bearbrowser-memory-candidate create --text 'Remember this only after approval.'
         bearbrowser-memory-candidate resolve --latest-candidate --decision reject --reason 'Not useful.'
         bearbrowser-verify-memory
+        bearbrowser-page-summary create --text 'Read-only summary candidate.'
+        bearbrowser-verify-summaries
+        bearbrowser-governance-queue
+        bearbrowser-sidecar-open --open
+        bearbrowser-sidecar-server --print-url
         bearbrowser-sidecar-status --format html --open
+        bearbrowser-verify-interactive-sidecar
         bearbrowser-verify-sidecar-status
         bearbrowser-verify-agent-sidecar
         bearbrowser-verify-native-shell
+        bearbrowser-verify-control-plane
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
@@ -121,9 +143,16 @@ class Bearbrowser < Formula
     assert_match "browser.playwright", shell_output("#{bin}/bearbrowser-automation-surfaces")
     assert_match "BearBrowser provenance", shell_output("#{bin}/bearbrowser-emit-event --event-type runtime.health --payload '{\"status\":\"test\"}'")
     assert_match "BearBrowser policy action", shell_output("#{bin}/bearbrowser-propose-action --action-type summarize_page --target-kind page --target-label test")
+    assert_match "BearBrowser page summary", shell_output("#{bin}/bearbrowser-page-summary create --text 'test page summary' --source-label test")
+    assert_match "BearBrowser page summary log verified", shell_output("#{bin}/bearbrowser-verify-summaries")
     assert_match "BearBrowser agent sidecar contract verified", shell_output("#{bin}/bearbrowser-verify-agent-sidecar")
     assert_match "BearBrowser sidecar status verified", shell_output("#{bin}/bearbrowser-verify-sidecar-status")
+    assert_match "BearBrowser SourceOS control-plane manifests verified", shell_output("#{bin}/bearbrowser-verify-control-plane")
+    assert_match "http://127.0.0.1:", shell_output("#{bin}/bearbrowser-sidecar-server --print-url")
     assert_match "bearhistory-policy-explain", shell_output("#{bin}/bearbrowser-history policy explain --profile agent-runtime --dry-run")
     assert_match "bearhistory-export-explain", shell_output("#{bin}/bearbrowser-history export explain --session demo --profile agent-runtime --dry-run")
+    assert_match "bearbrowser.policy_decision.v1", shell_output("#{bin}/bearbrowser-policy-engine --action navigate --profile human-secure --dry-run")
+    assert_match "\"decision\"", shell_output("#{bin}/bearbrowser-policy-engine --action request_credential --profile agent-runtime --dry-run", 3)
+    assert_match "21/21 passed", shell_output("#{bin}/bearbrowser-verify-policy-engine")
   end
 end

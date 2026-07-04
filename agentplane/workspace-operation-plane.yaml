@@ -1,0 +1,98 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BrowserWorkspaceOperationContract
+metadata:
+  name: bearbrowser-workspace-operation-plane
+  labels:
+    sourceos.dev/product: BearBrowser
+spec:
+  principle: Browser side effects are WorkspaceOperations, not hidden runtime behavior.
+  operationTypes:
+    - browser.session.start
+    - browser.capture.create
+    - browser.download.create
+    - browser.upload.create
+    - browser.automation.run
+    - browser.diagnostics.export_redacted
+  artifacts:
+    - kind: BrowserSession
+      operationType: browser.session.start
+    - kind: WebCapture
+      operationType: browser.capture.create
+    - kind: DownloadArtifact
+      operationType: browser.download.create
+    - kind: UploadArtifact
+      operationType: browser.upload.create
+    - kind: BrowserAutomationRun
+      operationType: browser.automation.run
+    - kind: BrowserDiagnosticBundle
+      operationType: browser.diagnostics.export_redacted
+  controls:
+    redaction:
+      cookies: redact
+      credentials: redact
+      tokens: redact
+      authHeaders: redact
+      prompts: redact
+      sensitiveIds: redact
+    trustBoundaryRecords:
+      required: true
+      dimensions:
+        - externalSite
+        - connector
+        - authDomain
+        - thirdPartyAutomation
+    policyGates:
+      browser.automation.run:
+        decisions:
+          - block
+          - quarantine
+          - admit
+          - activate
+      browser.download.create:
+        decisions:
+          - block
+          - quarantine
+          - admit
+          - activate
+      browser.upload.create:
+        decisions:
+          - block
+          - quarantine
+          - admit
+          - activate
+      browser.capture.create:
+        decisions:
+          - block
+          - quarantine
+          - admit
+          - activate
+    actorAttribution:
+      required: true
+      actors:
+        - user
+        - agent
+        - system
+        - connector
+    operationEvents:
+      required: true
+      lifecycle:
+        - start
+        - progress
+        - failure
+        - retry
+        - cancel
+        - complete
+  durableStateRule:
+    requireOperationPlaneForDurableState: true
+    statement: No browser automation or capture creates durable workspace state outside the Operation Plane.
+  authority:
+    policyAuthority: PolicyFabric
+    statement: BearBrowser renders and obeys Policy Fabric decisions and is not policy authority.
+  integrationTargets:
+    - SocioProphet/prophet-core-contracts#1
+    - SocioProphet/prophet-platform#376
+    - SocioProphet/policy-fabric#46
+    - SourceOS-Linux/sourceos-spec#87
+    - SociOS-Linux/workstation-contracts#28
+    - SourceOS-Linux/sourceos-devtools#19
+    - SocioProphet/workspace-inventory#4

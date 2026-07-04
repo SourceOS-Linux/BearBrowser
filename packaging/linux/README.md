@@ -64,4 +64,9 @@ A Linux package cannot be promoted unless:
 
 ## Current status
 
-This lane adds Linux desktop identity and package metadata scaffolding. The full browser binary still depends on Lane 13.
+The first successful binary build (`140.12.0esr-1`, build
+`bearbrowser-build-20260630-100322`) shipped two real Linux x86_64 runtimes
+(human-secure + tor-mode). The deb/snap/appimage/flatpak recipes now consume the
+real binary — see `../RELEASE.md` for SHA256s and the GCS source path, and
+`binary-source.env` for the single source of truth used by all recipes. Windows
+and macOS binaries are still pending their builds.

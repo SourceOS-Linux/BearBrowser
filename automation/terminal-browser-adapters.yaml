@@ -13,6 +13,29 @@ spec:
     denyCredentialExport: true
     denyAmbientHostFilesystem: true
     requireProvenanceEvents: true
+    operationContract: agentplane/workspace-operation-plane.yaml
+  workspaceOperations:
+    requiredTypes:
+      - browser.session.start
+      - browser.capture.create
+      - browser.download.create
+      - browser.upload.create
+      - browser.automation.run
+      - browser.diagnostics.export_redacted
+    operationEvents:
+      - start
+      - progress
+      - failure
+      - retry
+      - cancel
+      - complete
+    trustBoundaryRecords:
+      required: true
+      dimensions:
+        - externalSite
+        - connector
+        - authDomain
+        - thirdPartyAutomation
   adapters:
     - name: carbonyl
       capability: browser.terminal.carbonyl

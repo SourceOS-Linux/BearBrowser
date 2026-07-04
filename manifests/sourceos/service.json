@@ -1,0 +1,65 @@
+{
+  "schema_version": "sourceos.service.v0.1",
+  "service_id": "dev.sourceos.bearbrowser",
+  "display_name": "BearBrowser",
+  "description": "SourceOS governed browser overlay and agent-runtime product surface. Upstream engine provenance must not leak into product identity surfaces.",
+  "owner": {
+    "org": "SourceOS-Linux",
+    "repo": "BearBrowser",
+    "team": "browser"
+  },
+  "authority_domain": "app",
+  "lifecycle": {
+    "start_mode": "demand",
+    "restart_policy": "policy",
+    "disable_policy": "User may disable non-core helpers; security, provenance, and governance receipts remain product-scoped."
+  },
+  "capabilities": {
+    "required": [
+      "browser.profile.read",
+      "browser.renderer.spawn",
+      "browser.gpu.spawn",
+      "network.client.web",
+      "diagnostics.local.incident",
+      "events.canonical.emit"
+    ],
+    "optional": [
+      "ai.inference.local",
+      "security.reputation.query",
+      "telemetry.emit.local",
+      "agent.browser.sidecar"
+    ],
+    "denied": [
+      "telemetry.emit.remote.default",
+      "ipc.lookup.cloud.sync.ambient",
+      "identity.product.upstream_leak",
+      "launch.inherit_user_shell"
+    ]
+  },
+  "data_classes": [
+    "browser_profile",
+    "web_content",
+    "download_metadata",
+    "extension_state",
+    "agent_action_candidates",
+    "local_diagnostics",
+    "governance_queue"
+  ],
+  "launch_triggers": [
+    "user.launch",
+    "url.open",
+    "session.restore",
+    "agent.sidecar.open"
+  ],
+  "resource_budget": {
+    "memory_mb_soft": 2048,
+    "helper_process_limit": 64,
+    "denial_storm_per_minute": 20,
+    "default_network_trust_lookup": "not_attempted"
+  },
+  "observability": {
+    "emits_events": true,
+    "health_endpoint": "local://bearbrowser/status",
+    "incident_bundle": true
+  }
+}

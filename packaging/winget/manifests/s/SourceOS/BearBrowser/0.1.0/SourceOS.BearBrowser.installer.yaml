@@ -1,0 +1,38 @@
+PackageIdentifier: SourceOS.BearBrowser
+PackageVersion: 0.1.0
+InstallerLocale: en-US
+Platform:
+  - Windows.Desktop
+MinimumOSVersion: 10.0.17763.0
+Architecture: x64
+Scope: machine
+InstallModes:
+  - interactive
+  - silent
+InstallerSwitches:
+  Silent: /S
+  SilentWithProgress: /S
+FileExtensions:
+  - htm
+  - html
+  - shtml
+  - xht
+  - xhtml
+  - webp
+  - pdf
+Protocols:
+  - http
+  - https
+  - ftp
+Commands:
+  - bearbrowser
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/SourceOS-Linux/BearBrowser/releases/download/v0.1.0/BearBrowser-0.1.0-windows-x64-setup.exe
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    InstallerType: nullsoft
+    ProductCode: '{BearBrowser-0.1.0}'
+    UpgradeBehavior: install
+ProductCode: BearBrowser
+ManifestType: installer
+ManifestVersion: 1.6.0

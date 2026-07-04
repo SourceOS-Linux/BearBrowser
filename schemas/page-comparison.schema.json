@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sourceos.dev/schemas/bearbrowser/page-comparison.schema.json",
+  "title": "BearBrowser Page Comparison",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "comparisonId",
+    "timestamp",
+    "product",
+    "state",
+    "actor",
+    "left",
+    "right",
+    "classification",
+    "comparison",
+    "policy"
+  ],
+  "properties": {
+    "schemaVersion": { "type": "string", "const": "bearbrowser.page_comparison.v1" },
+    "comparisonId": { "type": "string", "minLength": 12 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "product": { "type": "string", "const": "BearBrowser" },
+    "state": { "type": "string", "enum": ["proposed", "reviewed", "discarded"] },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "enum": ["human", "agent", "system", "automation"] },
+        "id": { "type": "string" },
+        "displayName": { "type": "string" }
+      }
+    },
+    "left": { "$ref": "#/$defs/comparisonInput" },
+    "right": { "$ref": "#/$defs/comparisonInput" },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payloadClass", "secretLikeDetected", "mutationAllowed", "requiresExplicitSelection"],
+      "properties": {
+        "payloadClass": { "type": "string", "enum": ["public", "metadata", "sensitive-metadata", "secret-blocked"] },
+        "secretLikeDetected": { "type": "boolean" },
+        "mutationAllowed": { "type": "boolean", "const": false },
+        "requiresExplicitSelection": { "type": "boolean", "const": true }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summaryText", "method"],
+      "properties": {
+        "summaryText": { "type": "string" },
+        "method": { "type": "string", "enum": ["local-extractive", "manual", "agent-proposed"] }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "decisionId", "mode", "reason"],
+      "properties": {
+        "decision": { "type": "string", "enum": ["hold", "deny"] },
+        "decisionId": { "type": "string" },
+        "mode": { "type": "string", "enum": ["local-default", "manual", "policyfabric"] },
+        "reason": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "comparisonInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "label", "excerpt", "wordCount"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["page", "tab", "note", "automation", "system"] },
+        "label": { "type": "string" },
+        "url": { "type": "string" },
+        "title": { "type": "string" },
+        "excerpt": { "type": "string" },
+        "wordCount": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

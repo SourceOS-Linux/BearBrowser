@@ -1,0 +1,141 @@
+--- a/toolkit/components/resistfingerprinting/RFPTargets.inc
++++ b/toolkit/components/resistfingerprinting/RFPTargets.inc
+@@ -62,6 +62,11 @@
+ ITEM_VALUE(MediaDevices,                37)
+ ITEM_VALUE(MediaCapabilities,           38)
+ ITEM_VALUE(AudioSampleRate,             39)
++// BearBrowser: per-session farble of WebAudio sample data (AudioBuffer /
++// AnalyserNode) so the audio fingerprint is unlinkable across sessions. RFP
++// randomizes canvas but not audio — this closes that residual (id placed here,
++// not by the WebGL block, so it can't collide with the CanvasTextMetrics patch).
++ITEM_VALUE(WebAudioFarble,              82)
+ ITEM_VALUE(NetworkConnection,           40)
+ ITEM_VALUE(WindowDevicePixelRatio,      41)
+ ITEM_VALUE(MouseEventScreenPoint,       42)
+--- a/toolkit/components/resistfingerprinting/nsRFPService.h
++++ b/toolkit/components/resistfingerprinting/nsRFPService.h
+@@ -69,6 +69,7 @@
+ struct JSContext;
+ 
+ class nsIChannel;
++class nsIGlobalObject;  // BearBrowser: FarbleAudioData
+ 
+ class nsICanvasRenderingContextInternal;
+ 
+@@ -536,6 +537,13 @@
+                                   uint32_t aWidth, uint32_t aHeight,
+                                   uint32_t aSize,
+                                   mozilla::gfx::SurfaceFormat aSurfaceFormat);
++  // BearBrowser anti-fingerprint: apply an inaudible, per-session multiplicative
++  // farble to WebAudio sample data (AudioBuffer / AnalyserNode read paths), gated
++  // on RFPTarget::WebAudioFarble. RFP randomizes canvas but not audio; this makes
++  // the audio fingerprint unlinkable across sessions. No-op when the global is
++  // null or RFP is not active for it. Deterministic within a session.
++  static void FarbleAudioData(nsIGlobalObject* aGlobal, float* aData,
++                              size_t aLength);
+   // This function is used to randomize the elements in the given data
+   // according to the given parameters. For example, for an RGBA pixel, by group
+   // in this context, we refer to a single pixel and by element, we refer to
+--- a/toolkit/components/resistfingerprinting/nsRFPService.cpp
++++ b/toolkit/components/resistfingerprinting/nsRFPService.cpp
+@@ -82,6 +82,7 @@
+ #include "nsRFPTargetSetIDL.h"
+ 
+ #include "nsICookieJarSettings.h"
++#include "mozilla/RandomNum.h"
+ #include "nsICryptoHash.h"
+ #include "nsIEffectiveTLDService.h"
+ #include "nsIGlobalObject.h"
+@@ -1862,6 +1863,29 @@
+   }
+   return RandomizeElements(aCookieJarSettings, aPrincipal, aData, aSize,
+                            bytesPerPixel, bytesPerChannel, offset, true);
++}
++
++// static
++void nsRFPService::FarbleAudioData(nsIGlobalObject* aGlobal, float* aData,
++                                   size_t aLength) {
++  if (!aData || !aGlobal ||
++      !nsContentUtils::ShouldResistFingerprinting(aGlobal,
++                                                  RFPTarget::WebAudioFarble)) {
++    return;
++  }
++  // Per-session (per-process) inaudible multiplicative farble in
++  // [1-1e-7, 1+1e-7]. Deterministic within the session (repeated reads are
++  // stable, so audio still works), random across sessions (so the audio
++  // fingerprint cannot be linked between sessions — RFP randomizes canvas but
++  // not audio, and this closes that residual).
++  static const double sFarbleFactor = []() {
++    uint64_t r = mozilla::RandomUint64().valueOr(0);
++    double frac = (double)(r % 2000001) / 1000000.0 - 1.0;  // [-1, 1]
++    return 1.0 + frac * 1e-7;
++  }();
++  for (size_t i = 0; i < aLength; ++i) {
++    aData[i] = (float)((double)aData[i] * sFarbleFactor);
++  }
+ }
+ 
+ // static
+--- a/dom/media/webaudio/AudioBuffer.cpp
++++ b/dom/media/webaudio/AudioBuffer.cpp
+@@ -13,6 +13,7 @@
+ #include "js/experimental/TypedData.h"  // JS_NewFloat32Array, JS_GetFloat32ArrayData, JS_GetTypedArrayLength, JS_GetArrayBufferViewBuffer
+ #include "jsfriendapi.h"
+ #include "mozilla/ErrorResult.h"
++#include "nsRFPService.h"  // BearBrowser: WebAudio farble
+ #include "mozilla/HoldDropJSObjects.h"
+ #include "mozilla/MemoryReporting.h"
+ #include "mozilla/PodOperations.h"
+@@ -300,6 +301,11 @@
+       float* jsData = JS_GetFloat32ArrayData(array, &isShared, nogc);
+       MOZ_ASSERT(!isShared);  // Was created as unshared above
+       CopyChannelDataToFloat(mSharedChannels, i, 0, jsData, Length());
++      // BearBrowser anti-fingerprint: farble the materialized channel data once
++      // (this is the single point where getChannelData / copyFromChannel obtain
++      // their samples), gated on RFP. Inaudible, per-session — closes the audio
++      // fingerprint residual RFP leaves open.
++      nsRFPService::FarbleAudioData(global->AsGlobal(), jsData, Length());
+     }
+     mJSChannels[i] = array;
+   }
+--- a/dom/media/webaudio/AnalyserNode.cpp
++++ b/dom/media/webaudio/AnalyserNode.cpp
+@@ -8,6 +8,7 @@
+ #include "AudioNodeTrack.h"
+ #include "Tracing.h"
+ #include "mozilla/Mutex.h"
++#include "nsRFPService.h"  // BearBrowser: WebAudio farble
+ #include "mozilla/PodOperations.h"
+ #include "mozilla/dom/AnalyserNodeBinding.h"
+ #include "nsMathUtils.h"
+@@ -214,6 +215,7 @@
+     return;
+   }
+ 
++  nsIGlobalObject* global = GetOwnerGlobal();
+   aArray.ProcessData([&](const Span<float>& aData, JS::AutoCheckCannotGC&&) {
+     size_t length = std::min(size_t(aData.Length()), mOutputBuffer.Length());
+ 
+@@ -221,6 +223,8 @@
+       aData[i] = WebAudioUtils::ConvertLinearToDecibels(
+           mOutputBuffer[i], -std::numeric_limits<float>::infinity());
+     }
++    // BearBrowser anti-fingerprint: farble the analyser frequency output.
++    nsRFPService::FarbleAudioData(global, aData.Elements(), length);
+   });
+ }
+ 
+@@ -249,10 +253,13 @@
+ }
+ 
+ void AnalyserNode::GetFloatTimeDomainData(const Float32Array& aArray) {
++  nsIGlobalObject* global = GetOwnerGlobal();
+   aArray.ProcessData([&](const Span<float>& aData, JS::AutoCheckCannotGC&&) {
+     size_t length = std::min(aData.Length(), size_t(FftSize()));
+ 
+     GetTimeDomainData(aData.Elements(), length);
++    // BearBrowser anti-fingerprint: farble the analyser time-domain output.
++    nsRFPService::FarbleAudioData(global, aData.Elements(), length);
+   });
+ }
+ 

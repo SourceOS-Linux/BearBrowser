@@ -13,10 +13,21 @@ on:
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/bearbrowser-memory-candidate.py"
       - "scripts/bearbrowser-verify-memory.py"
+      - "scripts/bearbrowser-page-summary.py"
+      - "scripts/bearbrowser-verify-summaries.py"
+      - "scripts/bearbrowser-page-comparison.py"
+      - "scripts/bearbrowser-verify-comparisons.py"
+      - "scripts/bearbrowser-governance-queue.py"
+      - "scripts/bearbrowser-sidecar-server.py"
+      - "scripts/bearbrowser-sidecar-open.sh"
       - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
       - "scripts/verify-sidecar-status.sh"
+      - "scripts/verify-interactive-sidecar.sh"
+      - "scripts/verify-comparison-plane.sh"
       - "scripts/verify-agent-sidecar-contract.py"
+      - "scripts/bearbrowser-create-receipt.py"
+      - "scripts/bearbrowser-update-receipt.py"
       - ".github/workflows/feature-plane.yml"
   push:
     branches: [main]
@@ -31,10 +42,21 @@ on:
       - "scripts/bearbrowser-verify-actions.py"
       - "scripts/bearbrowser-memory-candidate.py"
       - "scripts/bearbrowser-verify-memory.py"
+      - "scripts/bearbrowser-page-summary.py"
+      - "scripts/bearbrowser-verify-summaries.py"
+      - "scripts/bearbrowser-page-comparison.py"
+      - "scripts/bearbrowser-verify-comparisons.py"
+      - "scripts/bearbrowser-governance-queue.py"
+      - "scripts/bearbrowser-sidecar-server.py"
+      - "scripts/bearbrowser-sidecar-open.sh"
       - "scripts/bearbrowser-sidecar-status.py"
       - "scripts/verify-feature-plane.sh"
       - "scripts/verify-sidecar-status.sh"
+      - "scripts/verify-interactive-sidecar.sh"
+      - "scripts/verify-comparison-plane.sh"
       - "scripts/verify-agent-sidecar-contract.py"
+      - "scripts/bearbrowser-create-receipt.py"
+      - "scripts/bearbrowser-update-receipt.py"
       - ".github/workflows/feature-plane.yml"
   workflow_dispatch:
 
@@ -59,21 +81,40 @@ jobs:
             scripts/bearbrowser-verify-actions.py \
             scripts/bearbrowser-memory-candidate.py \
             scripts/bearbrowser-verify-memory.py \
+            scripts/bearbrowser-page-summary.py \
+            scripts/bearbrowser-verify-summaries.py \
+            scripts/bearbrowser-page-comparison.py \
+            scripts/bearbrowser-verify-comparisons.py \
+            scripts/bearbrowser-governance-queue.py \
+            scripts/bearbrowser-sidecar-server.py \
             scripts/bearbrowser-sidecar-status.py \
-            scripts/verify-agent-sidecar-contract.py
+            scripts/verify-agent-sidecar-contract.py \
+            scripts/bearbrowser-create-receipt.py \
+            scripts/bearbrowser-update-receipt.py
 
       - name: Shell syntax
         run: |
           bash -n scripts/verify-feature-plane.sh
           bash -n scripts/verify-sidecar-status.sh
+          bash -n scripts/verify-interactive-sidecar.sh
+          bash -n scripts/verify-comparison-plane.sh
+          bash -n scripts/bearbrowser-sidecar-open.sh
 
       - name: Validate feature plane
         run: |
           bash scripts/verify-feature-plane.sh
 
+      - name: Validate comparison plane
+        run: |
+          bash scripts/verify-comparison-plane.sh
+
       - name: Validate sidecar status renderer
         run: |
           bash scripts/verify-sidecar-status.sh
+
+      - name: Validate interactive sidecar
+        run: |
+          bash scripts/verify-interactive-sidecar.sh
 
       - name: Validate agent sidecar contract
         run: |

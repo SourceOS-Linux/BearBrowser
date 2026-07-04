@@ -5,6 +5,7 @@ BearBrowser integrates with:
 - AgentPlane for runtime registration and capability discovery
 - PolicyFabric for network, file, credential, and capture policy
 - Prophet Workspace for user-visible workspace control
+- Workspace Operation Plane for browser session, capture, download, upload, automation, and redacted diagnostics records
 - TopoLVM/local mount planning for browser state and downloads
 - Matrix/Hermes for command, event, and session coordination
 - Sherlock/Holmes where browser activity becomes inspectable operational evidence
