@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "v0.1",
+  "kind": "AgentHarnessBrowserReceipts",
+  "browserSessionReceipt": {
+    "sessionId": "bearbrowser-session-agent-harness-v0.1",
+    "actorRef": "github://mdheller",
+    "workspaceRef": "github://SocioProphet/sociosphere",
+    "runtimeProfile": "bearbrowser-governed-visible",
+    "policyAdmissionRef": "github://SocioProphet/policy-fabric/pull/60",
+    "networkProfile": "customer-safe-demo",
+    "credentialPosture": "available-but-unused",
+    "mode": "visible",
+    "agentplaneRunRef": "github://SocioProphet/agentplane/pull/107"
+  },
+  "browserActionReceipt": {
+    "actionId": "browser-action-open-delivery-excellence-pr",
+    "browserSessionRef": "bearbrowser-session-agent-harness-v0.1",
+    "url": "https://github.com/SocioProphet/delivery-excellence/pull/9",
+    "actionType": "navigate",
+    "sideEffectClass": "read-only",
+    "policyDecisionRef": "github://SocioProphet/policy-fabric/pull/60",
+    "credentialUse": false,
+    "artifactPointerRefs": [],
+    "resultStatus": "succeeded"
+  },
+  "browserDownloadReceipt": {
+    "downloadId": "browser-download-none-baseline",
+    "sourceUrl": "https://github.com/SocioProphet/delivery-excellence/pull/9",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "mediaType": "application/json",
+    "sizeBytes": 0,
+    "quarantineState": "not-required",
+    "memoryMeshPointerRef": "github://SocioProphet/memory-mesh/pull/23",
+    "policyDecisionRef": "github://SocioProphet/policy-fabric/pull/60"
+  },
+  "browserCredentialUseReceipt": {
+    "credentialEventId": "browser-credential-unused-baseline",
+    "browserSessionRef": "bearbrowser-session-agent-harness-v0.1",
+    "credentialScope": "none",
+    "policyDecisionRef": "github://SocioProphet/policy-fabric/pull/60",
+    "humanControlEventRef": "",
+    "rawCredentialStored": false,
+    "resultStatus": "succeeded"
+  }
+}

@@ -1,0 +1,48 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: CredentialBackendSet
+metadata:
+  name: bearbrowser-linux-credential-backends
+  labels:
+    sourceos.dev/product: BearBrowser
+    sourceos.dev/platform: linux
+spec:
+  platform: linux
+  defaultDecision: userMediated
+  backends:
+    - name: SecretService
+      purpose: Freedesktop Secret Service credential lookup and storage
+      storesSecrets: true
+      browserOwnedVault: false
+      access: userAndPolicyMediated
+    - name: GNOMEKeyring
+      purpose: GNOME-backed Secret Service provider
+      storesSecrets: true
+      browserOwnedVault: false
+      access: userAndPolicyMediated
+    - name: KWallet
+      purpose: KDE credential wallet integration
+      storesSecrets: true
+      browserOwnedVault: false
+      access: userAndPolicyMediated
+    - name: libsecret
+      purpose: Linux credential broker library integration
+      storesSecrets: false
+      browserOwnedVault: false
+      access: brokerLibrary
+    - name: FIDO2
+      purpose: Hardware-backed authentication and passkey flows
+      storesSecrets: false
+      browserOwnedVault: false
+      access: userMediated
+    - name: PlatformPasskeys
+      purpose: Platform passkey authentication where available
+      storesSecrets: false
+      browserOwnedVault: false
+      access: userMediated
+  humanSecure:
+    allowed: true
+    requireUserConsent: true
+  agentRuntime:
+    allowed: false
+    inheritHumanCredentials: false
+    replacement: PolicyBrokerSessionCredential

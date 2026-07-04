@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.sourceos.BearBrowser</id>
+  <name>BearBrowser</name>
+  <summary>SourceOS governed browser for humans and agents</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0</project_license>
+  <description>
+    <p>BearBrowser is a SourceOS governed browser with human-secure and agent-runtime profiles.</p>
+  </description>
+  <launchable type="desktop-id">dev.sourceos.BearBrowser.desktop</launchable>
+</component>

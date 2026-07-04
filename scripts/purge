@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${1:-}" != "--confirm" ]; then
+  echo "BearBrowser purge is destructive. Re-run with --confirm to remove local state/config/cache/Application Support/logs."
+  exit 2
+fi
+
+patterns='BearBrowser|bearbrowser|LibreWolf.*Bear|playwright.*bear|stagehand.*bear'
+
+echo "Stopping BearBrowser processes if present..."
+pkill -f "$patterns" 2>/dev/null || true
+
+if command -v launchctl >/dev/null 2>&1; then
+  launchctl list 2>/dev/null | awk '/bearbrowser|BearBrowser/ {print $3}' | while read -r label; do
+    [ -n "$label" ] || continue
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+  done
+fi
+
+find "$HOME/Library/LaunchAgents" /Library/LaunchAgents /Library/LaunchDaemons -type f 2>/dev/null \
+  | grep -Ei 'bearbrowser|BearBrowser' \
+  | while read -r plist; do rm -f "$plist" 2>/dev/null || true; done
+
+rm -rf \
+  "$HOME/.local/state/bearbrowser" \
+  "$HOME/.config/bearbrowser" \
+  "$HOME/.cache/bearbrowser" \
+  "$HOME/Library/Application Support/BearBrowser" \
+  "$HOME/Library/Caches/BearBrowser" \
+  "$HOME/Library/Logs/BearBrowser"
+
+echo "BearBrowser local state/config/cache/Application Support/logs purged"

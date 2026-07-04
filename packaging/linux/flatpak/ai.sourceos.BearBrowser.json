@@ -26,18 +26,34 @@
       "name": "bearbrowser",
       "buildsystem": "simple",
       "build-commands": [
-        "[ -f dist/linux/BearBrowser ] && install -Dm755 dist/linux/BearBrowser /app/lib/bearbrowser/BearBrowser || echo 'Waiting for GCP build pipeline'",
-        "install -Dm644 profiles/default/user.js /app/lib/bearbrowser/defaults/profile/user.js",
-        "printf '#!/bin/sh\\nexec /app/lib/bearbrowser/BearBrowser --profile ~/.bearbrowser/profiles/default \"$@\"' > /app/bin/bearbrowser && chmod 755 /app/bin/bearbrowser",
-        "install -Dm644 packaging/linux/bearbrowser.desktop /app/share/applications/ai.sourceos.BearBrowser.desktop",
-        "[ -f packaging/linux/ai.sourceos.BearBrowser.metainfo.xml ] && install -Dm644 packaging/linux/ai.sourceos.BearBrowser.metainfo.xml /app/share/metainfo/ || true",
-        "[ -f branding/bearbrowser.svg ] && install -Dm644 branding/bearbrowser.svg /app/share/icons/hicolor/scalable/apps/ai.sourceos.BearBrowser.svg || true"
+        "mkdir -p /app/lib/bearbrowser",
+        "cp -a bin /app/lib/bearbrowser/bin",
+        "install -Dm644 user.js /app/lib/bearbrowser/defaults/profile/user.js",
+        "printf '#!/bin/sh\\nexec /app/lib/bearbrowser/bin/bearbrowser --profile ~/.bearbrowser/profiles/default \"$@\"' > /app/bin/bearbrowser && chmod 755 /app/bin/bearbrowser",
+        "install -Dm644 bearbrowser.desktop /app/share/applications/ai.sourceos.BearBrowser.desktop",
+        "install -Dm644 bearbrowser.svg /app/share/icons/hicolor/scalable/apps/ai.sourceos.BearBrowser.svg"
       ],
       "sources": [
         {
-          "type": "git",
-          "url": "https://github.com/SourceOS-Linux/BearBrowser.git",
-          "branch": "main"
+          "_comment": "Real Linux x86_64 human-secure build 140.12.0esr-1. Source of truth: gs://sourceos-artifacts-socioprophet/bearbrowser-builds/bearbrowser-build-20260630-100322/artifacts/bearbrowser-human-secure-linux-x86_64.tar.gz",
+          "type": "archive",
+          "url": "https://downloads.sourceos.dev/bearbrowser/140.12.0esr-1/bearbrowser-human-secure-linux-x86_64.tar.gz",
+          "sha256": "a94bda8c5e51122f578b53b1df01ddd9de7af12dc0ab40815eb4c4b1347bc7fb",
+          "strip-components": 0
+        },
+        {
+          "type": "file",
+          "path": "../../../profiles/default/user.js",
+          "dest-filename": "user.js"
+        },
+        {
+          "type": "file",
+          "path": "../bearbrowser.desktop"
+        },
+        {
+          "type": "file",
+          "path": "../../branding/bearbrowser.svg",
+          "dest-filename": "bearbrowser.svg"
         }
       ]
     }

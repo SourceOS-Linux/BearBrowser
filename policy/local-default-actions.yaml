@@ -1,0 +1,89 @@
+apiVersion: sourceos.dev/v1alpha1
+kind: BearBrowserLocalPolicyDefaults
+metadata:
+  name: bearbrowser-local-default-actions
+spec:
+  defaultDecision: hold
+  actions:
+    navigate:
+      risk: low
+      decision: allow
+      requiresUserApproval: false
+      reason: Human-initiated navigation is allowed in human-secure and bootstrap profiles.
+    summarize_page:
+      risk: low
+      decision: observe
+      requiresUserApproval: false
+      reason: Summarization is observational and must not mutate page state.
+    compare_tabs:
+      risk: medium
+      decision: hold
+      requiresUserApproval: true
+      reason: Cross-tab context sharing requires explicit user approval.
+    share_page_with_agent:
+      risk: medium
+      decision: hold
+      requiresUserApproval: true
+      reason: Page visibility to agents must be explicit.
+    request_credential:
+      risk: critical
+      decision: hold
+      requiresUserApproval: true
+      reason: Credential access is OS-mediated and must not be inherited by agent runtime.
+    request_autofill:
+      risk: high
+      decision: hold
+      requiresUserApproval: true
+      reason: Autofill can reveal or submit sensitive personal data.
+    download_file:
+      risk: medium
+      decision: hold
+      requiresUserApproval: true
+      reason: Downloads require provenance and future file safety checks.
+    upload_file:
+      risk: high
+      decision: hold
+      requiresUserApproval: true
+      reason: Uploads can exfiltrate local data and require explicit approval.
+    read_clipboard:
+      risk: high
+      decision: hold
+      requiresUserApproval: true
+      reason: Clipboard can contain secrets or personal data.
+    write_clipboard:
+      risk: medium
+      decision: hold
+      requiresUserApproval: true
+      reason: Clipboard mutation must be visible to the user.
+    run_automation:
+      risk: high
+      decision: hold
+      requiresUserApproval: true
+      reason: Automation controls mechanisms but does not grant authority.
+    write_memory_candidate:
+      risk: medium
+      decision: hold
+      requiresUserApproval: true
+      reason: Memory writes must be previewable and revocable.
+    commit_memory:
+      risk: high
+      decision: hold
+      requiresUserApproval: true
+      reason: Committed memory changes persistent context and requires user approval.
+  profileOverrides:
+    agent-runtime:
+      navigate:
+        decision: hold
+        requiresUserApproval: true
+      request_credential:
+        decision: deny
+        requiresUserApproval: false
+      request_autofill:
+        decision: deny
+        requiresUserApproval: false
+      upload_file:
+        decision: hold
+        requiresUserApproval: true
+      run_automation:
+        decision: hold
+        requiresUserApproval: true

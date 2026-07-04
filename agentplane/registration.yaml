@@ -23,19 +23,30 @@ spec:
       - ttlMinutes
       - automationSurface
       - terminalBackend
+      - credentialBrokerPolicyId
     defaultProfileMode: agent-runtime
     defaultTtlMinutes: 120
     requiresPolicyDecision: true
     requiresProvenanceSink: true
+    operationPlaneContract: agentplane/workspace-operation-plane.yaml
   sessionStates:
     - requested
     - policy-pending
     - starting
     - running
+    - credential-pending
+    - credential-denied
     - blocked
     - ending
     - ended
     - failed
+  credentialBroker:
+    contract: policy/credential-broker-contract.yaml
+    macOSBackends: credential-broker/macos-backends.yaml
+    linuxBackends: credential-broker/linux-backends.yaml
+    humanSecureUsesOSNativeBroker: true
+    agentRuntimeInheritsHumanCredentials: false
+    eventPayloadSecrets: forbidden
   automationSurfaces:
     - name: playwright
       capability: browser.playwright
@@ -93,6 +104,22 @@ spec:
     policyDecisions: PolicyFabric
     provenanceEvents: AgentPlane
     workspaceState: ProphetWorkspace
+  workspaceOperations:
+    required: true
+    types:
+      - browser.session.start
+      - browser.capture.create
+      - browser.download.create
+      - browser.upload.create
+      - browser.automation.run
+      - browser.diagnostics.export_redacted
+    operationEvents:
+      - start
+      - progress
+      - failure
+      - retry
+      - cancel
+      - complete
   provenanceEvents:
     - browser.session.started
     - browser.session.ended
@@ -102,3 +129,7 @@ spec:
     - browser.capture.created
     - browser.policy.violation
     - browser.credential.boundary
+    - browser.credential.requested
+    - browser.credential.granted
+    - browser.credential.denied
+    - browser.credential.cleared

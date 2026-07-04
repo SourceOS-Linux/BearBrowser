@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+patterns='BearBrowser|bearbrowser|LibreWolf.*Bear|playwright.*bear|stagehand.*bear'
+
+echo "BearBrowser network surface"
+echo "declared default: human navigation or policy-admitted agent navigation only"
+echo "declared automation: disabled or loopback-only until explicitly declared"
+
+echo
+echo "automation surface report:"
+if command -v bearbrowser-automation-surfaces >/dev/null 2>&1; then
+  bearbrowser-automation-surfaces || true
+else
+  echo "  bearbrowser-automation-surfaces unavailable"
+fi
+
+echo
+echo "observed listeners:"
+if command -v lsof >/dev/null 2>&1; then
+  lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -Ei "$patterns" || echo "  none"
+else
+  echo "  lsof unavailable"
+fi
+
+echo
+echo "policy: update TRUST_SURFACE.yaml before enabling CDP, Playwright, Stagehand, browser relay, noVNC, or non-loopback automation endpoints"

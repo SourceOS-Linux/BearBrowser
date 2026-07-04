@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "${0}")")"
+PROFILE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/bearbrowser/profiles/default"
+mkdir -p "$PROFILE_DIR"
+
+# Real 140.12.0esr launcher inside the bundled Gecko runtime (tarball root bin/).
+if [ -x "$HERE/usr/lib/bearbrowser/bin/bearbrowser" ]; then
+  exec "$HERE/usr/lib/bearbrowser/bin/bearbrowser" --profile "$PROFILE_DIR" "$@"
+fi
+if [ -x "$HERE/usr/bin/bearbrowser" ]; then
+  exec "$HERE/usr/bin/bearbrowser" "$@"
+fi
+
+echo "BearBrowser runtime missing from AppImage — rebuild with ci/appimage.sh." >&2
+exit 64

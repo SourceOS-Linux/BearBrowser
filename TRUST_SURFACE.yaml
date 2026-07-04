@@ -1,0 +1,132 @@
+schema_version: "1.0"
+component: BearBrowser
+repo: SourceOS-Linux/BearBrowser
+owner: SourceOS-Linux
+runtime_classes:
+  - desktop_app
+  - browser_control
+  - agent_orchestrator
+authority_summary: >-
+  BearBrowser is a LibreWolf-derived SourceOS browser product for humans and agents.
+  It has two primary modes: Human Secure Browser and Agent Browser Runtime.
+  This first-pass trust surface makes browser automation, downloads, workspace mounts, policies, packaging, and agent-runtime authority explicit before runtime expansion.
+
+entrypoints:
+  - type: desktop_browser
+    path: bearbrowser
+    purpose: Launch the human secure browser profile.
+  - type: updater
+    path: bearbrowser-update
+    purpose: Update BearBrowser packaging/runtime artifacts.
+  - type: diagnostic
+    path: bearbrowser-doctor
+    purpose: Inspect local install and runtime state.
+  - type: upstream_verifier
+    path: bearbrowser-verify-upstream
+    purpose: Verify LibreWolf upstream parity and overlay drift.
+  - type: automation_surface_report
+    path: bearbrowser-automation-surfaces
+    purpose: Report Playwright, Stagehand, terminal-browser, and agent automation surfaces.
+
+launch_services: []
+containers: []
+
+network:
+  plaintext_non_loopback_allowed: false
+  listeners:
+    - protocol: browser_automation
+      bind: disabled_or_loopback_only_until_declared_otherwise
+      port: null
+      auth: required_before_agent_runtime_or_non_loopback_use
+      purpose: Governed browser execution surface for local, cloud, and fog agents.
+  egress:
+    - target: user_requested_web_navigation
+      purpose: Human browser navigation under the selected profile.
+    - target: explicit_agent_navigation_when_policy_admitted
+      purpose: Agent Browser Runtime navigation after policy admission.
+
+filesystem:
+  host_mounts: []
+  writable_paths:
+    - ~/.local/state/bearbrowser/
+    - ~/.config/bearbrowser/
+    - ~/.cache/bearbrowser/
+    - ~/Library/Application Support/BearBrowser/
+    - ~/Library/Logs/BearBrowser/
+  cache_paths:
+    - ~/.cache/bearbrowser/
+    - ~/Library/Caches/BearBrowser/
+  log_paths:
+    - ~/Library/Logs/BearBrowser/
+    - ~/.local/state/bearbrowser/logs/
+
+credentials:
+  expected_secrets: []
+  secret_locations: []
+  inherits_ssh_agent: false
+  redaction_required: true
+
+policy:
+  filesystem: declared_downloads_and_workspace_mounts_only
+  network: human_navigation_or_policy_admitted_agent_navigation
+  execution: browser_automation_actions_only_no_shell_by_default
+  approval: required_for_agent_runtime_downloads_uploads_form_submits_auth_context_or_workspace_writes
+  workspace_scope: declared_browser_workspace_or_downloads_boundary
+
+model_providers: []
+browser_surfaces:
+  - type: Playwright
+    enabled: true
+    auth: policy_required_for_agent_runtime
+    bind: local_or_managed_context_only
+  - type: Stagehand
+    enabled: true
+    auth: policy_required_for_ai_assisted_actions
+    bind: local_or_managed_context_only
+  - type: terminal_browser_compatibility
+    enabled: true
+    auth: policy_required_for_agent_runtime
+    bind: local_or_managed_context_only
+update_channels:
+  - type: homebrew_formula
+    url_or_ref: SourceOS-Linux/tap/bearbrowser
+    signature_required: true
+  - type: direct_homebrew_formula
+    url_or_ref: https://raw.githubusercontent.com/SourceOS-Linux/BearBrowser/main/packaging/homebrew/Formula/bearbrowser.rb
+    signature_required: true
+remote_config: []
+
+purge:
+  commands:
+    - brew uninstall bearbrowser || true
+    - rm -rf ~/.local/state/bearbrowser ~/.config/bearbrowser ~/.cache/bearbrowser ~/Library/Application\ Support/BearBrowser ~/Library/Caches/BearBrowser ~/Library/Logs/BearBrowser
+  removes:
+    - BearBrowser Homebrew formula installation
+    - BearBrowser state directory
+    - BearBrowser config directory
+    - BearBrowser cache directory
+    - BearBrowser Application Support directory
+    - BearBrowser logs
+    - any future BearBrowser LaunchAgent or automation service declared in this file
+
+prove_clean:
+  checks:
+    - no process matching BearBrowser, bearbrowser, LibreWolf Bear profile, Playwright Bear context, or Stagehand Bear context
+    - no LaunchAgent, LaunchDaemon, systemd unit, or scheduled task matching BearBrowser or bearbrowser
+    - no browser automation listener owned by BearBrowser
+    - no credential store owned by BearBrowser
+    - no local state, config, cache, Application Support, or log residue unless explicitly retained by user
+
+known_risks:
+  - Browser automation can operate authenticated sessions and exfiltrate page data if policy is weak.
+  - Downloads and workspace mounts can bridge web content into local agent workspaces.
+  - CDP, Playwright, Stagehand, and terminal-browser compatibility surfaces can become remote-control surfaces.
+  - Browser logs, cookies, profiles, storage, and crash reports may contain sensitive browsing or auth metadata.
+  - Upstream browser drift can silently change privacy or automation behavior.
+
+compensating_controls:
+  - Keep SourceOS overlays explicit outside the clean LibreWolf mirror.
+  - Require policy admission for agent runtime automation.
+  - Keep non-loopback automation disabled unless explicitly declared and authenticated.
+  - Redact browser auth/session material from diagnostics, logs, traces, and reports.
+  - Verify upstream parity and automation surfaces before release.

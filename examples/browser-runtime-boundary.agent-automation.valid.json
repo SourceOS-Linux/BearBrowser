@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "bearbrowser.runtime-boundary.v1",
+  "kind": "BrowserRuntimeBoundaryDecision",
+  "decisionId": "browser-runtime-boundary:agent-automation-001",
+  "surface": "agent-browser-runtime",
+  "actor": {
+    "type": "agent",
+    "id": "agent://bearbrowser/test-agent",
+    "agentRegistryRef": "agent-registry://bearbrowser/test-agent"
+  },
+  "requestedAction": "agent_navigation",
+  "policyDecisionId": "policy-decision://bearbrowser/agent-navigation/allow-001",
+  "credentialBoundary": {
+    "credentialAccessRequested": false,
+    "credentialExportAllowed": false,
+    "inheritsHumanCredentials": false,
+    "osMediatedOnly": true
+  },
+  "automationBoundary": {
+    "automationRequested": true,
+    "nonLoopbackControlAllowed": false,
+    "nativeExecutionAllowed": false
+  },
+  "workspaceBoundary": {
+    "downloadOrWorkspaceBridgeRequested": false,
+    "declaredWorkspaceScopeOnly": true
+  },
+  "redactionBoundary": {
+    "secretValuesLogged": false,
+    "sessionMaterialLogged": false,
+    "paymentMaterialLogged": false
+  },
+  "performedAction": false,
+  "evidenceRefs": [
+    "evidence://bearbrowser/runtime-boundary/agent-automation-001"
+  ],
+  "notes": "Decision-only record: policy admitted agent navigation, but this record performs no browser action and grants no credential authority."
+}

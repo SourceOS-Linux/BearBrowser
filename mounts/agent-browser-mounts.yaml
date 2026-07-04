@@ -136,6 +136,14 @@ spec:
       provenance:
         emitOnCreate: browser.download.created
         requireSha256: true
+        workspaceOperationType: browser.download.create
+      policyGate:
+        required: true
+        decisionModes:
+          - block
+          - quarantine
+          - admit
+          - activate
     - name: profile
       mountClass: agent-profile
       purpose: Ephemeral, per-session browser profile state, cookies, local storage, cache partition metadata.
@@ -159,6 +167,36 @@ spec:
       provenance:
         emitOnCreate: browser.capture.created
         requireSha256: true
+        workspaceOperationType: browser.capture.create
+      policyGate:
+        required: true
+        decisionModes:
+          - block
+          - quarantine
+          - admit
+          - activate
+    - name: uploads
+      mountClass: agent-uploads
+      purpose: Files staged for browser upload operations under PolicyFabric control.
+      defaultPath: /workspace/uploads
+      mode: readOnly
+      governed: true
+      required: false
+      persistByDefault: false
+      restrictions:
+        requireExplicitGrant: true
+        denySymlinkEscape: true
+        denyDeviceFiles: true
+      provenance:
+        emitOnUse: browser.upload.created
+        workspaceOperationType: browser.upload.create
+      policyGate:
+        required: true
+        decisionModes:
+          - block
+          - quarantine
+          - admit
+          - activate
     - name: cache
       mountClass: agent-cache
       purpose: Disposable network and browser runtime cache.
@@ -216,3 +254,7 @@ spec:
     - ~/.kube
     - /var/run/docker.sock
     - /var/run/podman/podman.sock
+  durableState:
+    operationPlaneRequired: true
+    operationContract: agentplane/workspace-operation-plane.yaml
+    statement: No browser automation or capture creates durable workspace state outside the Operation Plane.

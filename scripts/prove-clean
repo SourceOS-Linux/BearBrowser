@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+patterns='BearBrowser|bearbrowser|LibreWolf.*Bear|playwright.*bear|stagehand.*bear'
+failed=0
+
+if pgrep -af "$patterns" >/dev/null 2>&1; then
+  echo "FAIL: BearBrowser process still present"
+  pgrep -af "$patterns" || true
+  failed=1
+else
+  echo "OK: no BearBrowser process"
+fi
+
+if command -v launchctl >/dev/null 2>&1 && launchctl list 2>/dev/null | grep -Ei "$patterns" >/dev/null; then
+  echo "FAIL: BearBrowser launchctl entry still present"
+  failed=1
+else
+  echo "OK: no BearBrowser launchctl entry"
+fi
+
+if find "$HOME/Library/LaunchAgents" /Library/LaunchAgents /Library/LaunchDaemons -type f 2>/dev/null | grep -Ei 'bearbrowser|BearBrowser' >/dev/null; then
+  echo "FAIL: BearBrowser launch plist still present"
+  failed=1
+else
+  echo "OK: no BearBrowser launch plist"
+fi
+
+if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | grep -Ei "$patterns" >/dev/null; then
+  echo "FAIL: BearBrowser listener still present"
+  failed=1
+else
+  echo "OK: no BearBrowser listener"
+fi
+
+for p in "$HOME/.local/state/bearbrowser" "$HOME/.config/bearbrowser" "$HOME/.cache/bearbrowser" "$HOME/Library/Application Support/BearBrowser" "$HOME/Library/Caches/BearBrowser" "$HOME/Library/Logs/BearBrowser"; do
+  if [ -e "$p" ]; then
+    echo "FAIL: residue exists: $p"
+    failed=1
+  else
+    echo "OK: missing: $p"
+  fi
+done
+
+exit "$failed"

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.sourceos.BearBrowser</id>
+  <name>BearBrowser</name>
+  <summary>SourceOS governed browser for humans and agents</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MPL-2.0</project_license>
+  <description>
+    <p>BearBrowser is a SourceOS governed browser product with separate human-secure and agent-runtime profiles.</p>
+    <p>It provides privacy-focused browsing, policy-mediated automation surfaces, governed downloads and captures, and integration contracts for AgentPlane, PolicyFabric, and Prophet Workspace.</p>
+  </description>
+  <launchable type="desktop-id">dev.sourceos.BearBrowser.desktop</launchable>
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <keywords>
+    <keyword>browser</keyword>
+    <keyword>SourceOS</keyword>
+    <keyword>policy</keyword>
+    <keyword>agent</keyword>
+    <keyword>privacy</keyword>
+  </keywords>
+  <provides>
+    <binary>bearbrowser</binary>
+  </provides>
+  <url type="homepage">https://github.com/SourceOS-Linux/BearBrowser</url>
+  <developer id="dev.sourceos">
+    <name>SourceOS</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+</component>

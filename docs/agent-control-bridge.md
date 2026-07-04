@@ -9,16 +9,39 @@ This is the moat. No other browser ships a spec-governed, evidence-emitting
 agent automation surface. The contract + bridge are the differentiating IP and
 are ready the moment the binary lands.
 
-> **Honesty note — runtime binding is pending the binary build.**
-> BearBrowser has no compiled binary yet (the LibreWolf compile lane is wired in
-> `scripts/bearbrowser-build-binary.sh` but has not been run). The control
-> endpoint described here is **not yet a live automation surface**. What is real
-> and ready today is (1) this bridge spec, (2) the governance contract, and (3)
-> the emission schema — which is **identical to TurtleTerm's** reasoning-event
-> family, so the evidence fabric is already unified across the two products. The
-> reference emitter is `TurtleTerm/assets/sourceos/bin/turtle-agentd`
+> **Status — the ENFORCING bridge is implemented; runtime binding is pending the binary.**
+> The control bridge is real and runnable today:
+> **`scripts/agent-control-bridge.py`**. Its enforcement + attestation layer is
+> **pure** — it classifies every agent action against the contract and BLOCKS
+> gated/prohibited (including injected) actions **at decision time**, attesting a
+> spec-conformant `ReasoningEvent` for each, *without needing a live browser*
+> (dry/enforce-only mode). Containment is proven by
+> **`scripts/tests/test_injection_containment.py`** (79 assertions, all passing):
+> an injected `enter-credentials` is denied + a `browser.policy.violation` is
+> attested; a `submit-form`/`cross-origin-post` without a per-action approval
+> token is denied; a `click` the planner flags as a submit, or a fill into a
+> credential/payment/gov-id field, is re-classified and blocked.
+>
+> The **live transport is now wired**: `connect()` opens a real WebDriver-BiDi
+> WebSocket to the loopback control endpoint, authenticates with the per-session
+> token, and completes the `session.new` handshake
+> (`lib/bidi_transport.py::BidiClient`); `dispatch()` gates every action FIRST and
+> only then puts the mapped BiDi command on the wire. Because BearBrowser has no
+> compiled binary yet (the LibreWolf compile lane is wired in
+> `scripts/bearbrowser-build-binary.sh` but has not been run), there is no live
+> endpoint to attach to on this machine, so `connect()` returns `False` and the
+> bridge falls through to enforce-only mode — enforcement and attestation are
+> unchanged either way. The transport itself is proven against a mock BiDi
+> WebSocket server in `scripts/tests/test_bidi_transport.py` (20 assertions): a
+> permitted `navigate` drives the mock browser; an injected `enter-credentials`
+> and an un-approved gated `submit-form` put **ZERO** commands on the wire. The
+> emission schema is **identical to TurtleTerm's** reasoning-event family, so the
+> evidence fabric is already unified across the two products. The reference
+> emitter is `TurtleTerm/assets/sourceos/bin/turtle-agentd`
 > (`_open_reasoning_run`, `_emit_reasoning_event`, `_close_reasoning_run`); the
-> browser bridge mirrors those exact shapes.
+> browser bridge mirrors those exact shapes. The machine-readable action→class
+> map + PolicyConditions the bridge loads live in
+> `policy/bearbrowser-contract.yaml` under `spec.agentActionContract`.
 
 ---
 
@@ -63,6 +86,71 @@ true`, and a default decision of `deny`. The `agent-runtime` profile overlay
 The loopback range (`127.0.0.0/8`) is in the contract's network **denyCidrs** —
 the control endpoint is the *only* permitted loopback surface, and the page
 itself can never reach it.
+
+### The BiDi client (`lib/bidi_transport.py`)
+
+The transport is a **minimal, stdlib-first** WebDriver-BiDi WebSocket client:
+
+- **Stdlib by default.** `BidiClient` speaks RFC 6455 over a raw socket
+  (hand-rolled client-masked framing) — **zero third-party deps**. A live
+  loopback browser can be driven with nothing but the standard library.
+- **One optional dep, guarded.** If the `websocket-client` package is installed
+  it is used for the wire instead (behind a guarded import); if it is absent the
+  stdlib client covers the live path and enforce-only mode never needs it at all.
+- **Loopback-mandatory.** A non-loopback `bidi_url` raises `BidiError` **before
+  any socket is opened**. `connect()` mirrors this and returns `False`.
+- **Handshake.** Construction opens the WebSocket, carries the per-session token
+  (bearer header for the dep client; in-band `sessionToken` for the stdlib
+  client), and completes `session.new`, capturing the `sessionId`.
+- **`send_command(method, params) -> result`** writes one `{id, method, params}`
+  frame, skips any async event pushes, and returns the matching `{id, result}`
+  (raising `BidiError` on `{id, error}`).
+
+### The gate sits BEFORE the wire (`dispatch`)
+
+`ControlBridge.dispatch(action, params, approval_token)` is the real entry point
+and enforces the ordering that makes containment true at the transport edge:
+
+1. `evaluate_action(...)` runs **first** — pure policy, no wire touched.
+2. If the decision is **not** permit, `dispatch` attests the violation/deny and
+   **returns without constructing a single BiDi frame.** A denied or injected
+   action can never reach `send_command`.
+3. Only on **permit** does it map the action to a BiDi command
+   (`build_bidi_command`) and send it — or, if no browser is connected, stay
+   enforce-only ("would-permit").
+
+`build_bidi_command` is pure data translation with **no policy authority**: the
+gated/prohibited action names map to `None` (never a command) as a
+defense-in-depth backstop even if it were somehow reached without the gate. The
+result summary written to the trace is safe (shape/keys/sizes only) — never raw
+DOM text, screenshot bytes, or field values.
+
+### Action → BiDi command map
+
+| Action (permitted) | BiDi method                          |
+|--------------------|--------------------------------------|
+| navigate           | `browsingContext.navigate`           |
+| read-dom / extract-text / query-selector | `script.evaluate`   |
+| scroll / wait      | `script.evaluate`                    |
+| click              | `input.performActions` (pointer)     |
+| fill-form-field*   | `input.performActions` (key)         |
+| screenshot         | `browsingContext.captureScreenshot`  |
+| *any gated/prohibited action* | **no command** (`None`)   |
+
+\* only the allowed, non-credential/payment/gov-id fill shape reaches a command;
+credential/payment/gov-id fills are reclassified to prohibited upstream and map
+to no command.
+
+### CLI
+
+```
+agent-control-bridge --bidi-url ws://127.0.0.1:9222 --bidi-token T \
+                     --action navigate --url example.com
+```
+
+drives the live browser when the loopback endpoint is reachable, and reports
+`transport: no browser -> enforce-only` when it is not — the decision and
+attestation are identical either way.
 
 ---
 

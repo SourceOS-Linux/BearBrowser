@@ -1,0 +1,52 @@
+BearBrowser Tor mode — force the Windows identity on all desktop platforms.
+
+Tor Browser presents `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0)
+Gecko/20100101 Firefox/140.0` for EVERY desktop platform, so Mac/Linux users hide
+in the Windows majority. Stock RFP keeps the real OS family, which would split our
+Mac/Linux Tor-mode users into a tiny distinct cohort.
+
+This is done at COMPILE time, gated on -DBEARBROWSER_FORCE_WIN_SPOOF, which the
+tor-mode build sets in its mozconfig (apply-sourceos-overlays.sh --profile
+tor-mode). The default 150 build does NOT define it, so it reports the real OS.
+
+Because navigator.userAgent (nsRFPService), navigator.oscpu / navigator.appVersion
+(Navigator + WorkerNavigator), and the worker copies (RuntimeService calls
+Navigator::Get*) all flow from the SPOOFED_* macros in nsRFPService.h, one #ifdef
+in the header forces UA + oscpu + appVersion consistently. navigator.platform is
+the only value not macro-driven (hardcoded per-platform in Navigator::GetPlatform),
+so it gets a one-line condition. MAX_TOUCH_POINTS stays 0 — Tor desktop reports 0,
+not Windows' 10.
+
+diff --git a/toolkit/components/resistfingerprinting/nsRFPService.h b/toolkit/components/resistfingerprinting/nsRFPService.h
+--- a/toolkit/components/resistfingerprinting/nsRFPService.h
++++ b/toolkit/components/resistfingerprinting/nsRFPService.h
+@@ -38,7 +38,16 @@
+ // the platform-specific definitions.
+ #define SPOOFED_UA_OS_OTHER "X11; Linux x86_64"
+
+-#ifdef XP_WIN
++// BearBrowser Tor mode: present the Windows identity on ALL desktop platforms so
++// Mac/Linux users hide in the Windows majority (the Tor Browser cohort). Enabled
++// at compile time via -DBEARBROWSER_FORCE_WIN_SPOOF (tor-mode build only).
++// MAX_TOUCH_POINTS stays 0 — Tor desktop reports 0, not Windows' 10.
++#ifdef BEARBROWSER_FORCE_WIN_SPOOF
++#  define SPOOFED_UA_OS "Windows NT 10.0; Win64; x64"
++#  define SPOOFED_APPVERSION "5.0 (Windows)"
++#  define SPOOFED_OSCPU "Windows NT 10.0; Win64; x64"
++#  define SPOOFED_MAX_TOUCH_POINTS 0
++#elif defined(XP_WIN)
+ #  define SPOOFED_UA_OS "Windows NT 10.0; Win64; x64"
+ #  define SPOOFED_APPVERSION "5.0 (Windows)"
+ #  define SPOOFED_OSCPU "Windows NT 10.0; Win64; x64"
+diff --git a/dom/base/Navigator.cpp b/dom/base/Navigator.cpp
+--- a/dom/base/Navigator.cpp
++++ b/dom/base/Navigator.cpp
+@@ -2005,7 +2005,7 @@
+     }
+   }
+
+-#if defined(WIN32)
++#if defined(WIN32) || defined(BEARBROWSER_FORCE_WIN_SPOOF)
+   aPlatform.AssignLiteral("Win32");
+ #elif defined(XP_MACOSX)
+   // Always return "MacIntel", even on ARM64 macOS like Safari does.

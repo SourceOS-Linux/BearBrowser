@@ -1,0 +1,45 @@
+{
+  "defaultAction": "SCMP_ACT_ERRNO",
+  "architectures": [
+    "SCMP_ARCH_X86_64",
+    "SCMP_ARCH_AARCH64"
+  ],
+  "syscalls": [
+    {
+      "names": [
+        "read",
+        "write",
+        "exit",
+        "exit_group",
+        "rt_sigreturn",
+        "rt_sigaction",
+        "rt_sigprocmask",
+        "sigaltstack",
+        "brk",
+        "mmap",
+        "mprotect",
+        "munmap",
+        "futex",
+        "clock_gettime",
+        "getpid",
+        "gettid",
+        "openat",
+        "close",
+        "statx",
+        "newfstatat",
+        "lseek",
+        "poll",
+        "ppoll",
+        "epoll_create1",
+        "epoll_ctl",
+        "epoll_wait",
+        "socket",
+        "connect",
+        "recvfrom",
+        "sendto"
+      ],
+      "action": "SCMP_ACT_ALLOW"
+    }
+  ],
+  "notes": "Scaffold only. Final seccomp profile must be generated from real BearBrowser runtime traces and PolicyFabric requirements."
+}

@@ -1,0 +1,47 @@
+app-id: dev.sourceos.BearBrowser
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: bearbrowser
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --device=dri
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --filesystem=xdg-download:rw
+  - --persist=.bearbrowser
+modules:
+  - name: bearbrowser
+    buildsystem: simple
+    build-commands:
+      # Real 140.12.0esr-1 Gecko runtime — tarball root is bin/.
+      - mkdir -p /app/lib/bearbrowser
+      - cp -a bin /app/lib/bearbrowser/bin
+      - install -Dm644 user.js /app/lib/bearbrowser/defaults/profile/user.js
+      - printf '#!/bin/sh\nexec /app/lib/bearbrowser/bin/bearbrowser --profile ${XDG_DATA_HOME:-$HOME/.local/share}/bearbrowser/profiles/default "$@"\n' > /app/bin/bearbrowser
+      - chmod 755 /app/bin/bearbrowser
+      - install -Dm644 dev.sourceos.BearBrowser.desktop /app/share/applications/dev.sourceos.BearBrowser.desktop
+      - install -Dm644 dev.sourceos.BearBrowser.metainfo.xml /app/share/metainfo/dev.sourceos.BearBrowser.metainfo.xml
+      - install -Dm644 dev.sourceos.BearBrowser.svg /app/share/icons/hicolor/scalable/apps/dev.sourceos.BearBrowser.svg
+    sources:
+      # Real Linux x86_64 human-secure build (140.12.0esr-1).
+      # Source of truth: gs://sourceos-artifacts-socioprophet/bearbrowser-builds/
+      #   bearbrowser-build-20260630-100322/artifacts/bearbrowser-human-secure-linux-x86_64.tar.gz
+      # Flathub mirrors this tarball to a downloadable URL; SHA256 is the gate.
+      - type: archive
+        url: https://downloads.sourceos.dev/bearbrowser/140.12.0esr-1/bearbrowser-human-secure-linux-x86_64.tar.gz
+        sha256: a94bda8c5e51122f578b53b1df01ddd9de7af12dc0ab40815eb4c4b1347bc7fb
+        strip-components: 0
+      - type: file
+        path: ../../../profiles/default/user.js
+        dest-filename: user.js
+      - type: file
+        path: ../dev.sourceos.BearBrowser.desktop
+      - type: file
+        path: ../dev.sourceos.BearBrowser.metainfo.xml
+      - type: file
+        path: ../../branding/bearbrowser.svg
+        dest-filename: dev.sourceos.BearBrowser.svg
