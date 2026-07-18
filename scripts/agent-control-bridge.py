@@ -283,9 +283,15 @@ class Policy:
     """In-memory action->class map + replayClass/eventType + policyConditions,
     loaded from policy/bearbrowser-contract.yaml spec.agentActionContract."""
 
-    def __init__(self, contract: dict[str, Any]):
+    def __init__(self, contract: dict[str, Any],
+                 namespace: str = "agentActionContract",
+                 event_prefix: str = "browser"):
+        # namespace/event_prefix select the surface: the browser action contract
+        # (default) or spec.iotActionContract with an "iot" event prefix. Same
+        # engine, two surfaces — one evaluate_action, one evidence fabric.
+        self.event_prefix = event_prefix
         spec = contract.get("spec", {}) if isinstance(contract, dict) else {}
-        aac = spec.get("agentActionContract", {}) or {}
+        aac = spec.get(namespace, {}) or {}
         self.policy_ref: str = aac.get("policyRef", DEFAULT_POLICY_REF)
         self.default_decision: str = aac.get("defaultDecision", "deny")
 
@@ -304,7 +310,7 @@ class Policy:
                 self.action_class[name] = cls
                 if entry.get("replayClass"):
                     self.replay_class[name] = entry["replayClass"]
-                self.event_type[name] = entry.get("eventType", f"browser.{name}")
+                self.event_type[name] = entry.get("eventType", f"{self.event_prefix}.{name}")
 
         self.conditions: list[dict[str, Any]] = [
             c for c in (aac.get("policyConditions") or []) if isinstance(c, dict)
@@ -367,8 +373,8 @@ class Policy:
 
     def event_type_for(self, action: str, eff_class: str) -> str:
         if eff_class == "prohibited":
-            return "browser.policy.violation"
-        return self.event_type.get(action, f"browser.{action}")
+            return f"{self.event_prefix}.policy.violation"
+        return self.event_type.get(action, f"{self.event_prefix}.{action}")
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +530,7 @@ class ControlBridge:
         # prohibited -> DENY unconditionally, no approval path, emit violation
         summary = f"PROHIBITED action '{eff_action}' BLOCKED at decision time{note}"
         event = self._attest(
-            "browser.policy.violation", summary,
+            self.policy.event_type_for(eff_action, eff_class), summary,
             {"decision": "deny", "policyRef": self.policy.policyRef_safe(),
              "actionClass": "prohibited"},
         )
@@ -702,8 +708,16 @@ Policy.policyRef_safe = _policy_ref_safe  # type: ignore[attr-defined]
 # Public convenience
 # ---------------------------------------------------------------------------
 
-def load_policy() -> Policy:
-    return Policy(_load_contract(resolve_contract_path()))
+_SURFACES = {
+    "browser": ("agentActionContract", "browser"),
+    "iot": ("iotActionContract", "iot"),
+}
+
+
+def load_policy(surface: str = "browser") -> Policy:
+    namespace, prefix = _SURFACES.get(surface, _SURFACES["browser"])
+    return Policy(_load_contract(resolve_contract_path()),
+                  namespace=namespace, event_prefix=prefix)
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +728,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="BearBrowser ENFORCING agent control bridge — blocks gated/prohibited "
                     "(incl. injected) actions at decision time + attests every one.")
+    parser.add_argument("--surface", choices=("browser", "iot"), default="browser",
+                        help="Which action surface to govern: browser (default) or "
+                             "iot (smart-home / IoT via spec.iotActionContract).")
     parser.add_argument("--action", required=True, help="Agent action to evaluate")
     parser.add_argument("--url", default="", help="Target URL (for navigate, informational)")
     parser.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
@@ -730,7 +747,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        policy = load_policy()
+        policy = load_policy(args.surface)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

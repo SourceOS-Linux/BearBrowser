@@ -314,25 +314,31 @@ spec:
         - action: arm-security
           replayClass: non-replayable-side-effect
           eventType: iot.arm-security
+      # NOTE: eventType is the action's NATURAL name, not the violation string.
+      # The bridge derives iot.policy.violation from the prohibited CLASS at
+      # decision time. Storing the violation string here would mislabel the
+      # receipt when a policyCondition reclassifies the action UP to gated on an
+      # explicit user gesture (e.g. unlock-door → gated permit must attest
+      # iot.unlock-door, not iot.policy.violation).
       prohibited:
         - action: unlock-door
-          eventType: iot.policy.violation
+          eventType: iot.unlock-door
         - action: disarm-security
-          eventType: iot.policy.violation
+          eventType: iot.disarm-security
         - action: open-garage-door
-          eventType: iot.policy.violation
+          eventType: iot.open-garage-door
         - action: disable-camera
-          eventType: iot.policy.violation
+          eventType: iot.disable-camera
         - action: disable-sensor
-          eventType: iot.policy.violation
+          eventType: iot.disable-sensor
         - action: pair-device
-          eventType: iot.policy.violation
+          eventType: iot.pair-device
         - action: add-user
-          eventType: iot.policy.violation
+          eventType: iot.add-user
         - action: factory-reset
-          eventType: iot.policy.violation
+          eventType: iot.factory-reset
         - action: firmware-update
-          eventType: iot.policy.violation
+          eventType: iot.firmware-update
     # An explicit, present-tense user gesture in the cockpit is the ONLY thing
     # that can reclassify a prohibited physical action down to gated (where it
     # still needs a per-action token). actor MUST be "user" AND userGesture MUST
