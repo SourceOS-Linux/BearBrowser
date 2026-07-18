@@ -122,6 +122,245 @@ spec:
           bindAddress: 127.0.0.1
           requireEphemeralPort: true
           requireSessionToken: true
+  # ---------------------------------------------------------------------------
+  # agentActionContract — the enforcing action→class map consumed by
+  # scripts/agent-control-bridge.py. This is the machine-readable form of the
+  # mapping table in docs/agent-control-bridge.md §3. Every agent action the
+  # control bridge is asked to perform is classified here BEFORE execution:
+  #   allowed     → permit, attest a browser.<action> ReasoningEvent
+  #   gated       → permit ONLY with a valid per-action approval token, else DENY
+  #   prohibited  → DENY unconditionally (no approval path), attest a violation
+  # policyConditions re-classify an action based on planner-supplied params
+  # (e.g. a click the planner flags as a form submission → gated; a fill into a
+  # credential/payment/gov-id field → prohibited). This is the containment
+  # Gartner demands: the rogue/injected action is blocked at decision time.
+  #
+  # NOTE: this block was dropped by an earlier "Harden BearBrowser policy
+  # contract" rewrite, which reddened test_injection_containment.py (the bridge
+  # fell closed on every action). Restored here; do not remove without moving
+  # the action→class map somewhere the bridge's Policy loader reads.
+  # ---------------------------------------------------------------------------
+  agentActionContract:
+    policyRef: urn:srcos:policy:bearbrowser-agent-runtime
+    defaultDecision: deny       # any action not classified below is denied
+    actionClasses:
+      allowed:
+        - action: navigate
+          replayClass: exact
+          eventType: browser.navigate
+        - action: read-dom
+          replayClass: exact
+          eventType: browser.read-dom
+        - action: query-selector
+          replayClass: exact
+          eventType: browser.query-selector
+        - action: extract-text
+          replayClass: exact
+          eventType: browser.extract-text
+        - action: screenshot
+          replayClass: best-effort
+          eventType: browser.screenshot
+        - action: scroll
+          replayClass: exact
+          eventType: browser.scroll
+        - action: wait
+          replayClass: exact
+          eventType: browser.wait
+        - action: click
+          replayClass: best-effort
+          eventType: browser.click
+        - action: fill-form-field
+          replayClass: best-effort
+          eventType: browser.fill-form-field
+      gated:
+        - action: submit-form
+          replayClass: non-replayable-side-effect
+          eventType: browser.submit-form
+        - action: file-download
+          replayClass: non-replayable-side-effect
+          eventType: browser.file-download
+        - action: oauth-grant
+          replayClass: non-replayable-side-effect
+          eventType: browser.oauth-grant
+        - action: payment-autofill
+          replayClass: non-replayable-side-effect
+          eventType: browser.payment-autofill
+        - action: cross-origin-post
+          replayClass: non-replayable-side-effect
+          eventType: browser.cross-origin-post
+        - action: clipboard-write
+          replayClass: non-replayable-side-effect
+          eventType: browser.clipboard-write
+        - action: geolocation
+          replayClass: evidence-only
+          eventType: browser.geolocation
+        - action: camera-mic
+          replayClass: evidence-only
+          eventType: browser.camera-mic
+      prohibited:
+        - action: enter-credentials
+          eventType: browser.policy.violation
+        - action: enter-payment-details
+          eventType: browser.policy.violation
+        - action: enter-government-id
+          eventType: browser.policy.violation
+        - action: modify-access-controls
+          eventType: browser.policy.violation
+        - action: bypass-captcha
+          eventType: browser.policy.violation
+        - action: execute-trade-or-transfer
+          eventType: browser.policy.violation
+    # policyConditions re-classify a base action when planner-supplied params
+    # match. Evaluated in order; the FIRST match wins. `reclassifyTo` is the
+    # resulting class. The `when` block is a minimal jsonlogic-style predicate
+    # (a single operator over an action param) the bridge evaluates locally.
+    policyConditions:
+      - id: click-is-form-submission
+        description: A click the planner flagged as submitting a form is a gated submit-form.
+        appliesTo: click
+        when: { "==": [ { "var": "intent" }, "submit-form" ] }
+        reclassifyTo: gated
+        as: submit-form
+      - id: click-is-payment
+        description: A click the planner flagged as placing an order/trade is prohibited.
+        appliesTo: click
+        when: { "==": [ { "var": "intent" }, "execute-trade" ] }
+        reclassifyTo: prohibited
+        as: execute-trade-or-transfer
+      - id: fill-into-credential-field
+        description: A fill into a password/credential field is prohibited credential entry.
+        appliesTo: fill-form-field
+        when: { "in": [ { "var": "fieldType" }, [ "password", "credential", "username", "totp" ] ] }
+        reclassifyTo: prohibited
+        as: enter-credentials
+      - id: fill-into-payment-field
+        description: A fill into a card/cvv/payment field is prohibited payment entry.
+        appliesTo: fill-form-field
+        when: { "in": [ { "var": "fieldType" }, [ "card", "cardNumber", "cvv", "pan", "payment" ] ] }
+        reclassifyTo: prohibited
+        as: enter-payment-details
+      - id: fill-into-govid-field
+        description: A fill into an SSN/passport/gov-id field is prohibited gov-id entry.
+        appliesTo: fill-form-field
+        when: { "in": [ { "var": "fieldType" }, [ "ssn", "passport", "govId", "nationalId" ] ] }
+        reclassifyTo: prohibited
+        as: enter-government-id
+  # ---------------------------------------------------------------------------
+  # iotActionContract — the SAME enforcing action→class model, applied to the
+  # physical world. The BearBrowser cockpit (chrome://bearbrowser) is the
+  # sovereign control plane for the user's smart-home / IoT estate; the
+  # iot-sidecar drives devices, and EVERY command is classified here BEFORE it
+  # reaches a device — by the same Policy engine that governs browser actions
+  # (agent-control-bridge.py --surface iot). Emits iot.<action> ReasoningEvents
+  # into the same evidence fabric; a prohibited (or injected) physical action is
+  # blocked at decision time, never merely logged after.
+  #   allowed     → read-only queries with no physical effect
+  #   gated       → reversible physical effect, needs a per-action approval token
+  #   prohibited  → safety/security-critical; DENIED unless a policyCondition
+  #                 proves an explicit user gesture from the cockpit (never an
+  #                 agent). An agent-originated unlock-door never matches → denied.
+  # ---------------------------------------------------------------------------
+  iotActionContract:
+    policyRef: urn:srcos:policy:bearbrowser-iot
+    defaultDecision: deny
+    actionClasses:
+      allowed:
+        - action: list-devices
+          replayClass: exact
+          eventType: iot.list-devices
+        - action: read-state
+          replayClass: exact
+          eventType: iot.read-state
+        - action: get-capabilities
+          replayClass: exact
+          eventType: iot.get-capabilities
+        - action: subscribe-events
+          replayClass: exact
+          eventType: iot.subscribe-events
+        - action: query-history
+          replayClass: exact
+          eventType: iot.query-history
+      gated:
+        - action: toggle-power
+          replayClass: non-replayable-side-effect
+          eventType: iot.toggle-power
+        - action: set-brightness
+          replayClass: non-replayable-side-effect
+          eventType: iot.set-brightness
+        - action: set-color
+          replayClass: non-replayable-side-effect
+          eventType: iot.set-color
+        - action: set-thermostat
+          replayClass: non-replayable-side-effect
+          eventType: iot.set-thermostat
+        - action: set-fan
+          replayClass: non-replayable-side-effect
+          eventType: iot.set-fan
+        - action: set-cover
+          replayClass: non-replayable-side-effect
+          eventType: iot.set-cover
+        - action: set-scene
+          replayClass: non-replayable-side-effect
+          eventType: iot.set-scene
+        - action: play-media
+          replayClass: non-replayable-side-effect
+          eventType: iot.play-media
+        - action: set-volume
+          replayClass: non-replayable-side-effect
+          eventType: iot.set-volume
+        - action: lock-door
+          replayClass: non-replayable-side-effect
+          eventType: iot.lock-door
+        - action: arm-security
+          replayClass: non-replayable-side-effect
+          eventType: iot.arm-security
+      prohibited:
+        - action: unlock-door
+          eventType: iot.policy.violation
+        - action: disarm-security
+          eventType: iot.policy.violation
+        - action: open-garage-door
+          eventType: iot.policy.violation
+        - action: disable-camera
+          eventType: iot.policy.violation
+        - action: disable-sensor
+          eventType: iot.policy.violation
+        - action: pair-device
+          eventType: iot.policy.violation
+        - action: add-user
+          eventType: iot.policy.violation
+        - action: factory-reset
+          eventType: iot.policy.violation
+        - action: firmware-update
+          eventType: iot.policy.violation
+    # An explicit, present-tense user gesture in the cockpit is the ONLY thing
+    # that can reclassify a prohibited physical action down to gated (where it
+    # still needs a per-action token). actor MUST be "user" AND userGesture MUST
+    # be true — both are set by the cockpit UI on direct interaction and can
+    # never be forged by an agent planner, so an injected/agent unlock-door
+    # matches no condition and stays prohibited → denied unconditionally.
+    policyConditions:
+      - id: unlock-with-user-gesture
+        description: A door unlock is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: unlock-door
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: disarm-with-user-gesture
+        description: Disarming security is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: disarm-security
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: garage-with-user-gesture
+        description: Opening the garage is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: open-garage-door
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: scene-bundles-prohibited-action
+        description: A scene/routine that bundles a security-critical action inherits prohibited.
+        appliesTo: set-scene
+        when: { "in": [ { "var": "includesAction" }, [ "unlock-door", "disarm-security", "open-garage-door", "disable-camera" ] ] }
+        reclassifyTo: prohibited
+        as: unlock-door
   audit:
     requiredEvents:
       - browser.session.started
