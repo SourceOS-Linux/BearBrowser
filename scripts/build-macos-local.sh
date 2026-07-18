@@ -25,6 +25,13 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
 
 PROFILES="${BB_PROFILES:-human-secure}"
+# Pin to the 140-ESR cohort tag by default, NOT the mirror's `latest`. `latest`
+# tracks the newest overall release (currently 150.x), which (a) fragments the
+# anti-fingerprint cohort — human-secure is meant to blend into the ESR crowd —
+# and (b) carries a LibreWolf patch stack that drifts on the 150 tree
+# (always-fetch-latest-toolchain-artifact.patch fails to apply). tor-mode already
+# self-pins 140 in apply-sourceos-overlays.sh; pin human-secure/agent-runtime here.
+REF="${BB_REF:-140.0.4-1}"
 DRY_RUN=""
 SKIP_BOOTSTRAP=""
 KEEP=""
@@ -38,6 +45,7 @@ usage() {
 Options:
   --profile P            Single profile (human-secure | tor-mode | agent-runtime)
   --profiles "P Q"       Multiple profiles, quoted, space-separated
+  --ref REF              Mirror ref to build (default: $REF; tor-mode self-pins 140)
   --skip-bootstrap       Assume mach bootstrap has already run (faster re-runs)
   --dry-run              Preflight only — no clone, no build
   --keep                 Do not delete the workspace on success (for debugging)
@@ -50,6 +58,7 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --profile)        PROFILES="${2:?}"; shift 2 ;;
     --profiles)       PROFILES="${2:?}"; shift 2 ;;
+    --ref)            REF="${2:?}"; shift 2 ;;
     --skip-bootstrap) SKIP_BOOTSTRAP="1"; shift ;;
     --dry-run)        DRY_RUN="1"; shift ;;
     --keep)           KEEP="1"; shift ;;
@@ -135,9 +144,9 @@ for profile in $PROFILES; do
   pfx="$ART_DIR/$profile"
   mkdir -p "$pfx"
 
-  log "[$profile] applying sourceos overlays..."
+  log "[$profile] applying sourceos overlays (ref=$REF)..."
   if ! bash "$repo_root/scripts/apply-sourceos-overlays.sh" \
-         --profile "$profile" --ref latest \
+         --profile "$profile" --ref "$REF" \
          > "$pfx/overlay.log" 2>&1; then
     log "[$profile] FAIL: overlay — see $pfx/overlay.log"
     tail -25 "$pfx/overlay.log" | sed "s/^/  [$profile] /"
