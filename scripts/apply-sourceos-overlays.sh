@@ -164,11 +164,21 @@ git -C "$workspace/source" checkout "$resolved_ref"
 # (run check-patchfail.sh on the ESR source) — same major, but ESR backports can
 # shift hunks. Override the version with BEARBROWSER_TOR_FIREFOX_VERSION, or set
 # it empty to keep the mirror's release pin (140.0.4) as a fallback.
+# Resolve the Firefox SOURCE version override per profile. tor-mode ALWAYS
+# retargets to the current ESR (cohort + security). Other profiles retarget only
+# when BEARBROWSER_FIREFOX_VERSION is set — the macOS 140 build sets it to
+# 140.12.0esr to reproduce the shipped source tree (the tag on which the anti-fp
+# gecko patches actually apply; the bare 140.0.4 *release* source rejects them,
+# and the 150 mirror stack has its own patch drift). The Linux `latest`/150 path
+# leaves it EMPTY and keeps the mirror's own pin, so this change is inert there.
 if [ "$profile" = "tor-mode" ]; then
-  tor_ff_version="${BEARBROWSER_TOR_FIREFOX_VERSION-140.12.0esr}"
-  if [ -n "$tor_ff_version" ]; then
-    echo "tor-mode: retargeting Firefox source -> $tor_ff_version (was $(cat "$workspace/source/version" 2>/dev/null))"
-    printf '%s\n' "$tor_ff_version" > "$workspace/source/version"
+  ff_version="${BEARBROWSER_TOR_FIREFOX_VERSION-140.12.0esr}"
+else
+  ff_version="${BEARBROWSER_FIREFOX_VERSION-}"
+fi
+if [ -n "$ff_version" ]; then
+  echo "$profile: retargeting Firefox source -> $ff_version (was $(cat "$workspace/source/version" 2>/dev/null))"
+  printf '%s\n' "$ff_version" > "$workspace/source/version"
 
     # Makefile dirname fixup. The LibreWolf Makefile derives the source DIRNAME
     # from $(version) too: `ff_source_dir:=firefox-$(version)`. For an esr string
@@ -195,7 +205,6 @@ PY
     else
       echo "WARNING: Makefile 'ff_source_dir:=firefox-\$(version)' line not found — esr dirname fixup skipped, build may fail at the mv step" >&2
     fi
-  fi
 fi
 
 patch_count=0

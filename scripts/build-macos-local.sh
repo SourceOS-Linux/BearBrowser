@@ -25,15 +25,16 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
 
 PROFILES="${BB_PROFILES:-human-secure}"
-# human-secure / agent-runtime track the mirror's `latest` by design: their
-# anti-fingerprint gecko patches (anti-fp-canvas-text-metrics, anti-fp-audio) are
-# authored against the current (150) tree and REJECT on 140 ESR — so pinning them
-# to 140 fails the build. tor-mode is the ESR-cohort profile: it self-pins 140 in
-# apply-sourceos-overlays.sh AND omits those anti-fp patches (cohort match), so it
-# builds on 140. The LibreWolf convenience patch that used to break `latest`
-# (always-fetch-latest-toolchain-artifact.patch) is now dropped in the overlay.
-# Override with --ref / BB_REF if you need a specific tag.
-REF="${BB_REF:-latest}"
+# Reproduce the known-good shipped build: mirror tag 140.0.4-1 (LibreWolf's 140
+# build scripts) + a Firefox SOURCE retarget to 140.12.0esr (BB_FIREFOX_VERSION,
+# exported below) — the ESR source tree on which our anti-fp gecko patches
+# actually apply. The bare 140.0.4 *release* source rejects them; the 150 mirror
+# stack has its own patch drift (msix/xmas/toolchain). tor-mode self-pins 140 and
+# retargets ESR on its own. Override with --ref / BB_REF.
+REF="${BB_REF:-140.0.4-1}"
+# Firefox source version for the non-tor ESR retarget in apply-sourceos-overlays.sh.
+# Empty disables it (e.g. if you --ref a 150 tag on purpose).
+export BEARBROWSER_FIREFOX_VERSION="${BEARBROWSER_FIREFOX_VERSION-140.12.0esr}"
 DRY_RUN=""
 SKIP_BOOTSTRAP=""
 KEEP=""

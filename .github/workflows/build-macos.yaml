@@ -29,9 +29,9 @@ on:
           - arm64
           - x86_64
       ref:
-        description: "Mirror ref. human-secure/agent-runtime need 'latest' (anti-fp patches are 150-authored); tor-mode self-pins 140."
+        description: "Mirror ref (LibreWolf build scripts). 140.0.4-1 + ESR source retarget = the shipped build; the driver sets BEARBROWSER_FIREFOX_VERSION=140.12.0esr."
         required: true
-        default: "latest"
+        default: "140.0.4-1"
         type: string
   push:
     tags:
