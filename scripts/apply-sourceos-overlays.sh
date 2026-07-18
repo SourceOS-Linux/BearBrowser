@@ -247,16 +247,23 @@ done
 # 140; the LibreWolf stack itself applies cleanly — proven in CI).
 afp_dir="$repo_root/gecko-patches/anti-fingerprint"
 patches_txt="$workspace/source/assets/patches.txt"
-# msix.patch (Windows Store packaging) drifts on the 140 ESR tree (hunk #2 rejects)
-# and aborts the whole `make` for EVERY profile — and it's Windows-only, irrelevant
-# to a Linux/macOS build. Drop it UNCONDITIONALLY for all profiles. (Previously this
-# drop lived only in the tor-mode branch below, so the human-secure profile kept the
-# patch and failed the build ~10x in a row. The tor-mode-only drop is now redundant
-# but idempotent/harmless.)
-if [ -f "$patches_txt" ] && grep -q 'patches/msix\.patch' "$patches_txt"; then
-  grep -v 'patches/msix\.patch' "$patches_txt" > "$patches_txt.tmp" && mv "$patches_txt.tmp" "$patches_txt"
-  echo "feature-layer: dropped msix.patch for profile '$profile' (Windows-only; drifts on 140 ESR; aborts make)"
-fi
+# LibreWolf mirror patches that are irrelevant to a Linux/macOS BearBrowser build
+# AND abort `make` when they fail to apply on the pinned tree. Dropped
+# UNCONDITIONALLY for every profile (each is a packaging/toolchain convenience
+# patch, NOT a browser/fingerprint behavior patch, so removing it changes nothing
+# the user sees):
+#   - msix.patch: Windows Store packaging; hunk #2 rejects on the ESR tree.
+#   - always-fetch-latest-toolchain-artifact.patch: makes mach fetch the newest
+#     toolchain artifact instead of the tree's pinned one; fails to apply on the
+#     150 tree (aborted the first macOS build at `make bootstrap`). Dropping it
+#     lets mach use upstream's pinned toolchain — more reproducible, not less.
+# (The tor-mode-only msix drop below is now redundant but idempotent/harmless.)
+for _dropp in msix.patch always-fetch-latest-toolchain-artifact.patch; do
+  if [ -f "$patches_txt" ] && grep -q "patches/${_dropp}" "$patches_txt"; then
+    grep -v "patches/${_dropp}" "$patches_txt" > "$patches_txt.tmp" && mv "$patches_txt.tmp" "$patches_txt"
+    echo "feature-layer: dropped ${_dropp} for profile '$profile' (mirror convenience patch; aborts make on the pinned tree)"
+  fi
+done
 if [ "$profile" = "tor-mode" ]; then
   echo "feature-layer: tor-mode omits the canvas/audio anti-fp patches (disabled to match cohort; see docs/tor-mode.md)"
   # Drop msix.patch (Windows Store packaging) from the tor-mode stack: it's

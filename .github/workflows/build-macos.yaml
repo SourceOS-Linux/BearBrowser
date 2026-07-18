@@ -29,9 +29,9 @@ on:
           - arm64
           - x86_64
       ref:
-        description: "Mirror ref (140-ESR cohort tag; 'latest' fragments the cohort + breaks patch apply)"
+        description: "Mirror ref. human-secure/agent-runtime need 'latest' (anti-fp patches are 150-authored); tor-mode self-pins 140."
         required: true
-        default: "140.0.4-1"
+        default: "latest"
         type: string
   push:
     tags:
