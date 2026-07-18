@@ -1,6 +1,6 @@
 # BearBrowser Reader Bridge
 
-BearBrowser is the capture and provenance surface for the SocioProphet Feed Intelligence reader. It must not duplicate the `SocioProphet/socioprophet/socioprophet-web/client-vue` reader UI. Its job is to discover, capture, extract, and emit governed browser evidence that downstream SocioProphet surfaces can replay.
+BearBrowser is the capture and provenance surface for the SocioProphet Feed Intelligence reader. It must not duplicate the Socioprophet Web reader UI. Its job is to discover, capture, normalize enough metadata for handoff, and emit governed events that downstream systems can replay.
 
 ## Scope
 
@@ -10,7 +10,7 @@ BearBrowser owns:
 - page capture initiated by a human or governed agent session;
 - canonical URL, source URL, title, timestamp, and content-hash extraction;
 - provenance emission for browser-mediated evidence;
-- policy-mediated handoff to the SocioProphet Feed Intelligence reader.
+- policy-mediated handoff to the Socioprophet Web reader workspace.
 
 BearBrowser does not own:
 
@@ -18,21 +18,20 @@ BearBrowser does not own:
 - SlashTopics governance scope definition;
 - New Hope membrane admission decisions;
 - MemoryMesh recall or writeback;
-- MeshRush graph traversal;
-- ActivityPub publication.
+- MeshRush graph traversal.
 
 ## Event vocabulary
 
-The initial reader bridge emits these canonical browser event classes:
+The initial reader bridge emits these canonical event classes:
 
 - `browser.feed.discovered`
-- `browser.feed.subscribe_requested`
+- `browser.feed.subscribed.requested`
 - `browser.page.captured`
 - `browser.item.extracted`
 - `browser.provenance.attached`
-- `browser.reader.handoff_requested`
-- `browser.reader.handoff_completed`
-- `browser.reader.handoff_rejected`
+- `browser.reader.handoff.requested`
+- `browser.reader.handoff.completed`
+- `browser.reader.handoff.rejected`
 
 Every event must include:
 
@@ -66,13 +65,7 @@ These capabilities are control mechanisms, not authority grants. Authority still
 
 ## Handoff contract
 
-The handoff target is the canonical SocioProphet Vue reader shell:
-
-```text
-SocioProphet/socioprophet/socioprophet-web/client-vue
-```
-
-The handoff payload is intentionally small:
+The handoff target is Socioprophet Web Feed Intelligence. The handoff payload is intentionally small:
 
 ```yaml
 ReaderHandoff:
