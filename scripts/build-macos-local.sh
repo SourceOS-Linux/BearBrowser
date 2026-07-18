@@ -25,16 +25,19 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="${BEARBROWSER_HOME:-$(cd "$script_dir/.." && pwd)}"
 
 PROFILES="${BB_PROFILES:-human-secure}"
-# Reproduce the known-good shipped build: mirror tag 140.0.4-1 (LibreWolf's 140
-# build scripts) + a Firefox SOURCE retarget to 140.12.0esr (BB_FIREFOX_VERSION,
-# exported below) — the ESR source tree on which our anti-fp gecko patches
-# actually apply. The bare 140.0.4 *release* source rejects them; the 150 mirror
-# stack has its own patch drift (msix/xmas/toolchain). tor-mode self-pins 140 and
-# retargets ESR on its own. Override with --ref / BB_REF.
-REF="${BB_REF:-140.0.4-1}"
-# Firefox source version for the non-tor ESR retarget in apply-sourceos-overlays.sh.
-# Empty disables it (e.g. if you --ref a 150 tag on purpose).
-export BEARBROWSER_FIREFOX_VERSION="${BEARBROWSER_FIREFOX_VERSION-140.12.0esr}"
+# human-secure / agent-runtime build on the mirror's `latest` (150) — that is
+# where their anti-fingerprint gecko patches (anti-fp-canvas-text-metrics,
+# anti-fp-audio) actually apply: they are 150-authored and REJECT on every 140
+# tree (proven — RFPTargets.inc + CanvasRenderingContext2D.cpp hunks fail on both
+# 140.0.4 and 140.12.0esr). Keeping the protections means building on 150 and
+# dropping the cosmetic MIRROR patches that drift there (handled in the overlay).
+# tor-mode is the 140-ESR cohort profile (self-pins 140, omits anti-fp). Override
+# with --ref / BB_REF.
+REF="${BB_REF:-latest}"
+# Non-tor ESR source retarget (apply-sourceos-overlays.sh) — EMPTY by default so
+# human-secure/agent-runtime stay on the 150 source where anti-fp applies. Set it
+# only if you deliberately want an ESR source (and have rebased anti-fp to match).
+export BEARBROWSER_FIREFOX_VERSION="${BEARBROWSER_FIREFOX_VERSION-}"
 DRY_RUN=""
 SKIP_BOOTSTRAP=""
 KEEP=""

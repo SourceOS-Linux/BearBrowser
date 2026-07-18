@@ -29,9 +29,9 @@ on:
           - arm64
           - x86_64
       ref:
-        description: "Mirror ref (LibreWolf build scripts). 140.0.4-1 + ESR source retarget = the shipped build; the driver sets BEARBROWSER_FIREFOX_VERSION=140.12.0esr."
+        description: "Mirror ref. human-secure/agent-runtime build on 'latest' (150) where their anti-fp patches apply; tor-mode self-pins 140."
         required: true
-        default: "140.0.4-1"
+        default: "latest"
         type: string
   push:
     tags:
@@ -86,7 +86,7 @@ jobs:
           set -euo pipefail
           bash scripts/build-macos-local.sh \
             --profile "${{ inputs.profile || 'human-secure' }}" \
-            --ref "${{ inputs.ref || '140.0.4-1' }}" \
+            --ref "${{ inputs.ref || 'latest' }}" \
             --artifacts "$GITHUB_WORKSPACE/build/macos-artifacts"
 
       - name: Compute + record SHA256

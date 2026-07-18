@@ -266,8 +266,10 @@ patches_txt="$workspace/source/assets/patches.txt"
 #     toolchain artifact instead of the tree's pinned one; fails to apply on the
 #     150 tree (aborted the first macOS build at `make bootstrap`). Dropping it
 #     lets mach use upstream's pinned toolchain — more reproducible, not less.
+#   - xmas.patch: seasonal/cosmetic LibreWolf patch (moz.build hunk rejects on
+#     150); no browser behavior. Dropping it is invisible to the user.
 # (The tor-mode-only msix drop below is now redundant but idempotent/harmless.)
-for _dropp in msix.patch always-fetch-latest-toolchain-artifact.patch; do
+for _dropp in msix.patch always-fetch-latest-toolchain-artifact.patch xmas.patch; do
   if [ -f "$patches_txt" ] && grep -q "patches/${_dropp}" "$patches_txt"; then
     grep -v "patches/${_dropp}" "$patches_txt" > "$patches_txt.tmp" && mv "$patches_txt.tmp" "$patches_txt"
     echo "feature-layer: dropped ${_dropp} for profile '$profile' (mirror convenience patch; aborts make on the pinned tree)"
