@@ -176,16 +176,20 @@ for profile in $PROFILES; do
   mc_dst="$ws/assets/mozconfig"
   mkdir -p "$(dirname "$mc_dst")"
   cp "$mc_src" "$mc_dst"
-  # Point the build at the SYSTEM Xcode SDK. Mozilla's build otherwise tries to
-  # fetch a pinned macOS SDK toolchain artifact (taskcluster/.../unpack-sdk.py),
-  # which 403s for anyone outside Mozilla CI because Apple's SDK can't be publicly
-  # redistributed. We have a real SDK via the Command Line Tools; use it.
-  sdk_path="$(xcrun --show-sdk-path 2>/dev/null || true)"
-  if [ -n "$sdk_path" ] && [ -d "$sdk_path" ]; then
-    printf '\nac_add_options --with-macos-sdk=%s\n' "$sdk_path" >> "$mc_dst"
-    log "[$profile] using system macOS SDK: $sdk_path"
+  # Sovereign macOS SDK. Mozilla's build fetches a pinned SDK toolchain via
+  # unpack-sdk.py, which — with MOZ_AUTOMATION set — rewrites the URL to their
+  # internal proxy (403 for us) and otherwise leans on Apple's rot-prone swcdn.
+  # Instead we package the LICENSED Xcode SDK into our own toolchain artifact
+  # (scripts/provision-macos-sdk.sh), pin it, optionally vendor it to our
+  # sovereign store, and point configure at it — no external CDN dependency.
+  if sdk_eval="$(bash "$repo_root/scripts/provision-macos-sdk.sh")"; then
+    eval "$sdk_eval"
+  fi
+  if [ -n "${BEARBROWSER_MACOS_SDK:-}" ] && [ -d "${BEARBROWSER_MACOS_SDK:-/nonexistent}" ]; then
+    printf '\nac_add_options --with-macos-sdk=%s\n' "$BEARBROWSER_MACOS_SDK" >> "$mc_dst"
+    log "[$profile] sovereign macOS SDK: $BEARBROWSER_MACOS_SDK"
   else
-    log "[$profile] WARNING: could not resolve system macOS SDK via xcrun — build may try Mozilla's (403)"
+    log "[$profile] WARNING: sovereign SDK provisioning failed — build may hit Mozilla's 403 SDK fetch"
   fi
   log "[$profile] installed macOS mozconfig -> $mc_dst"
 
@@ -211,7 +215,13 @@ for profile in $PROFILES; do
   fi
   (
     cd "$ws" || exit 1
-    echo "=== $bootstrap_step (Mozilla toolchain + fetch/extract/patch Firefox) ==="
+    # MOZ_AUTOMATION makes unpack-sdk.py rewrite the macOS SDK URL to Mozilla's
+    # internal `http://taskcluster/...` proxy (403 off their network). We provide
+    # the SDK ourselves (--with-macos-sdk above), so this must not be set. Log its
+    # prior state for diagnosis, then clear it for the whole build.
+    echo "=== MOZ_AUTOMATION before build: '${MOZ_AUTOMATION:-<unset>}' (clearing it) ==="
+    unset MOZ_AUTOMATION
+    echo "=== $bootstrap_step (toolchain + fetch/extract/patch Firefox) ==="
     MOZBUILD_STATE_PATH="${MOZBUILD_STATE_PATH:-$HOME/.mozbuild}" $bootstrap_step || exit 11
     echo "=== make build (compile — the long step) ==="
     make build || exit 12
