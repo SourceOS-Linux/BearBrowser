@@ -3,9 +3,8 @@ base: core22
 version: '140.12.0esr-1'
 summary: Gecko-first privacy browser with 101 fingerprinting protections
 description: |
-  BearBrowser is a Gecko-first (Firefox 140 ESR-derived) privacy browser with a
-  101-surface fingerprinting shield. No telemetry, no cloud sync, anti-tracking
-  built in. Ships the real 140.12.0esr-1 Linux x86_64 build.
+  BearBrowser is built on Firefox ESR with a 101-surface
+  fingerprinting shield. No telemetry, no cloud sync, anti-tracking built in.
 grade: stable
 confinement: strict
 
