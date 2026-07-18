@@ -24,6 +24,14 @@ export MOZ_REQUIRE_SIGNING=
 # Human-secure on macOS: native Cocoa toolkit, Widevine for streaming.
 ac_add_options --enable-default-toolkit=cairo-cocoa
 ac_add_options --enable-eme=widevine
+# Fetch the build toolchains (clang, cbindgen, nasm, node, …) during `mach build`
+# via the public artifact path, which works on our LibreWolf fork. `mach bootstrap`
+# resolves toolchains against mozilla-central's CI index (`--from-build`) and fails
+# on any fork ("Could not find artifacts for a toolchain build named …"), so the
+# driver skips `mach bootstrap` and relies on this instead. The macOS SDK is served
+# locally by scripts/sovereign-unpack-sdk.py (installed into the tree), so no SDK
+# is fetched from Apple/Mozilla.
+ac_add_options --enable-bootstrap
 # Pin to the platform floor we support. macOS 11 is the oldest Apple still ships
 # security updates for; matching it keeps our arm64/x86_64 output loadable on all
 # actively-supported Macs without forcing a 26.x-only binary.

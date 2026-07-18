@@ -23,6 +23,9 @@ export MOZ_DATA_REPORTING=
 export MOZ_REQUIRE_SIGNING=
 # Tor-mode on macOS: native Cocoa, no EME (cohort match).
 ac_add_options --enable-default-toolkit=cairo-cocoa
+# Fetch toolchains during `mach build` (fork-compatible) instead of `mach
+# bootstrap` (mozilla-central-only). SDK served locally by our unpack-sdk shim.
+ac_add_options --enable-bootstrap
 # macOS SDK: the driver appends --with-macos-sdk=<xcrun --show-sdk-path> (system
 # SDK). Mozilla's pinned SDK artifact 403s outside their CI. Not --enable-macos-sdk.
 export MACOSX_DEPLOYMENT_TARGET=11.0

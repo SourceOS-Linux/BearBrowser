@@ -219,24 +219,25 @@ for profile in $PROFILES; do
     #    the sovereign SDK shim into the tree before bootstrap fetches toolchains.
     echo "=== make dir (extract + patch Firefox source) ==="
     make dir || exit 10
-    # 2. Replace Mozilla's macOS-SDK fetcher with our sovereign shim so bootstrap
-    #    populates the SDK from our locally provisioned, licensed SDK instead of
+    # 2. Install our sovereign macOS-SDK shim into the extracted tree. Whatever
+    #    fetches the SDK (mach bootstrap, or `mach build` under --enable-bootstrap)
+    #    now populates it from our locally provisioned licensed SDK instead of
     #    downloading it (Apple swcdn / Mozilla proxy both 403 the runner).
-    if [ -n "$SKIP_BOOTSTRAP" ]; then
-      echo "=== --skip-bootstrap: skipping toolchain bootstrap ==="
+    ffdir="$(find . -maxdepth 1 -type d -name 'bearbrowser-*' 2>/dev/null | head -1)"
+    shim_dst="$ffdir/taskcluster/scripts/misc/unpack-sdk.py"
+    if [ -n "$ffdir" ] && [ -f "$shim_dst" ]; then
+      cp "$repo_root/scripts/sovereign-unpack-sdk.py" "$shim_dst"
+      echo "=== installed sovereign unpack-sdk shim -> $shim_dst (uses \$BEARBROWSER_MACOS_SDK) ==="
     else
-      ffdir="$(find . -maxdepth 1 -type d -name 'bearbrowser-*' 2>/dev/null | head -1)"
-      shim_dst="$ffdir/taskcluster/scripts/misc/unpack-sdk.py"
-      if [ -n "$ffdir" ] && [ -f "$shim_dst" ]; then
-        cp "$repo_root/scripts/sovereign-unpack-sdk.py" "$shim_dst"
-        echo "=== installed sovereign unpack-sdk shim -> $shim_dst (uses \$BEARBROWSER_MACOS_SDK) ==="
-      else
-        echo "WARNING: could not find unpack-sdk.py to shim (looked in $ffdir) — bootstrap may hit the 403 SDK fetch" >&2
-      fi
-      echo "=== make bootstrap (toolchains; SDK served locally) ==="
-      make bootstrap || exit 11
+      echo "WARNING: could not find unpack-sdk.py to shim (looked in $ffdir) — SDK fetch may 403" >&2
     fi
-    echo "=== make build (compile — the long step) ==="
+    # 3. Do NOT run `make bootstrap`: mach bootstrap resolves toolchains against
+    #    mozilla-central's CI index (--from-build) and fails on our fork
+    #    ("Could not find artifacts for a toolchain build named …"). Instead the
+    #    mozconfig sets --enable-bootstrap, so `mach build` fetches the toolchains
+    #    (clang, cbindgen, nasm, node, …) via the fork-compatible public artifact
+    #    path — the same path that already downloaded clang.tar.zst successfully.
+    echo "=== make build (fetches toolchains via --enable-bootstrap, then compiles) ==="
     make build || exit 12
   ) > "$pfx/build.log" 2>&1
   rc=$?
