@@ -176,6 +176,17 @@ for profile in $PROFILES; do
   mc_dst="$ws/assets/mozconfig"
   mkdir -p "$(dirname "$mc_dst")"
   cp "$mc_src" "$mc_dst"
+  # Point the build at the SYSTEM Xcode SDK. Mozilla's build otherwise tries to
+  # fetch a pinned macOS SDK toolchain artifact (taskcluster/.../unpack-sdk.py),
+  # which 403s for anyone outside Mozilla CI because Apple's SDK can't be publicly
+  # redistributed. We have a real SDK via the Command Line Tools; use it.
+  sdk_path="$(xcrun --show-sdk-path 2>/dev/null || true)"
+  if [ -n "$sdk_path" ] && [ -d "$sdk_path" ]; then
+    printf '\nac_add_options --with-macos-sdk=%s\n' "$sdk_path" >> "$mc_dst"
+    log "[$profile] using system macOS SDK: $sdk_path"
+  else
+    log "[$profile] WARNING: could not resolve system macOS SDK via xcrun — build may try Mozilla's (403)"
+  fi
   log "[$profile] installed macOS mozconfig -> $mc_dst"
 
   # tor-mode: overlay-script appended -DBEARBROWSER_FORCE_WIN_SPOOF to the OLD

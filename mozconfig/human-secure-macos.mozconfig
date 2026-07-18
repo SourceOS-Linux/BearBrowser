@@ -27,5 +27,8 @@ ac_add_options --enable-eme=widevine
 # Pin to the platform floor we support. macOS 11 is the oldest Apple still ships
 # security updates for; matching it keeps our arm64/x86_64 output loadable on all
 # actively-supported Macs without forcing a 26.x-only binary.
-ac_add_options --enable-macos-sdk=11.0
+# macOS SDK: the build driver appends `--with-macos-sdk=<xcrun --show-sdk-path>`
+# so we use the SYSTEM Xcode SDK. Mozilla's pinned SDK toolchain artifact is
+# access-restricted (unpack-sdk.py 403s outside Mozilla CI — Apple's SDK can't be
+# publicly redistributed). Do NOT set --enable-macos-sdk (not a valid option).
 export MACOSX_DEPLOYMENT_TARGET=11.0
