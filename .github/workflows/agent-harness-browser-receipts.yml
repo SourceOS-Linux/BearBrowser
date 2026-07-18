@@ -1,6 +1,5 @@
 name: Agent Harness Browser Receipts
 
-# Clean replay check refresh.
 on:
   pull_request:
     paths:
