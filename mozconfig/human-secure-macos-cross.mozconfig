@@ -1,0 +1,47 @@
+# BearBrowser — human-secure, CROSS-COMPILED to macOS (aarch64-apple-darwin)
+# from the Linux epsilon runner via the bsys6-macos image. See
+# docs/macos-cross-build.md. This reuses every BearBrowser flag; only the target,
+# SDK, and Mach-O linker differ from a native build.
+#
+# NOTE: cross-compiling Gecko always needs a few rounds of linker/SDK-path tuning
+# on the real runner. Treat the cross-specific lines as the starting point to
+# iterate on epsilon, not a proven-green config.
+ac_add_options --enable-application=browser
+ac_add_options --enable-optimize
+ac_add_options --disable-debug
+ac_add_options --enable-release
+ac_add_options --enable-rust-simd
+ac_add_options --disable-tests
+ac_add_options --disable-crashreporter
+ac_add_options --disable-updater
+ac_add_options --without-wasm-sandboxed-libraries
+ac_add_options --with-app-name=bearbrowser
+ac_add_options --with-app-basename=BearBrowser
+ac_add_options --with-distribution-id=ai.sourceos.bearbrowser
+mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-bearbrowser-human-secure-macos
+mk_add_options MOZ_MAKE_FLAGS="-j$(nproc)"
+export MOZ_TELEMETRY_REPORTING=
+export MOZ_DATA_REPORTING=
+export MOZ_REQUIRE_SIGNING=
+ac_add_options --enable-default-toolkit=cairo-cocoa
+ac_add_options --enable-eme=widevine
+
+# ── Cross-compile: Linux host → macOS arm64 target ──────────────────────────────
+ac_add_options --target=aarch64-apple-darwin
+export MACOSX_DEPLOYMENT_TARGET=11.0
+
+# The macOS SDK baked into the bsys6-macos image from zot (BEARBROWSER_MACOS_SDK is
+# set by the image / workflow; default to the image's install path).
+ac_add_options --with-macos-sdk=${BEARBROWSER_MACOS_SDK:-/opt/bearbrowser/macos-sdk}
+
+# clang targets darwin; the Mach-O linker comes from cctools-port (ld64) installed
+# in the image and put on PATH as the target ld. lld can also link Mach-O; we pin
+# cctools ld64 for parity with Mozilla's macOS builds. CROSS_COMPILE tells the
+# build system this is not a native toolchain.
+export CROSS_COMPILE=1
+# Toolchain binaries provided by the image (see ci/bsys6-macos/Dockerfile). These
+# are the knobs to tune first if `mach build` fails at configure/link.
+# export CC="clang --target=aarch64-apple-darwin"
+# export CXX="clang++ --target=aarch64-apple-darwin"
+# export AR=aarch64-apple-darwin-ar
+# export TOOLCHAIN_PREFIX=/opt/bearbrowser/cctools/bin
