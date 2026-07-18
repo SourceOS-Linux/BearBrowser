@@ -47,13 +47,21 @@ def exec(cmd, exit_on_fail = True, do_print = True):
             return retval
         return None
 
-def patch(patchfile):
+def patch(patchfile, optional=False):
     cmd = "patch -p1 -i {}".format(patchfile)
     print("\n*** -> {}".format(cmd))
     sys.stdout.flush()
     if not options.no_execute:
         retval = os.system(cmd)
         if retval != 0:
+            if optional:
+                # A cosmetic/optional patch that does not apply on this source tree
+                # (e.g. a seasonal patch, or one authored for a different Firefox
+                # major) must NOT abort the whole build — it changes no browser
+                # behavior. Skip it with a warning and keep going.
+                print("warning: optional patch '{}' did not apply — skipping (no behavior impact)".format(patchfile))
+                sys.stdout.flush()
+                return
             print("fatal error: patch '{}' failed".format(patchfile))
             sys.stdout.flush()
             script_exit(1)
@@ -134,8 +142,10 @@ def bearbrowser_patches():
             patch('../'+line)
 
     # apply xmas.patch seperately because not all builders use this repo the same way, and
-    # we don't want to disturbe those workflows.
-    patch('../patches/xmas.patch')
+    # we don't want to disturbe those workflows. It is a cosmetic/seasonal patch and its
+    # moz.build hunk rejects on the 150 tree, so apply it OPTIONALLY — a reject must not
+    # abort the build (it changes no browser behavior).
+    patch('../patches/xmas.patch', optional=True)
 
 
     # vs_pack.py issue... should be temporary
