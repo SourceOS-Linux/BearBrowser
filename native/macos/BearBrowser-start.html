@@ -179,6 +179,44 @@ body {
   border-radius: 50%;
   background: var(--accent);
 }
+
+/* Cockpit search surface — sovereign federated results rendered inline. */
+.results {
+  width: 100%;
+  max-width: 640px;
+  margin: -18px 0 30px;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+}
+.results.show { display: flex; }
+.result-receipt {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.result-receipt .status-dot { background: var(--accent); }
+.result {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: background .12s ease, border-color .12s ease;
+}
+.result:hover { background: var(--surface); border-color: var(--border); }
+.result-title { font-size: 14px; color: var(--accent); margin-bottom: 2px; }
+.result-url { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.result-snippet { font-size: 12.5px; color: var(--text); opacity: .85; margin-top: 3px; line-height: 1.45; }
+.result-engine {
+  display: inline-block; font-size: 10px; color: var(--chip-text);
+  background: var(--chip-bg); border-radius: 6px; padding: 1px 6px; margin-left: 6px; vertical-align: middle;
+}
+.result-empty { font-size: 13px; color: var(--muted); padding: 8px 4px; }
 </style>
 </head>
 <body>
@@ -195,42 +233,99 @@ body {
   <span class="pill"><span class="pill-dot"></span>Fingerprint shield</span>
 </div>
 
-<form class="search-form" onsubmit="
-  event.preventDefault();
-  var q=this.querySelector('input').value.trim();
-  if(!q)return;
-  if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.navigate)
-    window.webkit.messageHandlers.navigate.postMessage(q);
-  else location.href='https://duckduckgo.com/?q='+encodeURIComponent(q); // fallback only
-">
+<form class="search-form" id="searchForm">
   <span class="search-form-icon">🔍</span>
-  <input type="text" placeholder="Search or enter address" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-  <span class="search-form-hint">⌘L</span>
+  <input type="text" id="searchInput" placeholder="Search the sovereign web, or enter an address" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+  <span class="search-form-hint">⏎</span>
 </form>
 
+<div class="results" id="results"></div>
+
 <div class="grid">
-  <a class="shortcut" href="https://duckduckgo.com">
-    <div class="shortcut-icon">🦆</div>
-    <span class="shortcut-label">DuckDuckGo</span>
+  <a class="shortcut" href="https://studio.socioprophet.ai">
+    <div class="shortcut-icon">🛰️</div>
+    <span class="shortcut-label">Studio</span>
   </a>
-  <a class="shortcut" href="https://kagi.com">
-    <div class="shortcut-icon">🔍</div>
-    <span class="shortcut-label">Kagi</span>
+  <a class="shortcut" href="https://app.socioprophet.ai">
+    <div class="shortcut-icon">🧭</div>
+    <span class="shortcut-label">Cockpit</span>
   </a>
-  <a class="shortcut" href="https://github.com/SourceOS-Linux/BearBrowser">
+  <a class="shortcut" href="https://code.socioprophet.ai">
     <div class="shortcut-icon">🐙</div>
-    <span class="shortcut-label">BearBrowser</span>
+    <span class="shortcut-label">Code</span>
   </a>
-  <a class="shortcut" href="https://news.ycombinator.com">
-    <div class="shortcut-icon">🟠</div>
-    <span class="shortcut-label">Hacker News</span>
+  <a class="shortcut" href="https://registry.socioprophet.ai">
+    <div class="shortcut-icon">📦</div>
+    <span class="shortcut-label">Registry</span>
   </a>
 </div>
 
 <div class="footer">
   <span class="status-dot"></span>
-  BearBrowser bootstrap shell · Gecko runtime building
+  <span id="footerText">Sovereign search · governed &amp; provenance-logged · no Google</span>
 </div>
+
+<script>
+(function () {
+  // ── Sovereign search config ────────────────────────────────────────────────
+  // Federated JSON API (renders results inline in this cockpit). Falls back to the
+  // sovereign SearXNG HTML surface if the API can't be reached (e.g. CORS not yet
+  // enabled or offline). No Google/DDG default — sovereign endpoints only.
+  var SEARCH_API = "https://search-api.socioprophet.ai/search?q=";   // JSON
+  var SEARCH_HTML = "https://searx.socioprophet.ai/search?q=";        // sovereign HTML fallback
+
+  var form = document.getElementById("searchForm");
+  var input = document.getElementById("searchInput");
+  var results = document.getElementById("results");
+
+  function looksLikeUrl(q) {
+    if (/\s/.test(q)) return false;
+    return /^[a-z]+:\/\//i.test(q) || /^[\w-]+(\.[\w-]+)+(:\d+)?(\/|$)/.test(q);
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function render(query, data) {
+    var list = (data && data.results) || [];
+    var html = '<div class="result-receipt"><span class="status-dot"></span>' +
+      "federated · " + list.length + " result" + (list.length === 1 ? "" : "s") +
+      " · via search-api.socioprophet.ai</div>";
+    if (!list.length) {
+      html += '<div class="result-empty">No sovereign results. Press ⏎ again to open the full search surface.</div>';
+    } else {
+      list.forEach(function (r) {
+        html += '<a class="result" href="' + esc(r.url) + '">' +
+          '<div class="result-title">' + esc(r.title) +
+          (r.engine ? '<span class="result-engine">' + esc(r.engine) + "</span>" : "") + "</div>" +
+          '<div class="result-url">' + esc(r.url) + "</div>" +
+          (r.snippet ? '<div class="result-snippet">' + esc(r.snippet) + "</div>" : "") +
+          "</a>";
+      });
+    }
+    results.innerHTML = html;
+    results.classList.add("show");
+  }
+  function fallbackHtml(q) { location.href = SEARCH_HTML + encodeURIComponent(q); }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var q = input.value.trim();
+    if (!q) return;
+    if (looksLikeUrl(q)) {
+      location.href = /^[a-z]+:\/\//i.test(q) ? q : "https://" + q;
+      return;
+    }
+    results.classList.remove("show");
+    fetch(SEARCH_API + encodeURIComponent(q), { headers: { accept: "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("http " + r.status); return r.json(); })
+      .then(function (data) { render(q, data); })
+      .catch(function () { fallbackHtml(q); });   // CORS/offline → sovereign HTML surface
+  });
+  input.focus();
+})();
+</script>
 
 </body>
 </html>
