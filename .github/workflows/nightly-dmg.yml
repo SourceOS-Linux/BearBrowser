@@ -112,17 +112,25 @@ jobs:
           # ("undeclared identifier 'COUNT'", fails ~38min into the compile). FF 150's
           # toolchain uses MOZILLA'S cbindgen FORK at a specific revision (labeled
           # 0.29.4 but with fixes the crates.io release lacks) — install exactly that.
-          brew install nasm lld
-          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          # Firefox 150 is built with a STANDALONE LLVM clang ~19 (not Xcode's). We
+          # tried Xcode 26.5's clang 21 (needed for SDK >= 26.2 on macos-26) — it
+          # compiled ~90min then rejected the cbindgen-generated webrender_ffi header
+          # ("undeclared identifier COUNT") that Mozilla's clang 19 accepts (same
+          # cbindgen fork rev). So use brew llvm@19 (clang + lld) for the compile and
+          # keep macos-26's SDK 26.5 via --with-macos-sdk — mirroring Mozilla's real
+          # toolchain (standalone clang + SDK), not Xcode.
+          brew install nasm llvm@19
+          LLVM="$(brew --prefix llvm@19)"
+          echo "$LLVM/bin" >> "$GITHUB_PATH"
           cargo install --git https://github.com/mozilla/cbindgen \
             --rev b826cb8911488fe8a209d2b693492c0c673e8cca cbindgen
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           {
             echo ""
-            echo "# nightly-dmg: build with the runner's toolchain (fork can't fetch Mozilla's)"
+            echo "# nightly-dmg: Mozilla-style toolchain (standalone clang 19 + SDK 26.5)"
             echo "ac_add_options --disable-bootstrap"
-            echo "export CC=$(xcrun -f clang)"
-            echo "export CXX=$(xcrun -f clang++)"
+            echo "export CC=$LLVM/bin/clang"
+            echo "export CXX=$LLVM/bin/clang++"
             echo "ac_add_options --with-macos-sdk=${BEARBROWSER_MACOS_SDK}"
             echo "ac_add_options --enable-linker=lld"
             # No wasm C compiler on the runner (Xcode clang lacks wasm32-wasi), and
