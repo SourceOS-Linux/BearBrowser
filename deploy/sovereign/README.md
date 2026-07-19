@@ -38,3 +38,19 @@ Apply order (avoids the managed-cert `FailedNotVisible` trap):
 Then flip BearBrowser's default engine to it (the engine definition is staged in
 `settings/profiles/human-secure/policies.json` under `SearchEngines`, defaulted to
 DuckDuckGo until `searx.socioprophet.ai` is live).
+
+## Cockpit inline search (search-api CORS)
+The cockpit start page (`native/macos/BearBrowser-start.html`) fetches
+`search-api.socioprophet.ai` (JSON) and renders results inline, with a fallback to
+the searx HTML surface. For the inline path to work from the browser, the cockpit's
+**origin** must be in the gateway's CORS allowlist:
+`prophet-platform/deploy/values/search-gateway.yaml` → `SEARCH_CORS_ORIGINS`
+(currently the `.ai` + Firebase surfaces). Add the cockpit's **stable internal
+origin** there once it exists — i.e. after the `resource://bearbrowser-cockpit` (or
+`bearbrowser://`) origin from `docs/cockpit-spec.md` is wired. Do NOT add `null`
+(file://) or `*` — that would open the API to any page. Until then the start page
+falls back to the searx HTML surface (needs the DNS record above).
+
+Note: the full cockpit app (`socioprophet-web/app-vue`) already ships a
+`src/services/searchApi.ts` client for this gateway — the start page is the
+lightweight bootstrap version of the same sovereign search surface.
