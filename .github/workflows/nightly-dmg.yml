@@ -106,7 +106,11 @@ jobs:
           # toolchain: Xcode clang (CC/CXX), our provisioned SDK, and the small
           # extras Firefox needs that bootstrap would otherwise supply (nasm,
           # cbindgen). rust + node are preinstalled on macos-26.
-          brew install nasm cbindgen
+          # nasm/cbindgen: Firefox build tools bootstrap would supply.
+          # lld: Firefox's standard macOS linker (Xcode doesn't ship it), needed
+          # past "checking for target linker... Failed to find an adequate linker".
+          brew install nasm cbindgen lld
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           {
             echo ""
             echo "# nightly-dmg: build with the runner's toolchain (fork can't fetch Mozilla's)"
@@ -114,6 +118,7 @@ jobs:
             echo "export CC=$(xcrun -f clang)"
             echo "export CXX=$(xcrun -f clang++)"
             echo "ac_add_options --with-macos-sdk=${BEARBROWSER_MACOS_SDK}"
+            echo "ac_add_options --enable-linker=lld"
           } >> mozconfig
           echo "appended to mozconfig:"; tail -6 mozconfig
 
