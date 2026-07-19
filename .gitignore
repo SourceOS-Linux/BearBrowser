@@ -5,6 +5,11 @@ out/
 .cache/
 *.log
 
+# Python bytecode cache
+__pycache__/
+*.pyc
+*.pyo
+
 # Local editor/system files
 .DS_Store
 .idea/
