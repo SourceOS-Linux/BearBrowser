@@ -14,7 +14,7 @@ on:
 jobs:
   nightly-dmg:
     name: Build and package (macOS)
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 360
 
     env:
@@ -31,8 +31,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .mozbuild
-          key: mozbuild-${{ env.VERSION }}-macos15-v1
-          restore-keys: mozbuild-${{ env.VERSION }}-macos15-
+          key: mozbuild-${{ env.VERSION }}-macos26-v1
+          restore-keys: mozbuild-${{ env.VERSION }}-macos26-
 
       - name: Cache Firefox source tarball
         uses: actions/cache@v4
@@ -46,7 +46,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: cargo-${{ env.VERSION }}-macos15-v1
+          key: cargo-${{ env.VERSION }}-macos26-v1
 
       - name: Set up workspace from LibreWolf mirror
         run: |
@@ -85,7 +85,7 @@ jobs:
           # --from-build`, which needs a mozilla-central task index and FAILS on our
           # LibreWolf fork ("Could not find artifacts for toolchain-macosx64-aarch64-
           # clang"). On Linux the same command resolves clang via the public index;
-          # macOS does not. macos-15 already ships Xcode's clang, so we tolerate the
+          # macOS does not. macos-26 ships Xcode's clang, so we tolerate the
           # toolchain-fetch failure here and build with the runner's own clang below.
           # (rustup + the SDK are already provisioned by the prior steps.)
           # tolerate the fork-broken clang toolchain fetch; mach build uses the
@@ -105,7 +105,7 @@ jobs:
           # still fetches, so fully DISABLE bootstrap and build with the runner's own
           # toolchain: Xcode clang (CC/CXX), our provisioned SDK, and the small
           # extras Firefox needs that bootstrap would otherwise supply (nasm,
-          # cbindgen). rust + node are preinstalled on macos-15.
+          # cbindgen). rust + node are preinstalled on macos-26.
           brew install nasm cbindgen
           {
             echo ""
