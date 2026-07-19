@@ -1,0 +1,78 @@
+# Publish a built BearBrowser binary tarball to the sovereign registry (zot) as an
+# OCI artifact — from INSIDE the cluster, so credentials never leave it.
+#
+# The build (scripts/gcp-build-linux.sh) stages the tarball in GCS. This Job copies
+# it GCS -> zot with oras, closing the "GCS (Google) isn't sovereign" gap so the
+# canonical release artifact lives in registry.socioprophet.ai.
+#
+# PREREQ (external, not self-serviceable):
+#   1. A PUSH-capable zot credential. zot write users = admin|ci|github-ci
+#      (htpasswd). The only in-cluster registry secret today is `zot-pull`
+#      (read-only k8s-pull). Create a dockerconfigjson secret `zot-push` for a
+#      write user (or authorize minting a new zot CI user), e.g.:
+#        kubectl create secret docker-registry zot-push -n socioprophet \
+#          --docker-server=registry.socioprophet.ai \
+#          --docker-username=ci --docker-password=<pw>
+#   2. GCS read for the artifact — mount the build SA key
+#      (synapseiq-build@socioprophet-platform) as `gcs-build-key`, or run the
+#      oras push from a node/WI identity with objectViewer on the bucket.
+#
+# Parameterize BUILD_TS + VERSION, then:  kubectl apply -f deploy/sovereign/zot-publish-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: zot-publish-bearbrowser-
+  namespace: socioprophet
+  labels:
+    app.kubernetes.io/part-of: bearbrowser-release
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: publish
+          image: ghcr.io/oras-project/oras:v1.2.0   # TODO: mirror into zot for full sovereignty
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              BUILD_TS="${BUILD_TS:?set BUILD_TS, e.g. bearbrowser-build-20260718-175852}"
+              VERSION="${VERSION:-0.1.0}"
+              GCS="gs://sourceos-artifacts-socioprophet/bearbrowser-builds/${BUILD_TS}/artifacts"
+              TARBALL="bearbrowser-human-secure-linux-x86_64.tar.gz"
+              echo "pulling ${GCS}/${TARBALL} ..."
+              gcloud storage cp "${GCS}/${TARBALL}" "/tmp/${TARBALL}"
+              echo "pushing -> registry.socioprophet.ai/bearbrowser/human-secure-linux-x86_64:${VERSION}"
+              cd /tmp
+              oras push "registry.socioprophet.ai/bearbrowser/human-secure-linux-x86_64:${VERSION}" \
+                --artifact-type application/vnd.bearbrowser.browser.tar+gzip \
+                --annotation "org.sourceos.bearbrowser.profile=human-secure" \
+                --annotation "org.sourceos.bearbrowser.arch=x86_64-linux" \
+                --annotation "org.sourceos.bearbrowser.build=${BUILD_TS}" \
+                "${TARBALL}:application/gzip"
+          env:
+            - name: BUILD_TS
+              value: "bearbrowser-build-20260718-175852"
+            - name: VERSION
+              value: "0.1.0"
+            - name: DOCKER_CONFIG
+              value: /oras-auth
+          volumeMounts:
+            - name: zot-push
+              mountPath: /oras-auth
+              readOnly: true
+            - name: gcs-build-key
+              mountPath: /gcs
+              readOnly: true
+      volumes:
+        - name: zot-push          # dockerconfigjson for a zot WRITE user (see PREREQ 1)
+          secret:
+            secretName: zot-push
+            items:
+              - key: .dockerconfigjson
+                path: config.json
+        - name: gcs-build-key     # SA key with objectViewer on the artifacts bucket (PREREQ 2)
+          secret:
+            secretName: gcs-build-key

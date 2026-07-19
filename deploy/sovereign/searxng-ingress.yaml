@@ -1,0 +1,63 @@
+# Public HTML search surface for the BearBrowser default engine.
+#
+# The sovereign search-api (search-api.socioprophet.ai) returns JSON — perfect for
+# the cockpit Search widget, but a browser URL-bar default engine needs an HTML
+# results page. The `searxng` service (socioprophet ns, ClusterIP :8080) already
+# serves a full HTML SearXNG UI; this exposes it at searx.socioprophet.ai so it can
+# be BearBrowser's default engine.
+#
+# PREREQ (external, not self-serviceable): add a DNS A record
+#   searx.socioprophet.ai -> <the ingress LB IP after apply>
+# BEFORE relying on the managed cert. Applying the cert before DNS resolves poisons
+# it into FailedNotVisible. Apply order: Ingress (get IP) -> add A record -> then
+# the cert provisions clean.
+#
+# Apply:  kubectl apply -f deploy/sovereign/searxng-ingress.yaml
+# Mirrors the existing search-gateway-public / studio-public GKE ingress pattern.
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: searxng-cert
+  namespace: socioprophet
+  labels:
+    app: searxng
+    app.kubernetes.io/part-of: sovereign-search
+spec:
+  domains:
+    - searx.socioprophet.ai
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: searxng-public
+  namespace: socioprophet
+  labels:
+    app: searxng
+    app.kubernetes.io/part-of: sovereign-search
+  annotations:
+    kubernetes.io/ingress.class: gce
+    networking.gke.io/managed-certificates: searxng-cert
+    # Basic abuse control at the edge. A browser default engine can't send auth on
+    # every query, so this stays public but rate-limited.
+    networking.gke.io/v1beta1.FrontendConfig: searxng-frontend
+spec:
+  rules:
+    - host: searx.socioprophet.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: searxng
+                port:
+                  number: 8080
+---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: searxng-frontend
+  namespace: socioprophet
+spec:
+  redirectToHttps:
+    enabled: true

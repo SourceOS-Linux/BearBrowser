@@ -39,6 +39,14 @@
     "SearchEngines": {
       "PreventInstalls": false,
       "Remove": ["Google", "Bing", "Amazon.com", "eBay"],
+      "Add": [
+        {
+          "Name": "BearBrowser Search",
+          "URLTemplate": "https://searx.socioprophet.ai/search?q={searchTerms}",
+          "Method": "GET",
+          "Description": "Sovereign federated search (SearXNG)"
+        }
+      ],
       "Default": "DuckDuckGo"
     },
 
