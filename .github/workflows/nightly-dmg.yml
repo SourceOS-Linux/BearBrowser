@@ -95,6 +95,25 @@ jobs:
             ./mach --no-interactive bootstrap --application-choice=browser \
             || echo "::warning::mach bootstrap toolchain fetch failed (expected on a fork) — building with the runner's Xcode clang"
 
+      - name: Configure build for the runner's Xcode toolchain
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
+        run: |
+          set -euo pipefail
+          # mach build reads ./mozconfig here (confirmed from the run log). It has
+          # --enable-bootstrap, which re-fetches the fork-broken clang toolchain via
+          # `mach artifact toolchain --from-build`. Firefox's own hint is
+          # `--enable-bootstrap=no-update`; combine it with the runner's Xcode clang
+          # + our provisioned SDK so nothing is fetched from Mozilla's CI.
+          {
+            echo ""
+            echo "# nightly-dmg: build with the runner's Xcode toolchain (fork can't fetch Mozilla's)"
+            echo "ac_add_options --enable-bootstrap=no-update"
+            echo "export CC=$(xcrun -f clang)"
+            echo "export CXX=$(xcrun -f clang++)"
+            echo "ac_add_options --with-macos-sdk=${BEARBROWSER_MACOS_SDK}"
+          } >> mozconfig
+          echo "appended to mozconfig:"; tail -6 mozconfig
+
       - name: Build BearBrowser
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach build
