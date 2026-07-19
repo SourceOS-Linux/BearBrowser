@@ -31,11 +31,15 @@ needs no exposure.)
 **Needs:** a DNS **A record** `searx.socioprophet.ai` → the ingress LB IP.
 `socioprophet.ai` is on external DNS (not Cloud DNS), so this is a manual record.
 
-Apply order (avoids the managed-cert `FailedNotVisible` trap):
-1. `kubectl apply -f deploy/sovereign/searxng-ingress.yaml`
-2. `kubectl get ingress searxng-public -n socioprophet` → note the LB IP
-3. Add the A record at the socioprophet.ai DNS provider
-4. The `searxng-cert` ManagedCertificate provisions once DNS resolves
+APPLIED (HTTP-only, cert held): the ingress `searxng-public` is live in the
+`socioprophet` ns. **LB IP: `8.232.89.217`.**
+
+Remaining (avoids the managed-cert `FailedNotVisible` trap):
+1. Add the DNS A record:  `searx.socioprophet.ai  A  8.232.89.217`
+2. Once it resolves, apply the cert (adds HTTPS):
+   `kubectl apply -f deploy/sovereign/searxng-ingress.yaml`
+   (the committed manifest includes the `searxng-cert` ManagedCertificate +
+   the managed-certificates annotation — safe to apply only after DNS resolves)
 
 Then flip BearBrowser's default engine to it (the engine definition is staged in
 `settings/profiles/human-secure/policies.json` under `SearchEngines`, defaulted to
