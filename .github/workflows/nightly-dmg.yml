@@ -119,6 +119,10 @@ jobs:
             echo "export CXX=$(xcrun -f clang++)"
             echo "ac_add_options --with-macos-sdk=${BEARBROWSER_MACOS_SDK}"
             echo "ac_add_options --enable-linker=lld"
+            # No wasm C compiler on the runner (Xcode clang lacks wasm32-wasi), and
+            # BearBrowser's own human-secure mozconfig already builds without the
+            # RLBox wasm-sandboxed libraries — so disable them (matches intent).
+            echo "ac_add_options --without-wasm-sandboxed-libraries"
           } >> mozconfig
           echo "appended to mozconfig:"; tail -6 mozconfig
 
