@@ -106,39 +106,28 @@ jobs:
           # toolchain: Xcode clang (CC/CXX), our provisioned SDK, and the small
           # extras Firefox needs that bootstrap would otherwise supply (nasm,
           # cbindgen). rust + node are preinstalled on macos-26.
-          # nasm: build tool bootstrap would supply. lld: Firefox's standard macOS
-          # linker (Xcode doesn't ship it). cbindgen: FF 150 requires >= 0.29.1, but
-          # crates.io/brew 0.29.4 emits an incompatible webrender_ffi_generated.h
-          # ("undeclared identifier 'COUNT'", fails ~38min into the compile). FF 150's
-          # toolchain uses MOZILLA'S cbindgen FORK at a specific revision (labeled
-          # 0.29.4 but with fixes the crates.io release lacks) — install exactly that.
-          # Firefox 150 is built with a STANDALONE LLVM clang ~19 (not Xcode's). We
-          # tried Xcode 26.5's clang 21 (needed for SDK >= 26.2 on macos-26) — it
-          # compiled ~90min then rejected the cbindgen-generated webrender_ffi header
-          # ("undeclared identifier COUNT") that Mozilla's clang 19 accepts (same
-          # cbindgen fork rev). So use brew llvm@19 (clang + lld) for the compile and
-          # keep macos-26's SDK 26.5 via --with-macos-sdk — mirroring Mozilla's real
-          # toolchain (standalone clang + SDK), not Xcode.
-          brew install nasm llvm@19 lld
-          LLVM="$(brew --prefix llvm@19)"
-          echo "$LLVM/bin" >> "$GITHUB_PATH"
-          # standalone lld last = highest PATH priority: its ld.lld passed the linker
-          # probe with Xcode clang; llvm@19's bundled lld did not ("Could not use lld").
+          # Toolchain from the runner (bootstrap fetch is fork-broken):
+          #   - clang: Xcode's. Clang version is NOT the cause — clang 19 (llvm@19)
+          #     and 21 (Xcode) both hit the same webrender COUNT error, so keep the
+          #     simpler Xcode clang.
+          #   - lld: Firefox's macOS linker (Xcode doesn't ship it).
+          #   - cbindgen: PINNED to 0.29.1 — the exact minimum FF 150.0.1 requires
+          #     (= its build version). 0.29.4 (from a newer Firefox's toolchain)
+          #     changed enum/`add_sentinel` codegen and emitted a webrender_ffi
+          #     macOS-only block (`#if defined(XP_MACOSX)` — hence Linux is fine)
+          #     referencing an undeclared COUNT, failing the compile ~27min in.
+          brew install nasm lld
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
-          cargo install --git https://github.com/mozilla/cbindgen \
-            --rev b826cb8911488fe8a209d2b693492c0c673e8cca cbindgen
+          cargo install cbindgen --version 0.29.1
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           {
             echo ""
-            echo "# nightly-dmg: Mozilla-style toolchain (standalone clang 19 + SDK 26.5)"
+            echo "# nightly-dmg: build with the runner's toolchain (fork can't fetch Mozilla's)"
             echo "ac_add_options --disable-bootstrap"
-            echo "export CC=$LLVM/bin/clang"
-            echo "export CXX=$LLVM/bin/clang++"
+            echo "export CC=$(xcrun -f clang)"
+            echo "export CXX=$(xcrun -f clang++)"
             echo "ac_add_options --with-macos-sdk=${BEARBROWSER_MACOS_SDK}"
             echo "ac_add_options --enable-linker=lld"
-            # No wasm C compiler on the runner (Xcode clang lacks wasm32-wasi), and
-            # BearBrowser's own human-secure mozconfig already builds without the
-            # RLBox wasm-sandboxed libraries — so disable them (matches intent).
             echo "ac_add_options --without-wasm-sandboxed-libraries"
           } >> mozconfig
           echo "appended to mozconfig:"; tail -6 mozconfig
