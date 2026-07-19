@@ -1,0 +1,91 @@
+name: Publish binary to zot
+
+# Publish a built BearBrowser binary from GCS staging to the SOVEREIGN registry
+# (zot, registry.socioprophet.ai) as an OCI artifact — from CI, using the estate's
+# existing zot CI credentials. This is the sovereign download source; GCS is only
+# transient build staging.
+#
+# Mirrors the estate's zot-publish auth (prophet-platform/.github/workflows/images.yml):
+#   - zot login: ZOT_CI_USERNAME / ZOT_CI_PASSWORD (the github-ci write user)
+#   - GCS read:  WIF via GCP_WORKLOAD_IDENTITY_PROVIDER / GCP_SERVICE_ACCOUNT
+#
+# One-time setup on this repo (or the SourceOS-Linux org) — you have the values:
+#   gh secret set ZOT_CI_USERNAME -b '<ci-user>'
+#   gh secret set ZOT_CI_PASSWORD -b '<ci-pass>'
+#   gh secret set GCP_WORKLOAD_IDENTITY_PROVIDER -b '<wif-provider>'
+#   gh secret set GCP_SERVICE_ACCOUNT -b '<sa-email with objectViewer on the bucket>'
+# Then: gh workflow run "Publish binary to zot" -f build_ts=<ts> -f version=0.1.0
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_ts:
+        description: "GCS build id under bearbrowser-builds/ (e.g. bearbrowser-build-20260718-175852)"
+        required: true
+      version:
+        description: "Release version tag in zot"
+        required: true
+        default: "0.1.0"
+      profile:
+        description: "Profile"
+        required: true
+        default: "human-secure"
+
+permissions:
+  contents: read
+  id-token: write   # WIF
+
+jobs:
+  publish:
+    # Sovereign self-hosted runner when BUILD_RUNNER is set (estate pattern from
+    # anti-fingerprint.yml); ubuntu-latest otherwise — the job only moves an artifact.
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-latest' }}
+    env:
+      BUCKET: gs://sourceos-artifacts-socioprophet
+      REGISTRY: registry.socioprophet.ai
+    steps:
+      - name: Authenticate to GCP (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Pull the built tarball from GCS staging
+        run: |
+          set -euo pipefail
+          TARBALL="bearbrowser-${{ inputs.profile }}-linux-x86_64.tar.gz"
+          gcloud storage cp \
+            "${BUCKET}/bearbrowser-builds/${{ inputs.build_ts }}/artifacts/${TARBALL}" \
+            "./${TARBALL}"
+          ls -lh "./${TARBALL}"
+          echo "TARBALL=${TARBALL}" >> "$GITHUB_ENV"
+
+      - name: Install oras
+        run: |
+          set -euo pipefail
+          VER=1.2.0
+          curl -fsSL "https://github.com/oras-project/oras/releases/download/v${VER}/oras_${VER}_linux_amd64.tar.gz" \
+            | tar -xz -C /usr/local/bin oras
+
+      - name: Log in to the sovereign registry (zot)
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.ZOT_CI_PASSWORD }}" | \
+            oras login "${REGISTRY}" -u "${{ secrets.ZOT_CI_USERNAME }}" --password-stdin
+
+      - name: Push binary to zot
+        run: |
+          set -euo pipefail
+          REF="${REGISTRY}/bearbrowser/${{ inputs.profile }}-linux-x86_64:${{ inputs.version }}"
+          echo ">> pushing ${REF}"
+          oras push "${REF}" \
+            --artifact-type application/vnd.bearbrowser.browser.tar+gzip \
+            --annotation "org.sourceos.bearbrowser.profile=${{ inputs.profile }}" \
+            --annotation "org.sourceos.bearbrowser.arch=x86_64-linux" \
+            --annotation "org.sourceos.bearbrowser.build=${{ inputs.build_ts }}" \
+            --annotation "org.opencontainers.image.version=${{ inputs.version }}" \
+            "${TARBALL}:application/gzip"
+          echo ">> published: ${REF}"

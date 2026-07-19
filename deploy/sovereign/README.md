@@ -4,18 +4,20 @@ Ready-to-apply manifests for the sovereign publish + search surfaces. Both are
 committed here so nothing is stranded; each needs **one external input** (a
 credential or a DNS record) that must be provided out-of-band before it goes live.
 
-## `zot-publish-job.yaml` — binary → sovereign registry
-Copies a built BearBrowser tarball from GCS staging into zot
-(`registry.socioprophet.ai/bearbrowser/...`) as an OCI artifact, in-cluster (creds
-never leave the cluster).
+## Publish binary → sovereign registry (from CI)
+Publishing is a CI job — `.github/workflows/publish-binary-to-zot.yml` — that pulls
+the built tarball from GCS staging and `oras push`es it to zot
+(`registry.socioprophet.ai/bearbrowser/<profile>-linux-x86_64:<version>`) as an OCI
+artifact, using the estate's existing zot CI credentials (same as
+`prophet-platform/images.yml`).
 
-**Needs:**
-1. `zot-push` secret — a dockerconfigjson for a zot **write** user (`admin`/`ci`/
-   `github-ci`). Today only `zot-pull` (read-only `k8s-pull`) exists.
-2. `gcs-build-key` secret — GCS objectViewer on
-   `gs://sourceos-artifacts-socioprophet` (the build SA `synapseiq-build`).
+**One-time secrets on this repo / the SourceOS-Linux org** (you have the values):
+`ZOT_CI_USERNAME`, `ZOT_CI_PASSWORD` (github-ci write user) and
+`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` (WIF with objectViewer on
+`gs://sourceos-artifacts-socioprophet`).
 
-Then: `kubectl apply -f deploy/sovereign/zot-publish-job.yaml` (edit `BUILD_TS`).
+Then:
+`gh workflow run "Publish binary to zot" -f build_ts=bearbrowser-build-20260718-175852 -f version=0.1.0`
 
 Current verified build to publish: `bearbrowser-build-20260718-175852`
 (`bearbrowser-human-secure-linux-x86_64.tar.gz`, 731 MiB, anti-fp 12/20).
