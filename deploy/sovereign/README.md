@@ -4,23 +4,14 @@ Ready-to-apply manifests for the sovereign publish + search surfaces. Both are
 committed here so nothing is stranded; each needs **one external input** (a
 credential or a DNS record) that must be provided out-of-band before it goes live.
 
-## Publish binary → sovereign registry (from CI)
-Publishing is a CI job — `.github/workflows/publish-binary-to-zot.yml` — that pulls
-the built tarball from GCS staging and `oras push`es it to zot
-(`registry.socioprophet.ai/bearbrowser/<profile>-linux-x86_64:<version>`) as an OCI
-artifact, using the estate's existing zot CI credentials (same as
-`prophet-platform/images.yml`).
-
-**One-time secrets on this repo / the SourceOS-Linux org** (you have the values):
-`ZOT_CI_USERNAME`, `ZOT_CI_PASSWORD` (github-ci write user) and
-`GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` (WIF with objectViewer on
-`gs://sourceos-artifacts-socioprophet`).
-
-Then:
-`gh workflow run "Publish binary to zot" -f build_ts=bearbrowser-build-20260718-175852 -f version=0.1.0`
-
-Current verified build to publish: `bearbrowser-build-20260718-175852`
-(`bearbrowser-human-secure-linux-x86_64.tar.gz`, 731 MiB, anti-fp 12/20).
+## Binary distribution — via the established pipeline, not a bespoke publish
+Binaries are NOT hand-pushed to zot. The estate's pipeline is: build → GCS →
+record the build in `packaging/linux/binary-source.env` (BUILD_ID + per-variant
+SHA256) → the deb/snap/appimage/flatpak/rpm packaging lanes fetch from that GCS
+path. To ship a new build, run the build (both variants) and update
+`binary-source.env` — that is the single source of truth. (An earlier bespoke
+`publish-binary-to-zot.yml` workflow was removed; it duplicated this with new
+secrets.)
 
 ## `searxng-ingress.yaml` — public HTML search for the browser default engine
 Exposes the existing `searxng` service (HTML SearXNG UI) at
