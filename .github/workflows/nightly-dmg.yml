@@ -107,13 +107,15 @@ jobs:
           # extras Firefox needs that bootstrap would otherwise supply (nasm,
           # cbindgen). rust + node are preinstalled on macos-26.
           # nasm: build tool bootstrap would supply. lld: Firefox's standard macOS
-          # linker (Xcode doesn't ship it). cbindgen: PINNED to 0.28 — Firefox 150's
-          # toolchain uses cbindgen 0.28 (taskcluster fetch), and brew's latest
-          # (0.29+) emits an incompatible webrender_ffi_generated.h ("undeclared
-          # identifier 'COUNT'"), which fails the compile ~38min in.
+          # linker (Xcode doesn't ship it). cbindgen: FF 150 requires >= 0.29.1, but
+          # crates.io/brew 0.29.4 emits an incompatible webrender_ffi_generated.h
+          # ("undeclared identifier 'COUNT'", fails ~38min into the compile). FF 150's
+          # toolchain uses MOZILLA'S cbindgen FORK at a specific revision (labeled
+          # 0.29.4 but with fixes the crates.io release lacks) — install exactly that.
           brew install nasm lld
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
-          cargo install cbindgen --version 0.28.0
+          cargo install --git https://github.com/mozilla/cbindgen \
+            --rev b826cb8911488fe8a209d2b693492c0c673e8cca cbindgen
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           {
             echo ""
