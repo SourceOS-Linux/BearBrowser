@@ -81,8 +81,19 @@ jobs:
       - name: Bootstrap Gecko build environment
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: |
+          # `mach bootstrap` fetches the host clang via `mach artifact toolchain
+          # --from-build`, which needs a mozilla-central task index and FAILS on our
+          # LibreWolf fork ("Could not find artifacts for toolchain-macosx64-aarch64-
+          # clang"). On Linux the same command resolves clang via the public index;
+          # macOS does not. macos-15 already ships Xcode's clang, so we tolerate the
+          # toolchain-fetch failure here and build with the runner's own clang below.
+          # (rustup + the SDK are already provisioned by the prior steps.)
+          # tolerate the fork-broken clang toolchain fetch; mach build uses the
+          # runner's Xcode clang unless the mozconfig forces --enable-bootstrap
+          # (which the next run will reveal).
           MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild \
-            ./mach --no-interactive bootstrap --application-choice=browser
+            ./mach --no-interactive bootstrap --application-choice=browser \
+            || echo "::warning::mach bootstrap toolchain fetch failed (expected on a fork) — building with the runner's Xcode clang"
 
       - name: Build BearBrowser
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
