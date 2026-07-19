@@ -100,14 +100,17 @@ jobs:
         run: |
           set -euo pipefail
           # mach build reads ./mozconfig here (confirmed from the run log). It has
-          # --enable-bootstrap, which re-fetches the fork-broken clang toolchain via
-          # `mach artifact toolchain --from-build`. Firefox's own hint is
-          # `--enable-bootstrap=no-update`; combine it with the runner's Xcode clang
-          # + our provisioned SDK so nothing is fetched from Mozilla's CI.
+          # --enable-bootstrap, which fetches Mozilla's toolchains via
+          # `mach artifact toolchain --from-build` — broken on our fork. `no-update`
+          # still fetches, so fully DISABLE bootstrap and build with the runner's own
+          # toolchain: Xcode clang (CC/CXX), our provisioned SDK, and the small
+          # extras Firefox needs that bootstrap would otherwise supply (nasm,
+          # cbindgen). rust + node are preinstalled on macos-15.
+          brew install nasm cbindgen
           {
             echo ""
-            echo "# nightly-dmg: build with the runner's Xcode toolchain (fork can't fetch Mozilla's)"
-            echo "ac_add_options --enable-bootstrap=no-update"
+            echo "# nightly-dmg: build with the runner's toolchain (fork can't fetch Mozilla's)"
+            echo "ac_add_options --disable-bootstrap"
             echo "export CC=$(xcrun -f clang)"
             echo "export CXX=$(xcrun -f clang++)"
             echo "ac_add_options --with-macos-sdk=${BEARBROWSER_MACOS_SDK}"
