@@ -119,9 +119,12 @@ jobs:
           # cbindgen fork rev). So use brew llvm@19 (clang + lld) for the compile and
           # keep macos-26's SDK 26.5 via --with-macos-sdk — mirroring Mozilla's real
           # toolchain (standalone clang + SDK), not Xcode.
-          brew install nasm llvm@19
+          brew install nasm llvm@19 lld
           LLVM="$(brew --prefix llvm@19)"
           echo "$LLVM/bin" >> "$GITHUB_PATH"
+          # standalone lld last = highest PATH priority: its ld.lld passed the linker
+          # probe with Xcode clang; llvm@19's bundled lld did not ("Could not use lld").
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           cargo install --git https://github.com/mozilla/cbindgen \
             --rev b826cb8911488fe8a209d2b693492c0c673e8cca cbindgen
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
