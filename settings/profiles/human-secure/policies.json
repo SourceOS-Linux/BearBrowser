@@ -47,7 +47,7 @@
           "Description": "Sovereign federated search (SearXNG)"
         }
       ],
-      "Default": "DuckDuckGo"
+      "Default": "BearBrowser Search"
     },
 
     "Homepage": {
