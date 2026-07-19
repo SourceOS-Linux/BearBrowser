@@ -1,8 +1,7 @@
 # BearBrowser Cockpit — the Sovereign Life Control Plane
 
 Status: design (build-once, not MVP). Owner: BearBrowser. Companion to
-`docs/agent-control-bridge.md`, `policy/bearbrowser-contract.yaml`,
-`scripts/build-macos-local.sh`.
+`docs/agent-control-bridge.md` and `policy/bearbrowser-contract.yaml`.
 
 ## 1. What it is
 
@@ -168,8 +167,9 @@ Physical actions are governed by the **same engine** as browser actions.
 
 ## 8. Build & wiring plan (concrete)
 
-1. **Gecko binary (in progress).** `scripts/build-macos-local.sh` +
-   `.github/workflows/build-macos.yaml`, pinned to the 140-ESR cohort tag.
+1. **Gecko binary.** Linux via `scripts/gcp-build-linux.sh` → GCS →
+   `packaging/linux/binary-source.env`; macOS via `.github/workflows/nightly-dmg.yml`
+   (macos-15). human-secure builds on `latest`/150.
 2. **Cockpit assets.** Add a build step that compiles `app-vue` → static bundle →
    `Contents/Resources/cockpit/`, and a branding/omni hook that maps the internal
    origin. Register the service worker.

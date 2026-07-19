@@ -2,7 +2,7 @@
 """BearBrowser sovereign unpack-sdk shim.
 
 Drop-in replacement for Firefox's taskcluster/scripts/misc/unpack-sdk.py, installed
-into the extracted source by scripts/build-macos-local.sh AFTER `make dir` and
+into the extracted source by the macOS build workflow (.github/workflows/nightly-dmg.yml) AFTER `make dir` and
 BEFORE `make bootstrap`.
 
 WHY: the stock unpack-sdk.py downloads the macOS SDK from Apple's swcdn (403s for

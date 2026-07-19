@@ -63,6 +63,21 @@ jobs:
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source
         run: make dir
 
+      - name: Provision sovereign macOS SDK + install unpack-sdk shim
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
+        run: |
+          set -euo pipefail
+          # `mach bootstrap` fetches the macOS SDK via taskcluster/.../unpack-sdk.py,
+          # which HTTP 403s off Mozilla's CI network (Apple's SDK can't be
+          # redistributed) — this is what has kept nightly-dmg red. Package the
+          # runner's LICENSED Xcode SDK into our own artifact and swap in a shim
+          # that serves it from that local copy instead of downloading.
+          eval "$(bash "$GITHUB_WORKSPACE/scripts/provision-macos-sdk.sh")"
+          echo "BEARBROWSER_MACOS_SDK=$BEARBROWSER_MACOS_SDK" >> "$GITHUB_ENV"
+          cp "$GITHUB_WORKSPACE/scripts/sovereign-unpack-sdk.py" \
+            taskcluster/scripts/misc/unpack-sdk.py
+          echo "installed sovereign unpack-sdk shim (SDK: $BEARBROWSER_MACOS_SDK)"
+
       - name: Bootstrap Gecko build environment
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: |

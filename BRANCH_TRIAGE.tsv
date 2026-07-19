@@ -1,0 +1,24 @@
+branch	ahead	behind	disposition
+fix/macos-shell-crash-tabs-history-menu	70	75	DELETED superseded (despite ahead=70; two-dot main..branch = +64/-9137, main is superset; 51 branch-unique lines are stale docs/config only; macOS shell-crash fix already landed via fix/macos-shell-crash-clean); backed up
+feat/adr035-reasoning-run-docs	1	16	DELETED superseded (no branch-only content vs main); backed up
+work/browser-operation-plane-replay	1	174	DELETED superseded (mounts/agent-browser-mounts.yaml: main richer 128 vs 8); backed up
+agent/night-packaging-contract-evidence	0	59	DELETED captured (fully merged, ahead=0); backed up
+anti-fingerprint-verify	0	99	DELETED captured (fully merged, ahead=0); backed up
+bearhistory-dry-run-contracts	0	54	DELETED captured (fully merged, ahead=0); backed up
+bearhistory-dry-run-contracts-v2	0	201	DELETED captured (fully merged, ahead=0); backed up
+copilot/implement-browser-automation-receipt	0	216	DELETED captured (fully merged, ahead=0); backed up
+copilot/integrate-bearbrowser-with-workspace-operations	0	213	DELETED captured (fully merged, ahead=0); backed up
+docs/best-in-world-rubric	0	74	DELETED captured (fully merged, ahead=0); backed up
+fix-webkit-servertrust-crash	0	90	DELETED captured (fully merged, ahead=0); backed up
+fix/macos-shell-crash-clean	0	39	DELETED captured (fully merged, ahead=0 - this is the landed macOS shell-crash fix); backed up
+gcp-build-lane	0	84	DELETED captured (fully merged, ahead=0); backed up
+gcp-build-resilient	0	80	DELETED captured (fully merged, ahead=0); backed up
+reader-bridge	0	173	DELETED captured (fully merged, ahead=0); backed up
+reader-bridge-contract	0	173	DELETED captured (fully merged, ahead=0); backed up
+scorecard-harness-truthful	0	82	DELETED captured (fully merged, ahead=0); backed up
+tor-mode-staticprefs-group	0	76	DELETED captured (fully merged, ahead=0); backed up
+tor-os-spoof	0	96	DELETED captured (fully merged, ahead=0); backed up
+work/agent-harness-browser-receipts	0	260	DELETED captured (fully merged, ahead=0); backed up
+work/browser-automation-receipt-replay	0	172	DELETED captured (fully merged, ahead=0); backed up
+work/policy-credential-boundary-v0	0	171	DELETED captured (fully merged, ahead=0); backed up
+writeback/packaging-shield-agent-runtime	0	41	DELETED captured (fully merged, ahead=0); backed up
