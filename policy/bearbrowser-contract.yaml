@@ -367,6 +367,88 @@ spec:
         when: { "in": [ { "var": "includesAction" }, [ "unlock-door", "disarm-security", "open-garage-door", "disable-camera" ] ] }
         reclassifyTo: prohibited
         as: unlock-door
+  # ---------------------------------------------------------------------------
+  # agentMachineActionContract — the SAME enforcing action→class model applied to
+  # the cockpit's local agent (the bundled Noetica agent-machine loopback sidecar,
+  # 127.0.0.1). Lane 4 of docs/cockpit-composition-plan.md: the cockpit talks to
+  # the governance gate (scripts/bearbrowser-agent-machine-gate.py), which
+  # classifies every agent-machine action through THIS contract via
+  # agent-control-bridge.py --surface agent-machine BEFORE forwarding it to the
+  # sidecar — so the local agent is governed by the same engine as the browser and
+  # the IoT estate. A prohibited (or prompt-injected) agent action is blocked at
+  # decision time and attested (agent.policy.violation), never merely logged after.
+  #   allowed     → read-only surfaces (graph/knowledge/status reads, no side effect)
+  #   gated       → mutating/executing actions, need a per-action approval token
+  #   prohibited  → host-reaching / destructive; denied unless a policyCondition
+  #                 proves an explicit cockpit user gesture (unforgeable by the agent)
+  # ---------------------------------------------------------------------------
+  agentMachineActionContract:
+    policyRef: urn:srcos:policy:bearbrowser-agent-machine
+    defaultDecision: deny
+    actionClasses:
+      allowed:
+        - action: read-graph
+          replayClass: exact
+          eventType: agent.read-graph
+        - action: read-knowledge
+          replayClass: exact
+          eventType: agent.read-knowledge
+        - action: query-status
+          replayClass: exact
+          eventType: agent.query-status
+        - action: list-models
+          replayClass: exact
+          eventType: agent.list-models
+        - action: chat-completion
+          replayClass: evidence-only
+          eventType: agent.chat-completion
+      gated:
+        - action: run-pipeline
+          replayClass: non-replayable-side-effect
+          eventType: agent.run-pipeline
+        - action: write-knowledge
+          replayClass: non-replayable-side-effect
+          eventType: agent.write-knowledge
+        - action: mutate-graph
+          replayClass: non-replayable-side-effect
+          eventType: agent.mutate-graph
+        - action: devspace-command
+          replayClass: non-replayable-side-effect
+          eventType: agent.devspace-command
+        - action: install-package
+          replayClass: non-replayable-side-effect
+          eventType: agent.install-package
+        - action: network-fetch
+          replayClass: non-replayable-side-effect
+          eventType: agent.network-fetch
+      prohibited:
+        - action: execute-shell
+          eventType: agent.execute-shell
+        - action: read-host-filesystem
+          eventType: agent.read-host-filesystem
+        - action: write-host-filesystem
+          eventType: agent.write-host-filesystem
+        - action: read-credentials
+          eventType: agent.read-credentials
+        - action: disable-egress-guard
+          eventType: agent.disable-egress-guard
+        - action: disable-governance
+          eventType: agent.disable-governance
+    # A prohibited agent action is reclassified DOWN to gated ONLY on an explicit
+    # cockpit user gesture (actor==user AND userGesture==true) — flags the cockpit
+    # UI sets on direct interaction that the agent planner cannot forge. So an
+    # agent/injected execute-shell matches no condition → stays prohibited → denied.
+    policyConditions:
+      - id: shell-with-user-gesture
+        description: A shell command is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: execute-shell
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: hostfs-write-with-user-gesture
+        description: Writing the host filesystem is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: write-host-filesystem
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
   audit:
     requiredEvents:
       - browser.session.started
