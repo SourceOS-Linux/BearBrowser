@@ -711,6 +711,7 @@ Policy.policyRef_safe = _policy_ref_safe  # type: ignore[attr-defined]
 _SURFACES = {
     "browser": ("agentActionContract", "browser"),
     "iot": ("iotActionContract", "iot"),
+    "agent-machine": ("agentMachineActionContract", "agent"),
 }
 
 
@@ -728,9 +729,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="BearBrowser ENFORCING agent control bridge — blocks gated/prohibited "
                     "(incl. injected) actions at decision time + attests every one.")
-    parser.add_argument("--surface", choices=("browser", "iot"), default="browser",
-                        help="Which action surface to govern: browser (default) or "
-                             "iot (smart-home / IoT via spec.iotActionContract).")
+    parser.add_argument("--surface", choices=("browser", "iot", "agent-machine"),
+                        default="browser",
+                        help="Which action surface to govern: browser (default), "
+                             "iot (spec.iotActionContract), or agent-machine "
+                             "(the cockpit's local Noetica agent, "
+                             "spec.agentMachineActionContract).")
     parser.add_argument("--action", required=True, help="Agent action to evaluate")
     parser.add_argument("--url", default="", help="Target URL (for navigate, informational)")
     parser.add_argument("--param", action="append", default=[], metavar="KEY=VALUE",
