@@ -45,9 +45,17 @@ what policy did about it.
 
 ## 3. Cockpit shell — Vue, shipped inside the .app, offline-first
 
-**Base.** Fork `socioprophet-web/app-vue` (the real SPA — carries the Studio
-design language + Carbon tokens). *Not* `client-vue` (mocked) and *not* the React
-marketing shell. Product UI is Vue.
+**Base.** Embed `socioprophet-web/client-vue` — the canonical, real cockpit (54
+surfaces, live `/svc` backends, shipped to GKE via prophet-platform #882). *Not* the
+React marketing shell. Product UI is Vue.
+
+> **Decision update (2026-07-19, see `docs/cockpit-composition-plan.md`):** this was
+> `app-vue`, with `client-vue` dismissed as "mocked." That's stale — `client-vue`
+> became the canonical, real cockpit (the app-vue Studio surfaces were migrated into
+> it). Embedding `client-vue` gives ONE codebase across embedded + GKE-hosted +
+> Firebase. The build step is `scripts/build-cockpit.sh`; the sovereign runtime config
+> is `runtime/cockpit-config.js`, consumed by client-vue's runtime resolver
+> (`src/config/cockpitRuntime.ts`, socioprophet #468).
 
 **Embedding — no network for the shell.** Built assets ship inside the app bundle
 and load from a local origin, never HTTP:
@@ -149,7 +157,7 @@ Physical actions are governed by the **same engine** as browser actions.
 
 ```
  ┌──────────────────────────── BearBrowser.app (Gecko) ────────────────────────────┐
- │  Cockpit (Vue app-vue)  origin: resource://bearbrowser-cockpit  CSP: self+loopback │
+ │  Cockpit (Vue client-vue)  origin: resource://bearbrowser-cockpit  CSP: self+loopback │
  │        │  fetch / WS (127.0.0.1 only)                                              │
  │        ├───────────────► SearXNG sidecar / hosted   → federated search + receipts │
  │        ├───────────────► iot-sidecar (Rust, loopback)                             │
@@ -170,9 +178,11 @@ Physical actions are governed by the **same engine** as browser actions.
 1. **Gecko binary.** Linux via `scripts/gcp-build-linux.sh` → GCS →
    `packaging/linux/binary-source.env`; macOS via `.github/workflows/nightly-dmg.yml`
    (macos-15). human-secure builds on `latest`/150.
-2. **Cockpit assets.** Add a build step that compiles `app-vue` → static bundle →
-   `Contents/Resources/cockpit/`, and a branding/omni hook that maps the internal
-   origin. Register the service worker.
+2. **Cockpit assets.** `scripts/build-cockpit.sh` compiles `client-vue` → static bundle
+   → `Contents/Resources/cockpit/` and injects `runtime/cockpit-config.js` (sets
+   `window.__COCKPIT_CONFIG__` → sovereign loopback bases, read by client-vue's runtime
+   resolver). A branding/omni hook maps the internal origin; register the service worker.
+   BearBrowser rewrites the sidecar ports into `cockpit-config.js` at launch.
 3. **Profile wiring.** Point `browser.newtab.url` + `browser.startup.homepage` at
    the cockpit origin in each profile's `user.js`; keep hardening intact.
 4. **Search default.** Add the SearXNG OpenSearch descriptor + set `Default` in
