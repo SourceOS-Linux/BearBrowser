@@ -11,6 +11,11 @@ on:
       - 'scripts/bearbrowser-patches.py'
       - 'branding/**'
 
+# gh release create needs contents:write; the default token is read-only,
+# which 403'd ("Resource not accessible by integration") after a clean build.
+permissions:
+  contents: write
+
 jobs:
   nightly-dmg:
     name: Build and package (macOS)
