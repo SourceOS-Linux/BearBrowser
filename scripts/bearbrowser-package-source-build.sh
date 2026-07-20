@@ -81,11 +81,24 @@ if [ ! -d "$workspace" ]; then
   exit 64
 fi
 
-# ── Find the built app in obj-* ───────────────────────────────────────────────
-built_app="$(find "$workspace" -maxdepth 3 -path '*/obj-*/dist/BearBrowser.app' -type d 2>/dev/null | head -1)"
+# ── Find the PACKAGED app in obj-* ────────────────────────────────────────────
+# We must package from the app produced by `mach package`, which JARs the chrome
+# into omni.ja and stages real files — NOT the dev obj-*/dist/BearBrowser.app,
+# whose resources are symlinks into the objdir and which has no omni.ja (shipping
+# it yields ~7k dangling symlinks and a browser that crashes at ProfileStarted).
+# The packaged app is identified by the presence of Contents/Resources/omni.ja.
+built_app=""
+while IFS= read -r candidate; do
+  if [ -f "$candidate/Contents/Resources/omni.ja" ]; then
+    built_app="$candidate"
+    break
+  fi
+done < <(find "$workspace" -maxdepth 6 -name 'BearBrowser.app' -type d 2>/dev/null)
+
 if [ -z "$built_app" ] || [ ! -d "$built_app" ]; then
-  echo "ERROR: BearBrowser.app not found in $workspace/obj-*/dist/" >&2
-  echo "Run 'make build' (or cd <workspace> && ./mach build) first." >&2
+  echo "ERROR: no PACKAGED BearBrowser.app (with Contents/Resources/omni.ja) found in $workspace." >&2
+  echo "Run './mach build && ./mach package' first — 'mach build' alone leaves a dev tree" >&2
+  echo "of symlinks with no omni.ja, which is not shippable." >&2
   exit 1
 fi
 
@@ -105,6 +118,29 @@ echo "[1/6] Copying built app..."
 rm -rf "$out_app"
 cp -R "$built_app" "$out_app"
 echo "      $built_app → $out_app"
+
+# ── Gate: the copied app must be self-contained ───────────────────────────────
+# A packaged app has omni.ja and ZERO dangling symlinks. If either check fails we
+# refuse to continue — this is exactly the defect that shipped a crashing DMG
+# (dangling links into /Users/runner/... + missing omni.ja → ProfileStarted SIGSEGV).
+echo "      verifying the copied app is self-contained..."
+missing=""
+for req in Contents/Resources/omni.ja Contents/Resources/browser/omni.ja; do
+  [ -f "$out_app/$req" ] || missing="$missing $req"
+done
+if [ -n "$missing" ]; then
+  echo "ERROR: packaged app is missing required archives:$missing" >&2
+  echo "The source app was not a real 'mach package' output. Aborting." >&2
+  exit 1
+fi
+dangling="$(find "$out_app" -type l ! -exec test -e {} \; -print 2>/dev/null | head -5)"
+if [ -n "$dangling" ]; then
+  echo "ERROR: the app contains dangling symlinks (not self-contained):" >&2
+  echo "$dangling" | sed 's/^/  /' >&2
+  echo "  ...(refusing to package a bundle that references files outside itself)" >&2
+  exit 1
+fi
+echo "      OK — omni.ja present, no dangling symlinks."
 
 # ── Step 2: Write BearBrowser Info.plist ──────────────────────────────────────
 echo "[2/6] Writing BearBrowser Info.plist..."
