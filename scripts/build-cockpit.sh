@@ -38,7 +38,7 @@ else
   SRC="$WORK/$CLIENT_VUE_SUBDIR"
 fi
 [ -d "$SRC" ] || { log "ERROR: client-vue not found at $SRC"; exit 1; }
-grep -q "cockpitRuntime" "$SRC/src/config/cockpitRuntime.ts" 2>/dev/null \
+grep -q "resolveBase" "$SRC/src/config/cockpitRuntime.ts" 2>/dev/null \
   || { log "ERROR: cockpit source lacks the runtime resolver (needs socioprophet #468 landed)"; exit 1; }
 
 # 2. Build the static bundle ---------------------------------------------------
