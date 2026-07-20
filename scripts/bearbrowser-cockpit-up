@@ -64,5 +64,27 @@ done
 echo "[cockpit-up] health: gate(→sidecar)=$gate_ok  receipts=$rcpt_ok"
 [ "$gate_ok" = "200" ] || { echo "[cockpit-up] ERROR: gate not serving"; cat /tmp/bb-cockpit-gate.log; exit 1; }
 
-echo "[cockpit-up] SOVEREIGN COCKPIT UP — cockpit=$RES/cockpit/index.html  gate=$GATE_PORT  sidecar=$UPSTREAM_PORT  receipts=$RECEIPTS_PORT"
+# 3. Serve the cockpit UI on loopback and open it — the window into the running app.
+#    (Standalone, without the full BearBrowser.app; inside the browser this is the
+#    resource:// start page instead.) Plain static serve: loading '/' and in-app
+#    navigation work; a hard refresh of a deep route would 404 — SPA-fallback is a
+#    nice-to-have follow-up.
+UI_PORT="${BEARBROWSER_COCKPIT_UI_PORT:-8811}"
+COCKPIT_DIR="$RES/cockpit"
+URL=""
+if [ -f "$COCKPIT_DIR/index.html" ]; then
+  ( cd "$COCKPIT_DIR" && exec python3 -m http.server "$UI_PORT" --bind 127.0.0.1 ) >/tmp/bb-cockpit-ui.log 2>&1 & pids+=($!)
+  URL="http://127.0.0.1:$UI_PORT"
+  for _ in $(seq 1 12); do [ "$(probe "$URL/")" != "000" ] && break; sleep 0.3; done
+  if [ -z "${BEARBROWSER_NO_OPEN:-}" ]; then
+    { command -v open >/dev/null 2>&1 && open "$URL"; } || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL"; } || true
+  fi
+fi
+
+echo ""
+echo "  ┌─ SOVEREIGN COCKPIT UP ─ loopback only · Ctrl-C to stop ─"
+echo "  │  Cockpit UI   ${URL:-(not assembled — run bearbrowser-cockpit-assemble)}"
+echo "  │  Gate         127.0.0.1:$GATE_PORT   governs → sidecar :$UPSTREAM_PORT"
+echo "  │  Receipts     127.0.0.1:$RECEIPTS_PORT"
+echo "  └─────────────────────────────────────────────────────────"
 wait
