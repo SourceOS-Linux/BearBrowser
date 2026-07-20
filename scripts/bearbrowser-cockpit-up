@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# bearbrowser-cockpit-up — stand up the assembled sovereign cockpit, governed.
+#
+# The runtime capstone (OBJ-A). Brings up the three loopback services and points the
+# embedded cockpit at the GATE (never the raw sidecar) so every agent action is
+# classified before execution:
+#
+#     cockpit (resource://) ─► gate 127.0.0.1:8080 ─► agent-machine sidecar :8091
+#                               (agent-control-bridge, sovereign)   receipts :8092
+#
+# Loopback only, no off-device egress. Foreground; Ctrl-C / SIGTERM tears down all three.
+#
+#   BEARBROWSER_AM_GATE_PORT   cockpit-facing gate port (default 8080)
+#   NOETICA_AM_UPSTREAM_PORT   real sidecar port, behind the gate (default 8091)
+#   BEARBROWSER_RECEIPTS_PORT  trust-ledger port (default 8092)
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RES="$(cd "$SELF_DIR/.." && pwd)"           # …/Contents/Resources
+BIN="$RES/sidecars/bearbrowser-agent-machine-bin"
+GATE="$SELF_DIR/bearbrowser-agent-machine-gate.py"
+RECEIPTS="$SELF_DIR/bearbrowser-receipts.py"
+COCKPIT_CFG="$RES/cockpit/cockpit-config.js"
+
+GATE_PORT="${BEARBROWSER_AM_GATE_PORT:-8080}"
+UPSTREAM_PORT="${NOETICA_AM_UPSTREAM_PORT:-8091}"
+RECEIPTS_PORT="${BEARBROWSER_RECEIPTS_PORT:-8092}"
+
+for f in "$BIN" "$GATE" "$RECEIPTS"; do
+  [ -e "$f" ] || { echo "[cockpit-up] ERROR: missing $f (run assemble-cockpit.sh)"; exit 1; }
+done
+
+pids=()
+cleanup() { echo "[cockpit-up] stopping…"; for p in "${pids[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done; }
+trap cleanup EXIT INT TERM
+probe() { curl -s -m 1 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
+
+# 0. Point the cockpit at the GATE (governed) up front — the port is known before
+#    anything starts. Everything the sidecar serves (agentMachine/graph/studio) routes
+#    through the gate, so nothing reaches the agent un-classified.
+if [ -f "$COCKPIT_CFG" ]; then
+  sed -E "s#http://127\.0\.0\.1:[0-9]+#http://127.0.0.1:$GATE_PORT#g" "$COCKPIT_CFG" > "$COCKPIT_CFG.tmp" && mv "$COCKPIT_CFG.tmp" "$COCKPIT_CFG"
+  echo "[cockpit-up] cockpit → gate 127.0.0.1:$GATE_PORT"
+fi
+
+# 1. Start all three loopback services (the gate binds immediately and forwards once
+#    the sidecar answers; no serial blocking).
+echo "[cockpit-up] sidecar → :$UPSTREAM_PORT   gate → :$GATE_PORT   receipts → :$RECEIPTS_PORT"
+NOETICA_AM_PORT="$UPSTREAM_PORT" NOETICA_OFFLINE="${NOETICA_OFFLINE:-1}" "$BIN" >/tmp/bb-cockpit-sidecar.log 2>&1 & pids+=($!)
+NOETICA_AM_UPSTREAM_PORT="$UPSTREAM_PORT" BEARBROWSER_AM_GATE_PORT="$GATE_PORT" python3 "$GATE" >/tmp/bb-cockpit-gate.log 2>&1 & pids+=($!)
+BEARBROWSER_RECEIPTS_PORT="$RECEIPTS_PORT" python3 "$RECEIPTS" >/tmp/bb-cockpit-receipts.log 2>&1 & pids+=($!)
+
+# 2. Bounded health summary — report, don't hang.
+gate_ok=000; rcpt_ok=000
+for _ in $(seq 1 30); do
+  gate_ok="$(probe "http://127.0.0.1:$GATE_PORT/api/status")"
+  rcpt_ok="$(probe "http://127.0.0.1:$RECEIPTS_PORT/health")"
+  [ "$gate_ok" = "200" ] && [ "$rcpt_ok" = "200" ] && break
+  sleep 1
+done
+echo "[cockpit-up] health: gate(→sidecar)=$gate_ok  receipts=$rcpt_ok"
+[ "$gate_ok" = "200" ] || { echo "[cockpit-up] ERROR: gate not serving"; cat /tmp/bb-cockpit-gate.log; exit 1; }
+
+echo "[cockpit-up] SOVEREIGN COCKPIT UP — cockpit=$RES/cockpit/index.html  gate=$GATE_PORT  sidecar=$UPSTREAM_PORT  receipts=$RECEIPTS_PORT"
+wait
