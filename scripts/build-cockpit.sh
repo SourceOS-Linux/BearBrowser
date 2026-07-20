@@ -21,7 +21,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COCKPIT_REF="${COCKPIT_REF:-master}"
 OUT="${OUT:-$REPO_ROOT/build/cockpit}"
-WORK="$REPO_ROOT/build/.cockpit-src"
+# WORK must be WRITABLE — a package install runs this from a read-only Cellar libexec,
+# so default the clone dir to TMPDIR, not $REPO_ROOT/build.
+WORK="${COCKPIT_WORK:-${TMPDIR:-/tmp}/bearbrowser-cockpit-src}"
 CLIENT_VUE_SUBDIR="socioprophet-web/client-vue"
 
 log() { printf '[build-cockpit] %s\n' "$*"; }
@@ -42,8 +44,12 @@ grep -q "resolveBase" "$SRC/src/config/cockpitRuntime.ts" 2>/dev/null \
   || { log "ERROR: cockpit source lacks the runtime resolver (needs socioprophet #468 landed)"; exit 1; }
 
 # 2. Build the static bundle ---------------------------------------------------
-log "npm ci + build in $SRC"
-( cd "$SRC" && npm ci --no-audit --no-fund && npm run build )
+# client-vue is a pnpm project (pnpm-lock.yaml, no package-lock.json) so `npm ci` can't
+# run. Build with bun instead — already required for the sidecar, fast, and it installs
+# straight from package.json regardless of which lockfile is committed.
+command -v bun >/dev/null 2>&1 || { log "ERROR: bun is required to build the cockpit. Install: brew install bun"; exit 1; }
+log "bun install + build in $SRC"
+( cd "$SRC" && bun install && bun run build )
 [ -f "$SRC/dist/index.html" ] || { log "ERROR: build produced no dist/index.html"; exit 1; }
 
 # 3. Stage into the cockpit resource dir --------------------------------------

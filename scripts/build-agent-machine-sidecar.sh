@@ -22,7 +22,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AM_REF="${AM_REF:-main}"
 OUT="${OUT:-$REPO_ROOT/build/sidecars}"
-WORK="$REPO_ROOT/build/.agent-machine-src"
+# WORK must be WRITABLE — a package install runs this from a read-only Cellar libexec.
+WORK="${AGENT_MACHINE_WORK:-${TMPDIR:-/tmp}/bearbrowser-agent-machine-src}"
 BIN_NAME="bearbrowser-agent-machine-bin"
 AM_SUBDIR="agent-machine"
 
