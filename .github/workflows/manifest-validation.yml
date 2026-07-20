@@ -25,7 +25,9 @@ jobs:
           failures = []
           for path in paths:
               try:
-                  yaml.safe_load(path.read_text())
+                  # safe_load_all handles multi-document manifests (k8s uses
+                  # '---'-separated docs); list() forces full parse of every doc.
+                  list(yaml.safe_load_all(path.read_text()))
               except Exception as exc:
                   failures.append((path, exc))
 
