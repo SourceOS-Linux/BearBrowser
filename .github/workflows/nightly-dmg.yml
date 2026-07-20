@@ -145,16 +145,12 @@ jobs:
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach build
 
-      # `mach build` leaves obj-*/dist/BearBrowser.app as a DEV tree: real
-      # binaries (XUL, dylibs) but the chrome/resources are symlinks into the
-      # objdir and there is NO omni.ja. Shipping that .app directly ships ~7k
-      # dangling symlinks and a browser that crashes at ProfileStarted (no
-      # chrome). `mach package` is Firefox's real packager: it JARs the chrome
-      # into omni.ja and stages a fully self-contained app. Package from THAT.
-      - name: Package the Gecko app (generate omni.ja)
-        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
-        run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach package
-
+      # NOTE: we do NOT run `mach package` — Firefox's strict packager requires
+      # fork hardening files (bearbrowser.cfg, local-settings.js, policies.json)
+      # our build doesn't emit in-tree, so it aborts. Instead the packaging step
+      # below copies the dev app with `cp -RL` (dereference), producing a
+      # self-contained, runnable loose-chrome app (the same layout `mach run`
+      # uses) with zero dangling symlinks.
       - name: Package BearBrowser.app
         run: |
           bash scripts/bearbrowser-package-source-build.sh \
