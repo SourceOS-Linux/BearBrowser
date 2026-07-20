@@ -16,7 +16,10 @@
 set -uo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RES="$(cd "$SELF_DIR/.." && pwd)"           # …/Contents/Resources
+# RES = the assembled Contents/Resources. Defaults to the script's parent (dev/staging
+# layout); a package install sets BEARBROWSER_COCKPIT_RES to the writable user data dir
+# that `assemble-cockpit.sh` built into (libexec is read-only, so the app can't live there).
+RES="${BEARBROWSER_COCKPIT_RES:-$(cd "$SELF_DIR/.." && pwd)}"
 BIN="$RES/sidecars/bearbrowser-agent-machine-bin"
 GATE="$SELF_DIR/bearbrowser-agent-machine-gate.py"
 RECEIPTS="$SELF_DIR/bearbrowser-receipts.py"

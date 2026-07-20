@@ -32,6 +32,23 @@ class Bearbrowser < Formula
     (bin/"bearbrowser-verify-sidecar-status").write wrapper_for("verify-sidecar-status.sh")
     (bin/"bearbrowser-verify-interactive-sidecar").write wrapper_for("verify-interactive-sidecar.sh")
     (bin/"bearbrowser-verify-agent-sidecar").write wrapper_for("verify-agent-sidecar-contract.py")
+
+    # Sovereign cockpit — assemble (build client-vue + the agent-machine sidecar binary)
+    # then run it, governed. The Cellar is read-only, so both target a writable user data
+    # dir. `assemble` needs node + bun (see caveats); it checks and guides if they're absent.
+    cockpit_res = '${XDG_DATA_HOME:-$HOME/.local/share}/bearbrowser/cockpit-app/Contents/Resources'
+    (bin/"bearbrowser-cockpit-assemble").write <<~EOS
+      #!/usr/bin/env bash
+      set -euo pipefail
+      export STAGE="#{cockpit_res}"
+      exec bash "#{libexec}/scripts/assemble-cockpit.sh" "$@"
+    EOS
+    (bin/"bearbrowser-cockpit-up").write <<~EOS
+      #!/usr/bin/env bash
+      set -euo pipefail
+      export BEARBROWSER_COCKPIT_RES="#{cockpit_res}"
+      exec bash "#{libexec}/scripts/bearbrowser-cockpit-up" "$@"
+    EOS
     (bin/"bearbrowser-verify-native-shell").write wrapper_for("verify-native-macos-shell.sh")
     (bin/"bearbrowser-verify-control-plane").write wrapper_for("verify-sourceos-control-plane.py")
     (bin/"bearbrowser-build-binary").write wrapper_for("bearbrowser-build-binary.sh")
@@ -94,6 +111,11 @@ class Bearbrowser < Formula
         bearbrowser-verify-agent-sidecar
         bearbrowser-verify-native-shell
         bearbrowser-verify-control-plane
+
+      Sovereign cockpit (one governed unit; needs: brew install node bun):
+        bearbrowser-cockpit-assemble   # build client-vue + agent-machine → ~/.local/share/bearbrowser
+        bearbrowser-cockpit-up         # run governed: cockpit → gate → agent-machine (+ receipts), loopback only
+
         bearbrowser --profile agent-runtime --ref latest --dry-run
         bearbrowser-build-binary --profile agent-runtime --dry-run
         bearbrowser-verify-build-lane
@@ -141,6 +163,8 @@ class Bearbrowser < Formula
     assert_match "BearBrowser sidecar status verified", shell_output("#{bin}/bearbrowser-verify-sidecar-status")
     assert_match "BearBrowser SourceOS control-plane manifests verified", shell_output("#{bin}/bearbrowser-verify-control-plane")
     assert_match "http://127.0.0.1:", shell_output("#{bin}/bearbrowser-sidecar-server --print-url")
+    # cockpit CLIs install + fail cleanly before assembly (no node/bun needed to prove the wiring).
+    assert_match "run assemble-cockpit.sh", shell_output("#{bin}/bearbrowser-cockpit-up 2>&1", 1)
     assert_match "bearhistory-policy-explain", shell_output("#{bin}/bearbrowser-history policy explain --profile agent-runtime --dry-run")
     assert_match "bearhistory-export-explain", shell_output("#{bin}/bearbrowser-history export explain --session demo --profile agent-runtime --dry-run")
   end
