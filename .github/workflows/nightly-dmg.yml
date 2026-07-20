@@ -111,19 +111,18 @@ jobs:
           #     and 21 (Xcode) both hit the same webrender COUNT error, so keep the
           #     simpler Xcode clang.
           #   - lld: Firefox's macOS linker (Xcode doesn't ship it).
-          #   - cbindgen: Mozilla's fork @ b826cb8 (0.29.4). This BUILDS and lets the
-          #     compile run fully, but it emits a webrender_ffi macOS-only block
-          #     (`#if defined(XP_MACOSX)` — hence Linux is unaffected) that references
-          #     an undeclared COUNT, failing at ~27min. 🔴 KNOWN REMAINING BLOCKER —
-          #     see docs note below. (0.28.0 is rejected as too old; crates.io 0.29.1
-          #     won't even compile against current serde; both clang 19 and 21 hit the
-          #     identical COUNT, so it is NOT the compiler.) The real fix is to build
-          #     with Mozilla's ACTUAL pinned toolchain bundle (what `mach bootstrap`
-          #     fetches, which fails on this fork) rather than piecing it from brew.
+          #   - cbindgen: PINNED to v0.29.1 (git tag eef1776) — FF 150.0.1's stated
+          #     minimum, i.e. its build version. v0.29.4 (b826cb8, the LATEST 0.29.x,
+          #     from a newer Firefox) emits a webrender_ffi macOS-only block
+          #     (`#if defined(XP_MACOSX)` — hence Linux is fine) referencing an
+          #     undeclared COUNT — a codegen regression after 0.29.1, failing ~27min
+          #     in. Install from the git TAG with --locked (crates.io 0.29.1 won't
+          #     compile against current serde; the tag's own Cargo.lock pins a
+          #     compatible one). Clang is NOT the cause (19 and 21 fail identically).
           brew install nasm lld
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           cargo install --git https://github.com/mozilla/cbindgen \
-            --rev b826cb8911488fe8a209d2b693492c0c673e8cca cbindgen
+            --tag v0.29.1 --locked cbindgen
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
           {
             echo ""
