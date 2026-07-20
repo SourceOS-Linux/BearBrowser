@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# bearbrowser-agent-machine — launch the bundled Noetica agent-machine as a
+# loopback-only sovereign sidecar, and point the embedded cockpit at it.
+#
+# Companion to bearbrowser-sidecar-server (the resolution sidecar) and the Rust
+# iot-sidecar. Lane 3 of docs/cockpit-composition-plan.md. The agent-machine binary
+# (built by build-agent-machine-sidecar.sh) already binds 127.0.0.1 only and reads
+# NOETICA_AM_PORT; this wrapper enforces the sovereign defaults and writes the live
+# port into the cockpit's runtime config so client-vue's resolver
+# (window.__COCKPIT_CONFIG__) targets this sidecar.
+#
+#   NOETICA_AM_PORT   listen port (default 8080)
+#   NOETICA_OFFLINE   sovereign default 1 (no off-device egress); set 0 to allow cloud models
+#   COCKPIT_DIR       the embedded cockpit dir to update (default: sibling Resources/cockpit)
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RES_DIR="$(cd "$SELF_DIR/.." && pwd)"   # …/Contents/Resources when installed in the .app
+
+# Locate the compiled sidecar binary (installed path, then dev/staging fallbacks).
+BIN=""
+for cand in \
+  "$RES_DIR/sidecars/bearbrowser-agent-machine-bin" \
+  "$RES_DIR/build/sidecars/bearbrowser-agent-machine-bin" \
+  "$SELF_DIR/../build/sidecars/bearbrowser-agent-machine-bin"; do
+  [ -x "$cand" ] && { BIN="$cand"; break; }
+done
+[ -n "$BIN" ] || { echo "[agent-machine] ERROR: sidecar binary not found (run build-agent-machine-sidecar.sh)"; exit 1; }
+
+PORT="${NOETICA_AM_PORT:-8080}"
+export NOETICA_AM_PORT="$PORT"
+export NOETICA_OFFLINE="${NOETICA_OFFLINE:-1}"   # sovereign default: no off-device egress
+
+# Point the embedded cockpit at this sidecar: rewrite the loopback bases in
+# cockpit-config.js to our live port (the "host injects the ports" step).
+COCKPIT_DIR="${COCKPIT_DIR:-$RES_DIR/cockpit}"
+CFG="$COCKPIT_DIR/cockpit-config.js"
+if [ -f "$CFG" ]; then
+  # portable in-place edit (BSD/GNU sed differ on -i): write via tmp
+  sed -E "s#http://127\.0\.0\.1:[0-9]+#http://127.0.0.1:$PORT#g" "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+  echo "[agent-machine] cockpit config → 127.0.0.1:$PORT ($CFG)"
+fi
+
+echo "[agent-machine] starting loopback sidecar on 127.0.0.1:$PORT (offline=$NOETICA_OFFLINE)"
+exec "$BIN"
