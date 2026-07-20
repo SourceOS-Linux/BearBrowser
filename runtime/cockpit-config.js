@@ -16,14 +16,19 @@ window.__COCKPIT_CONFIG__ = {
     // 823 /api/* routes (graph, pipelines, devspace, knowledge, chat) on 127.0.0.1.
     // BearBrowser injects the live port; 8080 is the agent-machine default.
     agentMachine: 'http://127.0.0.1:8080',
-    // The graph + studio surfaces are served by the same local brain in sovereign
-    // mode (agent-machine's /api/graph/*, /api/studio/*), so they point at it too.
+    // The graph surface is served by the same local brain in sovereign mode
+    // (agent-machine serves 76 /api/graph/* routes), so it points at it. studio is
+    // partial locally (/api/studio); the full notebook/compute plane is cloud
+    // (lattice-studio), so studio degrades to read-only-ish offline.
     hellgraph: 'http://127.0.0.1:8080',
     studio: 'http://127.0.0.1:8080',
-    // ie / algo / sherlock / reason / er are the CONNECTED cloud decomposition
-    // (separate GKE services). In sovereign mode they either resolve into the
-    // agent-machine's /api or degrade until the per-service loopback map lands
-    // (mode-semantics follow-up — composition-plan gap #3). Left unset here so the
-    // resolver's fallback governs, rather than pointing at a port that 404s.
+    // CAPABILITY TIERING (verified against agent-machine's route table):
+    // reason / er / ie / algo / sherlock are CONNECTED-ONLY — the local agent-machine
+    // serves ZERO routes for them (they're separate GKE services: owl-reasoner,
+    // entity-resolution, ie-engine, algo-engine, sherlock-engine). There is no local
+    // backend to map them to, so they are intentionally UNSET here: the resolver falls
+    // back to /svc/* (no proxy offline) and the surfaces degrade gracefully — they're
+    // built to handle an unavailable backend. Registering (connected mode) is what
+    // enables them. This is the sovereign capability subset, not a gap to be filled.
   },
 };
