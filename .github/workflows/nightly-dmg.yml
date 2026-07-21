@@ -145,12 +145,37 @@ jobs:
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach build
 
-      # NOTE: we do NOT run `mach package` — Firefox's strict packager requires
-      # fork hardening files (bearbrowser.cfg, local-settings.js, policies.json)
-      # our build doesn't emit in-tree, so it aborts. Instead the packaging step
-      # below copies the dev app with `cp -RL` (dereference), producing a
-      # self-contained, runnable loose-chrome app (the same layout `mach run`
-      # uses) with zero dangling symlinks.
+      # `mach package` is the ONLY correct path: it JARs chrome into omni.ja, which
+      # makes Firefox's IsPackagedBuild() true. Without omni.ja the content sandbox
+      # takes a developer-build path (MozillaDeveloperRepoPath) that MOZ_CRASHes on
+      # an end-user machine. Its strict manifest needs three hardening files our
+      # build doesn't emit in-tree — generate them into dist/bin first.
+      - name: Stage AutoConfig + policy files for packaging
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
+        run: |
+          set -euo pipefail
+          BIN="$(find . -maxdepth 2 -type d -name 'obj-*' | head -1)/dist/bin"
+          echo "dist/bin: $BIN"
+          mkdir -p "$BIN/defaults/pref" "$BIN/distribution"
+          # AutoConfig master file (first line is ignored by the parser).
+          printf '// BearBrowser AutoConfig\n' > "$BIN/bearbrowser.cfg"
+          # local-settings.js activates the AutoConfig file.
+          cat > "$BIN/defaults/pref/local-settings.js" <<'JS'
+          // Activate the BearBrowser AutoConfig file.
+          pref("general.config.filename", "bearbrowser.cfg");
+          pref("general.config.obscure_value", 0);
+          pref("general.config.sandbox_enabled", false);
+          JS
+          # Enterprise policies from our hardened profile (comments stripped).
+          python3 "${{ github.workspace }}/scripts/strip-json-comments.py" \
+            "${{ github.workspace }}/settings/profiles/${{ env.PROFILE }}/policies.json" \
+            "$BIN/distribution/policies.json"
+          echo "staged:"; ls -l "$BIN/bearbrowser.cfg" "$BIN/defaults/pref/local-settings.js" "$BIN/distribution/policies.json"
+
+      - name: Package the Gecko app (mach package → omni.ja)
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
+        run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach package
+
       - name: Package BearBrowser.app
         run: |
           bash scripts/bearbrowser-package-source-build.sh \

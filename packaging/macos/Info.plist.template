@@ -60,14 +60,5 @@
       </array>
     </dict>
   </array>
-  <!-- Injected on every GUI launch by LaunchServices. Needed because this
-       unsigned/ad-hoc fork build faults in ContentParent::AppendSandboxParams
-       when spawning a sandboxed tab process; the proper fix is notarized
-       signing with the content-sandbox entitlement. -->
-  <key>LSEnvironment</key>
-  <dict>
-    <key>MOZ_DISABLE_CONTENT_SANDBOX</key>
-    <string>1</string>
-  </dict>
 </dict>
 </plist>

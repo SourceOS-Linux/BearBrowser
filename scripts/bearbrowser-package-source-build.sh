@@ -81,17 +81,20 @@ if [ ! -d "$workspace" ]; then
   exit 64
 fi
 
-# ── Find the built app in obj-* ───────────────────────────────────────────────
-# The dev app that `mach build` produces. Its chrome/resources are symlinks into
-# the objdir/srcdir (and there is no omni.ja) — but those targets EXIST here at
-# package time, so we dereference them (cp -RL below) into a self-contained,
-# runnable loose-chrome app. (This is the layout `mach run` uses; no omni.ja
-# needed. We avoid `mach package` because its strict manifest requires fork
-# hardening files our build doesn't emit in-tree.)
-built_app="$(find "$workspace" -maxdepth 3 -path '*/obj-*/dist/BearBrowser.app' -type d 2>/dev/null | head -1)"
+# ── Find the PACKAGED app (has omni.ja) from `mach package` ──────────────────
+# We package the app produced by `mach package`, identified by omni.ja. This is
+# the real packaged layout: chrome JARred into omni.ja, real files (no symlinks),
+# binary in Contents/MacOS. omni.ja makes Firefox's IsPackagedBuild() true, which
+# skips the developer-build content-sandbox path (MozillaDeveloperRepoPath) that
+# MOZ_CRASHes on end-user machines. Run `./mach build && ./mach package` first.
+built_app=""
+while IFS= read -r candidate; do
+  if [ -f "$candidate/Contents/Resources/omni.ja" ]; then built_app="$candidate"; break; fi
+done < <(find "$workspace" -maxdepth 6 -name 'BearBrowser.app' -type d 2>/dev/null)
 if [ -z "$built_app" ] || [ ! -d "$built_app" ]; then
-  echo "ERROR: BearBrowser.app not found in $workspace/obj-*/dist/" >&2
-  echo "Run 'make build' (or cd <workspace> && ./mach build) first." >&2
+  echo "ERROR: no PACKAGED BearBrowser.app (with Contents/Resources/omni.ja) found." >&2
+  echo "Run './mach build && ./mach package' first — 'mach build' alone leaves a" >&2
+  echo "dev tree of symlinks with no omni.ja, which is not shippable." >&2
   exit 1
 fi
 
@@ -106,40 +109,35 @@ echo
 out_app="$repo_root/$out_dir/BearBrowser.app"
 mkdir -p "$(dirname "$out_app")"
 
-# ── Step 1: Copy the built app (DEREFERENCE symlinks) ─────────────────────────
-# cp -RL follows every symlink and copies the real file CONTENTS. The dev app's
-# resources are symlinks into the objdir/srcdir which exist right now, so this
-# yields a fully self-contained bundle. (Plain `cp -R` copied the *links*, which
-# dangled the moment the DMG left the build machine — the crash we shipped.)
-echo "[1/6] Copying built app (dereferencing symlinks)..."
+# ── Step 1: Copy the packaged app ─────────────────────────────────────────────
+# The mach-package output is self-contained (real files, omni.ja) so a plain
+# recursive copy is correct.
+echo "[1/6] Copying packaged app..."
 rm -rf "$out_app"
-# Tolerate per-file cp errors (a stray broken source link shouldn't abort the
-# whole copy); the self-contained gate below is the real completeness check.
-cp -RL "$built_app" "$out_app" 2>/tmp/bb-cp-errs.txt \
-  || echo "      note: cp -RL reported some errors (see below); the gate will verify completeness"
-[ -s /tmp/bb-cp-errs.txt ] && sed 's/^/        cp: /' /tmp/bb-cp-errs.txt | head -10
+cp -R "$built_app" "$out_app"
 echo "      $built_app → $out_app"
 
-# ── Gate: the copied app must be self-contained + have its chrome ─────────────
-# After cp -RL there must be ZERO dangling symlinks, and the chrome must be
-# present (chrome.manifest for the loose layout, or omni.ja if ever packaged).
-# This is the exact defect that shipped a crashing DMG (dangling links into
-# /Users/runner/... + no chrome → ServiceWorkerRegistrar::ProfileStarted SIGSEGV).
-echo "      verifying the copied app is self-contained..."
-if [ ! -f "$out_app/Contents/Resources/chrome.manifest" ] \
-   && [ ! -f "$out_app/Contents/Resources/omni.ja" ]; then
-  echo "ERROR: no chrome in the app (neither chrome.manifest nor omni.ja present)." >&2
-  echo "The source was not a complete build. Aborting." >&2
+# ── Gate: must be a real packaged app (omni.ja) with zero dangling symlinks ───
+# omni.ja is the packaged-build marker; its absence sends the content sandbox
+# down the dev-build path that crashes on end-user machines. Dangling symlinks
+# = a non-self-contained bundle (the /Users/runner/... defect). Fail on either.
+echo "      verifying the packaged app..."
+missing=""
+for req in Contents/Resources/omni.ja Contents/Resources/browser/omni.ja; do
+  [ -f "$out_app/$req" ] || missing="$missing $req"
+done
+if [ -n "$missing" ]; then
+  echo "ERROR: packaged app missing required archives:$missing" >&2
+  echo "The source was not a real 'mach package' output. Aborting." >&2
   exit 1
 fi
 dangling="$(find "$out_app" -type l ! -exec test -e {} \; -print 2>/dev/null | head -5)"
 if [ -n "$dangling" ]; then
-  echo "ERROR: the app still contains dangling symlinks (cp -RL should have" >&2
-  echo "dereferenced them — a target was missing at package time):" >&2
+  echo "ERROR: the app contains dangling symlinks (not self-contained):" >&2
   echo "$dangling" | sed 's/^/  /' >&2
   exit 1
 fi
-echo "      OK — chrome present, no dangling symlinks."
+echo "      OK — omni.ja present, no dangling symlinks."
 
 # ── Step 2: Write BearBrowser Info.plist ──────────────────────────────────────
 echo "[2/6] Writing BearBrowser Info.plist..."
