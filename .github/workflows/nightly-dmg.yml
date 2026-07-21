@@ -148,29 +148,27 @@ jobs:
       # `mach package` is the ONLY correct path: it JARs chrome into omni.ja, which
       # makes Firefox's IsPackagedBuild() true. Without omni.ja the content sandbox
       # takes a developer-build path (MozillaDeveloperRepoPath) that MOZ_CRASHes on
-      # an end-user machine. Its strict manifest needs three hardening files our
-      # build doesn't emit in-tree — generate them into dist/bin first.
-      - name: Stage AutoConfig + policy files for packaging
+      # an end-user machine.
+      #
+      # The fork's package-manifest.in lists 3 hardening files (bearbrowser.cfg,
+      # defaults/pref/local-settings.js, distribution/policies.json) the build never
+      # emits — so `mach package` aborts. Staging them into dist/bin does NOT work:
+      # `mach package` repopulates dist/bin from the build's install manifests first
+      # and wipes non-manifest files. So instead drop those 3 required entries from
+      # the manifest (the packager's accumulated error listed exactly these 3). Our
+      # post-package script injects policies.json + hardened prefs into the final
+      # app anyway, so nothing is lost.
+      - name: Relax packager manifest (drop 3 fork files the build doesn't emit)
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: |
           set -euo pipefail
-          BIN="$(find . -maxdepth 2 -type d -name 'obj-*' | head -1)/dist/bin"
-          echo "dist/bin: $BIN"
-          mkdir -p "$BIN/defaults/pref" "$BIN/distribution"
-          # AutoConfig master file (first line is ignored by the parser).
-          printf '// BearBrowser AutoConfig\n' > "$BIN/bearbrowser.cfg"
-          # local-settings.js activates the AutoConfig file.
-          cat > "$BIN/defaults/pref/local-settings.js" <<'JS'
-          // Activate the BearBrowser AutoConfig file.
-          pref("general.config.filename", "bearbrowser.cfg");
-          pref("general.config.obscure_value", 0);
-          pref("general.config.sandbox_enabled", false);
-          JS
-          # Enterprise policies from our hardened profile (comments stripped).
-          python3 "${{ github.workspace }}/scripts/strip-json-comments.py" \
-            "${{ github.workspace }}/settings/profiles/${{ env.PROFILE }}/policies.json" \
-            "$BIN/distribution/policies.json"
-          echo "staged:"; ls -l "$BIN/bearbrowser.cfg" "$BIN/defaults/pref/local-settings.js" "$BIN/distribution/policies.json"
+          M=browser/installer/package-manifest.in
+          before=$(wc -l < "$M")
+          grep -vE 'bearbrowser\.cfg|defaults/pref/local-settings\.js|distribution/policies\.json' "$M" > "$M.tmp"
+          mv "$M.tmp" "$M"
+          echo "package-manifest.in: $before -> $(wc -l < "$M") lines"
+          # Drop any already-preprocessed manifest so mach package regenerates it.
+          find . -maxdepth 3 -name 'package-manifest' -path '*dist*' -delete 2>/dev/null || true
 
       - name: Package the Gecko app (mach package → omni.ja)
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
