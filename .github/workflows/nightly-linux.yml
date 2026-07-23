@@ -22,6 +22,12 @@ jobs:
     name: Build (${{ matrix.distro }})
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    # fedora builds in a container where swapon isn't available, so it can't get
+    # the OOM headroom the ubuntu leg does; it also hits a mirror-recipe cfg-copy
+    # quirk. Keep it as a best-effort signal — ubuntu is the primary Linux
+    # artifact and must stay blocking. (Revisit fedora once CI moves to the
+    # sovereign runner with real RAM.)
+    continue-on-error: ${{ matrix.distro == 'fedora' }}
 
     strategy:
       fail-fast: false
@@ -163,10 +169,18 @@ jobs:
         id: tarball
         run: |
           DATE=$(date +%Y%m%d)
-          OBJ="build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}/obj-x86_64-pc-linux-gnu"
-          TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.bz2"
+          SRC="build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}"
+          OBJ="$SRC/obj-x86_64-pc-linux-gnu"
+          # `mach build` alone leaves dist/bin (a dev tree). Run `mach package` to
+          # get the real distributable tarball (dist/bearbrowser-*.tar.xz, with
+          # omni.ja) — the old step tarred a dist/bearbrowser/ dir that only
+          # `mach package` creates, so it failed the moment the build finally
+          # got far enough to package. Proven on the sovereign Linux builder.
+          ( cd "$SRC" && MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach package )
+          SRC_TAR="$(ls "$OBJ"/dist/bearbrowser-*.linux-x86_64.tar.* 2>/dev/null | head -1)"
+          TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.xz"
           mkdir -p build/nightly
-          tar -C "${OBJ}/dist" -cjf "build/nightly/${TAR}" bearbrowser/
+          cp "$SRC_TAR" "build/nightly/${TAR}"
           echo "name=${TAR}" >> $GITHUB_OUTPUT
           echo "path=build/nightly/${TAR}" >> $GITHUB_OUTPUT
 
