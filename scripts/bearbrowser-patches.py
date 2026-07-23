@@ -133,6 +133,47 @@ def bearbrowser_patches():
         _shutil.copytree(str(_lw_brand), str(_bb_brand))
         print(f"Created {_bb_brand} from {_lw_brand}")
 
+    # ── Bear icons: overwrite the librewolf-derived rasters ──────────────────
+    # The branding dir copied above still carries LibreWolf's raster icons —
+    # the files the OSes actually display (.icns compiled into the .app, .ico
+    # compiled into firefox.exe by rc, sized .png shipped for Linux). Overwrite
+    # them with the bear set staged by apply-bearbrowser-branding.sh
+    # (workspace/branding-icons/, generated from branding/bearbrowser.svg by
+    # scripts/generate-brand-icons.sh). Square .png slots are matched by their
+    # real IHDR pixel size (exact match only — never ship a wrong-size png);
+    # non-square art (wordmarks) is left alone.
+    _icons_src = Path("../branding-icons")
+    if _icons_src.is_dir() and _bb_brand.exists():
+        def _png_size(p):
+            try:
+                with open(p, "rb") as f:
+                    h = f.read(24)
+                if h[:8] != b"\x89PNG\r\n\x1a\n":
+                    return None
+                return (int.from_bytes(h[16:20], "big"), int.from_bytes(h[20:24], "big"))
+            except OSError:
+                return None
+        _icns = _icons_src / "BearBrowser.icns"
+        _ico = _icons_src / "bear.ico"
+        _replaced = 0
+        for _f in sorted(_bb_brand.rglob("*")):
+            if not _f.is_file():
+                continue
+            _suf = _f.suffix.lower()
+            if _suf == ".icns" and _icns.exists():
+                _shutil.copy(str(_icns), str(_f)); _replaced += 1
+            elif _suf == ".ico" and _ico.exists():
+                _shutil.copy(str(_ico), str(_f)); _replaced += 1
+            elif _suf == ".png":
+                _sz = _png_size(_f)
+                if _sz and _sz[0] == _sz[1]:
+                    _bear_png = _icons_src / f"bear-{_sz[0]}.png"
+                    if _bear_png.exists():
+                        _shutil.copy(str(_bear_png), str(_f)); _replaced += 1
+        print(f"-> Bear icons: replaced {_replaced} raster(s) in {_bb_brand}")
+    else:
+        print("note: ../branding-icons not staged — keeping librewolf rasters")
+
     # copy the right search-config.json file
     exec('cp -v ../assets/search-config.json services/settings/dumps/main/search-config.json')
 
