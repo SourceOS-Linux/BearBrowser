@@ -17,6 +17,14 @@ on:
       - 'packaging/bundled-fonts/**'
       - '.github/workflows/nightly-linux.yml'
 
+# Needed by the "Publish nightly release" step: the default GITHUB_TOKEN is
+# read-only, so `gh release upload --clobber` / `gh release create` 403 without
+# this (same fix already on nightly-dmg + nightly-windows). Without write, the
+# --clobber upload silently failed and the fallback create errored on the tag
+# that a sibling lane had already made.
+permissions:
+  contents: write
+
 jobs:
   nightly-linux:
     name: Build (${{ matrix.distro }})
