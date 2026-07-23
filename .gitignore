@@ -14,3 +14,7 @@ __pycache__/
 .DS_Store
 .idea/
 .vscode/
+
+# Rust build output
+capture-sidecar/target/
+iot-sidecar/target/

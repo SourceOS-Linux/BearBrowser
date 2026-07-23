@@ -1,0 +1,35 @@
+[package]
+name = "capture-sidecar"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "BearBrowser network-visibility sidecar: session packet capture (tshark/tcpdump/dumpcap), live connection map, and per-domain firewall. Every effectful action is governed by the canonical agent-control-bridge policy engine; loopback-only; no telemetry."
+license = "MPL-2.0"
+publish = false
+
+[[bin]]
+name = "capture-sidecar"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime + HTTP/WS server (loopback only).
+tokio = { version = "1.38", features = ["macros", "rt-multi-thread", "net", "process", "sync", "signal", "io-util", "time"] }
+axum = { version = "0.7", features = ["ws", "json", "tokio"] }
+
+# Serialization of the wire API and the bridge Decision JSON.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling.
+anyhow = "1"
+thiserror = "1"
+
+# WS fan-out of capture lines + connection records.
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+# Structured logging (stderr only; never the network).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+# Event / capture ids.
+uuid = { version = "1", features = ["v4"] }

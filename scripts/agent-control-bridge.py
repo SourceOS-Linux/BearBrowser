@@ -712,6 +712,7 @@ _SURFACES = {
     "browser": ("agentActionContract", "browser"),
     "iot": ("iotActionContract", "iot"),
     "agent-machine": ("agentMachineActionContract", "agent"),
+    "capture": ("captureActionContract", "capture"),
 }
 
 
@@ -729,7 +730,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description="BearBrowser ENFORCING agent control bridge — blocks gated/prohibited "
                     "(incl. injected) actions at decision time + attests every one.")
-    parser.add_argument("--surface", choices=("browser", "iot", "agent-machine"),
+    parser.add_argument("--surface", choices=tuple(_SURFACES.keys()),
                         default="browser",
                         help="Which action surface to govern: browser (default), "
                              "iot (spec.iotActionContract), or agent-machine "
@@ -760,7 +761,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     for pair in args.param:
         if "=" in pair:
             k, _, v = pair.partition("=")
-            params[k.strip()] = v.strip()
+            # Coerce scalar types (true/false → bool, quoted → str) so jsonlogic
+            # policyConditions comparing to a boolean literal work through the CLI
+            # path — the Rust sidecar gates pass --param userGesture=true as a
+            # string, and without this a gesture-gated action could NEVER be
+            # permitted via the CLI (only via the in-process Python API the tests
+            # use). This makes the enforced path match the tested path.
+            params[k.strip()] = _parse_flow(v.strip())
     if args.url:
         params.setdefault("url", args.url)
 

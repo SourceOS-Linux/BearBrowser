@@ -43,6 +43,11 @@ EVENT_TYPES = {
     "browser.upload.create",
     "browser.automation.run",
     "browser.diagnostics.export_redacted",
+    "capture.capture-start",
+    "capture.capture-stop",
+    "capture.capture-export",
+    "capture.firewall-set",
+    "capture.policy.violation",
 }
 
 SURFACES = {
@@ -54,6 +59,7 @@ SURFACES = {
     "credential-broker",
     "policy",
     "agent-sidecar",
+    "capture-sidecar",
 }
 
 PROFILES = {"human-secure", "agent-runtime", "bootstrap", "unknown"}
