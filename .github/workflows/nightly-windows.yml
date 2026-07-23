@@ -1,0 +1,121 @@
+name: BearBrowser Nightly Windows (cross-compile)
+
+# Windows x86_64 built FROM LINUX via clang-cl cross-compile — no Windows runner
+# needed. The whole toolchain recipe lives in scripts/build-windows-cross.sh
+# (proven on sovereign-linux-builder 2026-07-22; runs on any Ubuntu x86_64 host,
+# so this lane ports 1:1 to a Gitea Actions / sovereign runner).
+
+on:
+  schedule:
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mozconfig/human-secure-win64.mozconfig'
+      - 'scripts/build-windows-cross.sh'
+      - '.github/workflows/nightly-windows.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  nightly-windows:
+    name: Cross-compile win64 on Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
+      VERSION: 150.0.1
+      RELEASE: 1
+      PROFILE: human-secure
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space (build + 4G VS toolchain)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" || true
+          df -h /
+
+      - name: Cache Mozilla toolchain (clang-cl, cbindgen)
+        uses: actions/cache@v4
+        with:
+          path: .mozbuild
+          key: mozbuild-win-${{ env.VERSION }}-v1
+          restore-keys: mozbuild-win-${{ env.VERSION }}-
+
+      - name: Cache MSVC + Windows SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/vs
+          key: winsysroot-msvc14.44-sdk26100-v1
+
+      - name: Cache Firefox source tarball
+        uses: actions/cache@v4
+        with:
+          path: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/firefox-${{ env.VERSION }}.source.tar.xz
+          key: ff-tarball-${{ env.VERSION }}
+
+      - name: Set up workspace from LibreWolf mirror
+        run: |
+          bash scripts/apply-sourceos-overlays.sh \
+            --profile ${{ env.PROFILE }} \
+            --ref latest \
+            --workspace-root build/workspaces
+
+      - name: Fetch Firefox source tarball
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source
+        run: make fetch
+
+      - name: Apply BearBrowser patches
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source
+        run: make dir
+
+      - name: Bootstrap Gecko build environment (provides clang-cl + cbindgen)
+        working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
+        run: |
+          MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild \
+            ./mach --no-interactive bootstrap --application-choice=browser
+
+      - name: Cross-compile + package (zip + NSIS installer)
+        run: |
+          bash scripts/build-windows-cross.sh \
+            --srcdir "build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}"
+
+      - name: Stage artifacts
+        id: stage
+        run: |
+          DATE=$(date +%Y%m%d)
+          OBJ="build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}/obj-win64"
+          mkdir -p build/nightly
+          ZIP="BearBrowser-${{ env.VERSION }}-${DATE}-win64.zip"
+          EXE="BearBrowser-${{ env.VERSION }}-${DATE}-win64-installer.exe"
+          cp "$OBJ"/dist/firefox-*.win64.zip "build/nightly/${ZIP}"
+          cp "$OBJ"/dist/firefox-*.win64.installer.exe "build/nightly/${EXE}"
+          echo "zip=build/nightly/${ZIP}" >> $GITHUB_OUTPUT
+          echo "exe=build/nightly/${EXE}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bearbrowser-win64
+          path: build/nightly/BearBrowser-*
+          retention-days: 30
+
+      - name: Publish nightly release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date +%Y-%m-%d)
+          TAG="nightly-${DATE}"
+          NOTES="$(printf 'Automated nightly build — Windows x86_64 (cross-compiled from Linux, clang-cl).\n\nPortable zip + NSIS installer. Not signed. Developer use only.\n\nCommit: `%s`\nFirefox base: %s\n' '${{ github.sha }}' '${{ env.VERSION }}')"
+          gh release upload "$TAG" "${{ steps.stage.outputs.zip }}" "${{ steps.stage.outputs.exe }}" --clobber 2>/dev/null || \
+          gh release create "$TAG" "${{ steps.stage.outputs.zip }}" "${{ steps.stage.outputs.exe }}" \
+            --title "BearBrowser Nightly ${DATE}" \
+            --notes "$NOTES" \
+            --prerelease
