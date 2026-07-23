@@ -71,6 +71,17 @@ jobs:
           sudo docker image prune --all --force || true
           df -h /
 
+      - name: Add swap (16GB runners OOM the Firefox compile → exit 143)
+        if: matrix.container == ''
+        run: |
+          sudo swapoff -a || true
+          sudo rm -f /mnt/swapfile /swapfile || true
+          sudo fallocate -l 24G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
+
       - name: Install system dependencies
         run: |
           ${{ matrix.pkg_update }}
@@ -120,7 +131,10 @@ jobs:
 
       - name: Build BearBrowser
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
-        run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach build
+        # -j2: mach's memory heuristic over-parallelizes on the 16GB runner and
+        # OOM-kills the compile (exit 143). Cap concurrent heavy TUs; the 24G
+        # swap above absorbs the rest. Same fix as nightly-windows.
+        run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach build -j2
 
       - name: Measure fingerprint on the REAL compiled binary (authoritative)
         if: matrix.distro == 'ubuntu'
