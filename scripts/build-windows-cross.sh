@@ -157,7 +157,10 @@ export PATH="$MOZ_CLANG_BIN:$HOME/.cargo/bin:$PATH"
 ulimit -n "$NOFILE"
 
 ./mach configure
-./mach build
+# Cap parallelism at the core count: mach's memory heuristic over-parallelizes
+# on 16GB CI runners and a burst of rustc processes gets the job SIGTERM'd
+# (exit 143, ~10min in). -j$(nproc) is also correct on the big sovereign builder.
+./mach build -j"$(nproc)"
 ./mach package
 
 log "artifacts"
