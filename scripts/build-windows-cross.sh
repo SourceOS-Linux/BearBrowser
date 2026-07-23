@@ -44,8 +44,13 @@ VS_DIR="${VS_DIR:-$HOME/vs}"           # raw (lowercased) VS+SDK backing store
 VSX_DIR="${VSX_DIR:-$HOME/vsx}"        # ciopfs case-insensitive view -> WINSYSROOT
 APPSDK_DIR="${APPSDK_DIR:-$HOME/winappsdk/dir}"
 WINRS_DIR_ROOT="${WINRS_DIR_ROOT:-$HOME/winrs}"
-MOZ_CLANG_BIN="${MOZ_CLANG_BIN:-$HOME/.mozbuild/clang/bin}"
-NOFILE=1048576
+# Honor MOZBUILD_STATE_PATH: CI bootstraps into $GITHUB_WORKSPACE/.mozbuild, not
+# ~/.mozbuild — clang/cbindgen live wherever mach bootstrap put them.
+MSP="${MOZBUILD_STATE_PATH:-$HOME/.mozbuild}"
+MOZ_CLANG_BIN="${MOZ_CLANG_BIN:-$MSP/clang/bin}"
+# Raise fds as high as this host allows (GitHub runners cap the hard limit at
+# 65536 — plenty at CI parallelism; the sovereign builder allows 1048576).
+NOFILE=$(ulimit -Hn)
 
 log() { printf '\n=== %s ===\n' "$*"; }
 
@@ -85,8 +90,7 @@ mountpoint -q "$VSX_DIR" || \
 for i in $(seq 1 20); do mountpoint -q "$VSX_DIR" && break; sleep 1; done
 mountpoint -q "$VSX_DIR" || { echo "ciopfs mount failed" >&2; exit 1; }
 CPID=$(pgrep -x ciopfs | head -1)
-grep -q "$NOFILE" "/proc/$CPID/limits" || \
-  echo "WARNING: ciopfs daemon fd limit not raised — expect 'Too many open files'" >&2
+echo "ciopfs daemon fd limit: $(awk '/open files/ {print $4}' "/proc/$CPID/limits" 2>/dev/null || echo unknown) (want $NOFILE)"
 # sanity: any-case resolution
 ls "$VSX_DIR"/*/10/include/*/shared/DriverSpecs.h >/dev/null 2>&1 || \
 ls "$VSX_DIR"/*/10/Include/*/shared/DriverSpecs.h >/dev/null 2>&1 || \
@@ -97,7 +101,7 @@ log "rust windows target"
 export PATH="$HOME/.cargo/bin:$PATH"
 rustup target add x86_64-pc-windows-msvc
 
-CBINDGEN="${CBINDGEN:-$HOME/.mozbuild/cbindgen/cbindgen}"
+CBINDGEN="${CBINDGEN:-$MSP/cbindgen/cbindgen}"
 [ -x "$CBINDGEN" ] || { echo "cbindgen not found at $CBINDGEN — run mach bootstrap first" >&2; exit 1; }
 
 # --------------------------------------------------------------- WinAppSDK DLLs
@@ -136,7 +140,7 @@ fi
 # ------------------------------------------------------------------------ build
 log "configure + build + package"
 cd "$SRCDIR"
-export MOZBUILD_STATE_PATH="${MOZBUILD_STATE_PATH:-$HOME/.mozbuild}"
+export MOZBUILD_STATE_PATH="$MSP"
 export WINSYSROOT="$VSX_DIR"
 export MOZ_WINDOWS_APP_SDK_DIR="$APPSDK_DIR"
 export MOZ_WINDOWS_RS_DIR="$WINRS_DIR"
