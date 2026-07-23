@@ -28,6 +28,11 @@
 
 set -euo pipefail
 
+# Resolve the repo root FIRST, before any cd — BASH_SOURCE may be a relative
+# path (e.g. "scripts/build-windows-cross.sh") that stops resolving the moment
+# the cwd changes (the WinAppSDK fetch cds into its download dir).
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 SRCDIR=""
 SETUP_ONLY=0
 while [ $# -gt 0 ]; do
@@ -117,7 +122,8 @@ if [ ! -f "$APPSDK_DIR/CoreMessagingXP.dll" ]; then
     for d in CoreMessagingXP.dll marshal.dll Microsoft.InputStateManager.dll \
              Microsoft.Internal.FrameworkUdk.dll Microsoft.UI.Composition.OSSupport.dll \
              Microsoft.UI.Input.dll Microsoft.UI.Windowing.Core.dll Microsoft.UI.Windowing.dll; do
-      s=$(find "$t" -name "$d" | head -1); [ -n "$s" ] && cp -n "$s" "$APPSDK_DIR/" || true
+      s=$(find "$t" -name "$d" | head -1)
+      [ -n "$s" ] && [ ! -e "$APPSDK_DIR/$d" ] && cp "$s" "$APPSDK_DIR/" || true
     done
     rm -rf "$t"
   done
@@ -145,7 +151,6 @@ export WINSYSROOT="$VSX_DIR"
 export MOZ_WINDOWS_APP_SDK_DIR="$APPSDK_DIR"
 export MOZ_WINDOWS_RS_DIR="$WINRS_DIR"
 export CBINDGEN MOZ_CLANG_BIN
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cp "$REPO_ROOT/mozconfig/human-secure-win64.mozconfig" "$SRCDIR/mozconfig.win64"
 export MOZCONFIG="$SRCDIR/mozconfig.win64"
 export PATH="$MOZ_CLANG_BIN:$HOME/.cargo/bin:$PATH"
