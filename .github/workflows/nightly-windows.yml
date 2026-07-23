@@ -31,7 +31,7 @@ jobs:
       RELEASE: 1
       PROFILE: human-secure
       # 16GB runners OOM the neqo/mls/icu rustc cluster at higher parallelism.
-      MOZ_BUILD_JOBS: 3
+      MOZ_BUILD_JOBS: 2
 
     steps:
       - name: Checkout
@@ -47,7 +47,7 @@ jobs:
         run: |
           sudo swapoff -a || true
           sudo rm -f /mnt/swapfile /swapfile || true
-          sudo fallocate -l 14G /mnt/swapfile
+          sudo fallocate -l 24G /mnt/swapfile
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
