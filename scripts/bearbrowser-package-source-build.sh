@@ -199,6 +199,28 @@ if [ -f "$profile_dir/policies.json" ]; then
   echo "      policies.json → $policy_dest/policies.json (comments stripped)"
 fi
 
+# BearStart new-tab wiring (macOS lane). Linux/Windows get this via the
+# overlay-generated bearbrowser.cfg; on macOS the cfg is not emitted by the
+# build (see the nightly-dmg manifest-relax step), so inject a minimal cfg here
+# that only carries the AboutNewTab override, plus the autoconfig wiring prefs.
+# Prefs themselves already ship via bearbrowser-user.js above — no duplication.
+# NOTE: autoconfig .cfg files skip their FIRST line (must be a comment).
+if [ -f "$repo_root/settings/start/bearstart-autoconfig.js" ]; then
+  cp "$repo_root/settings/start/bearstart-autoconfig.js" \
+    "$out_app/Contents/Resources/bearbrowser.cfg"
+  # Autoconfig wiring must live in defaults/pref/ at the resources root — the
+  # one loose default-pref dir packaged Firefox reads (enterprise-documented).
+  wiring_dest="$out_app/Contents/Resources/defaults/pref"
+  mkdir -p "$wiring_dest"
+  cat > "$wiring_dest/local-settings.js" <<'EOF_BEARSTART_WIRING'
+// BearBrowser autoconfig wiring — injected by bearbrowser-package-source-build.sh
+pref("general.config.obscure_value", 0);
+pref("general.config.filename", "bearbrowser.cfg");
+pref("general.config.sandbox_enabled", false);
+EOF_BEARSTART_WIRING
+  echo "      bearstart-autoconfig.js → Contents/Resources/bearbrowser.cfg (new-tab wiring)"
+fi
+
 # ── Step 5: Ad-hoc sign ───────────────────────────────────────────────────────
 echo "[5/6] Code signing..."
 if [ "$skip_sign" = "true" ]; then

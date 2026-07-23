@@ -159,10 +159,14 @@ user_pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", 
 user_pref("extensions.pocket.enabled", false);
 user_pref("extensions.pocket.api", "");
 user_pref("extensions.pocket.site", "");
-// Homepage — BearBrowser custom start page
-user_pref("browser.startup.homepage", "file:///Applications/BearBrowser.app/Contents/Resources/BearBrowser-start.html");
+// Homepage — BearBrowser start page, packaged into the browser omni.ja at
+// browser/bearstart/ (see scripts/bearbrowser-patches.py) so the same URL works
+// on Linux/Windows/macOS regardless of install location. (The old value was the
+// native-shell's absolute /Applications file path — macOS-only and dead.)
+// New-tab uses the same page via settings/start/bearstart-autoconfig.js —
+// browser.newtab.url was removed from Firefox years ago and did nothing.
+user_pref("browser.startup.homepage", "resource:///bearstart/bearbrowser-start.html");
 user_pref("browser.startup.page", 1);
-user_pref("browser.newtab.url", "file:///Applications/BearBrowser.app/Contents/Resources/BearBrowser-start.html");
 
 // ── Search engine ─────────────────────────────────────────────────────────────
 // Remove Google as a preset and default to a privacy-respecting engine.
