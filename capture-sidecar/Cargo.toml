@@ -27,6 +27,11 @@ thiserror = "1"
 # WS fan-out of capture lines + connection records.
 tokio-stream = { version = "0.1", features = ["sync"] }
 
+# CORS for the cockpit panel: bearnet.html is a resource:// page fetching this
+# loopback service cross-origin, so the browser requires CORS headers. Safe to
+# be permissive — the service is loopback-only and every side effect is gated.
+tower-http = { version = "0.5", features = ["cors"] }
+
 # Structured logging (stderr only; never the network).
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

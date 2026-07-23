@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -58,6 +59,15 @@ pub fn router(state: AppState) -> Router {
         .route("/map", get(map).post(map_ingest).delete(map_clear))
         .route("/firewall", get(fw_list).post(fw_set).delete(fw_clear))
         .route("/events", get(ws_upgrade))
+        // The panel (resource:// origin) fetches this loopback service cross-origin.
+        // Permissive CORS is safe here: the socket is loopback-only and every
+        // side effect is gated through the bridge regardless of origin.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
         .with_state(state)
 }
 
@@ -255,13 +265,18 @@ struct FwSetBody {
 }
 
 async fn fw_set(State(st): State<AppState>, Json(body): Json<FwSetBody>) -> ApiResult<Response> {
+    // Normalize to eTLD+1 — the whole subsystem (map classifier, blocked-check)
+    // operates at that granularity, so a rule on "ads.evil.com" must key on
+    // "evil.com" or it would never match an observed connection. Matches the
+    // native shell, which set + checked firewall rules via etldForHost:.
+    let domain = crate::netmap::etld_plus_one(&body.domain);
     let cmd = Command {
         action: "firewall-set".into(),
         actor: body.actor,
         user_gesture: body.user_gesture,
         approval_token: body.approval_token,
         params: vec![
-            ("domain".into(), body.domain.clone()),
+            ("domain".into(), domain.clone()),
             ("decision".into(), format!("{:?}", body.decision).to_lowercase()),
         ],
     };
@@ -269,8 +284,8 @@ async fn fw_set(State(st): State<AppState>, Json(body): Json<FwSetBody>) -> ApiR
     if !decision.permitted() {
         return Err(denied(&decision));
     }
-    st.firewall.set(&body.domain, body.decision);
-    Ok(Json(json!({ "set": body.domain, "decision": body.decision })).into_response())
+    st.firewall.set(&domain, body.decision);
+    Ok(Json(json!({ "set": domain, "decision": body.decision })).into_response())
 }
 
 async fn ws_upgrade(State(st): State<AppState>, ws: WebSocketUpgrade) -> Response {

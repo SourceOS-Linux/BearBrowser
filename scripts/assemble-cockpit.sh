@@ -36,6 +36,17 @@ OUT="$STAGE/cockpit" bash "$REPO_ROOT/scripts/build-cockpit.sh"
 log "building agent-machine sidecar …"
 OUT="$STAGE/sidecars" bash "$REPO_ROOT/scripts/build-agent-machine-sidecar.sh"
 
+# 2b. capture sidecar — cargo build → $STAGE/sidecars/…-capture-sidecar-bin (self-smoke).
+# Network-visibility surface (packet capture + connection map + firewall),
+# governed by the same bridge. Skipped gracefully if cargo is unavailable so a
+# host without Rust can still assemble the rest of the cockpit.
+if command -v cargo >/dev/null 2>&1; then
+  log "building capture sidecar …"
+  OUT="$STAGE/sidecars" bash "$REPO_ROOT/scripts/build-capture-sidecar.sh"
+else
+  log "WARNING: cargo not found — skipping capture sidecar (BearNet panel will show offline)"
+fi
+
 # 3. Stage the runtime scripts + the enforcing contract (Lane 4 + Receipts + orchestrator).
 log "staging runtime scripts + policy contract …"
 for s in bearbrowser-agent-machine bearbrowser-agent-machine-gate.py agent-control-bridge.py \
