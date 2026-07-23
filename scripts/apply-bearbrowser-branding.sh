@@ -132,6 +132,19 @@ while IFS= read -r -d '' icon_dir; do
   [ "$icon_dirs_seen" -ge 50 ] && break
 done < <(find "$workspace" -type d \( -iname '*icon*' -o -iname '*branding*' -o -iname '*browser*' \) -print0)
 
+# Stage the pre-generated raster icon set (branding/icons/, built by
+# scripts/generate-brand-icons.sh) into the workspace so `make dir`
+# (scripts/bearbrowser-patches.py) can overwrite the librewolf-derived
+# browser/branding/bearbrowser rasters (.icns/.ico/sized .png) with the bear.
+# SVG-swapping alone (above) never changed the packaged app icons — the OSes
+# consume the rasters compiled into the branding dir, not the SVGs.
+if [ -d "$repo_root/branding/icons" ] && [ "$dry_run" != "true" ]; then
+  mkdir -p "$workspace/branding-icons"
+  cp "$repo_root/branding/icons/"* "$workspace/branding-icons/"
+  echo "branding-icons: staged $(ls "$repo_root/branding/icons" | wc -l | tr -d ' ') raster assets -> workspace/branding-icons/"
+  changed=$((changed + 1))
+fi
+
 # Ensure a BearBrowser app id marker exists for downstream package steps.
 if [ "$dry_run" != "true" ]; then
   mkdir -p "$workspace/.bearbrowser"
