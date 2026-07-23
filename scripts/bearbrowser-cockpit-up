@@ -28,6 +28,11 @@ COCKPIT_CFG="$RES/cockpit/cockpit-config.js"
 GATE_PORT="${BEARBROWSER_AM_GATE_PORT:-8080}"
 UPSTREAM_PORT="${NOETICA_AM_UPSTREAM_PORT:-8091}"
 RECEIPTS_PORT="${BEARBROWSER_RECEIPTS_PORT:-8092}"
+# Capture sidecar (network-visibility surface): the resource:///bearstart/bearnet.html
+# panel talks to it directly on this fixed loopback port. Optional — only launched
+# if the binary was staged (assemble skips it when cargo is absent).
+CAPTURE_PORT="${BEARBROWSER_CAPTURE_PORT:-8093}"
+CAPTURE_BIN="$RES/sidecars/bearbrowser-capture-sidecar-bin"
 
 for f in "$BIN" "$GATE" "$RECEIPTS"; do
   [ -e "$f" ] || { echo "[cockpit-up] ERROR: missing $f (run assemble-cockpit.sh)"; exit 1; }
@@ -52,6 +57,14 @@ echo "[cockpit-up] sidecar → :$UPSTREAM_PORT   gate → :$GATE_PORT   receipts
 NOETICA_AM_PORT="$UPSTREAM_PORT" NOETICA_OFFLINE="${NOETICA_OFFLINE:-1}" "$BIN" >/tmp/bb-cockpit-sidecar.log 2>&1 & pids+=($!)
 NOETICA_AM_UPSTREAM_PORT="$UPSTREAM_PORT" BEARBROWSER_AM_GATE_PORT="$GATE_PORT" python3 "$GATE" >/tmp/bb-cockpit-gate.log 2>&1 & pids+=($!)
 BEARBROWSER_RECEIPTS_PORT="$RECEIPTS_PORT" python3 "$RECEIPTS" >/tmp/bb-cockpit-receipts.log 2>&1 & pids+=($!)
+
+# Capture sidecar — governed by the same bridge (--repo-root $RES resolves
+# scripts/agent-control-bridge.py + policy/). It reimplements no policy and
+# refuses to run if the bridge is missing, so this is safe to launch blindly.
+if [ -x "$CAPTURE_BIN" ]; then
+  echo "[cockpit-up] capture → :$CAPTURE_PORT"
+  "$CAPTURE_BIN" --repo-root "$RES" --port "$CAPTURE_PORT" >/tmp/bb-cockpit-capture.log 2>&1 & pids+=($!)
+fi
 
 # 2. Bounded health summary — report, don't hang.
 gate_ok=000; rcpt_ok=000
