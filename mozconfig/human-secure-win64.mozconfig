@@ -1,0 +1,23 @@
+# BearBrowser human-secure profile — Windows x86_64 CROSS-COMPILE (from Linux).
+#
+# This is consumed by scripts/build-windows-cross.sh, which provides the
+# required environment:
+#   WINSYSROOT             case-insensitive (ciopfs) view of the MSVC + Win SDK tree
+#   MOZ_WINDOWS_APP_SDK_DIR dir holding the 8 WindowsAppRuntime redist DLLs
+#   MOZ_WINDOWS_RS_DIR     extracted `windows` rust crate source
+#   CBINDGEN               path to cbindgen 0.29.1
+#   MOZ_CLANG_BIN          bin dir of the bootstrap clang (clang-cl, llvm-rc/lib/mt)
+#
+# Proven 2026-07-22 on sovereign-linux-builder (clang 20.1.8, MSVC 14.44, SDK 10.0.26100).
+
+ac_add_options --target=x86_64-pc-windows-msvc
+ac_add_options --disable-bootstrap
+ac_add_options --without-wasm-sandboxed-libraries
+# We ship via Chocolatey/winget/portable zip — not Mozilla's maintenance service.
+# (Also: the packager hard-requires maintenanceservice_installer.exe otherwise.)
+ac_add_options --disable-maintenance-service
+
+export CC="${MOZ_CLANG_BIN:-$HOME/.mozbuild/clang/bin}/clang-cl"
+export CXX="${MOZ_CLANG_BIN:-$HOME/.mozbuild/clang/bin}/clang-cl"
+
+mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-win64
