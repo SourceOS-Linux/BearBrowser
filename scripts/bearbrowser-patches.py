@@ -347,6 +347,47 @@ def bearbrowser_patches():
     # l10n locale patching skipped for dev build (--with-l10n-base removed from mozconfig)
     print("-> Skipping l10n download (dev build — en-US only)")
 
+    # ── BearStart: branded start page (new tab + home) ──
+    # Ported from the native macOS shell's landing page. Packaged into the
+    # browser omni.ja via FINAL_TARGET_FILES (same mechanism as bearblocker)
+    # so it ships identically on Linux/Windows/macOS with no package-manifest
+    # entries. Served at resource:///bearstart/bearbrowser-start.html; wired
+    # as the new-tab page by settings/start/bearstart-autoconfig.js (appended
+    # to bearbrowser.cfg) and as the homepage by the human-secure user.js.
+    _bs_dir = Path("browser/bearstart")
+    _bs_dir.mkdir(exist_ok=True)
+    _bs_src = Path("../settings/start")
+    _bs_files = ["bearbrowser-start.html", "dm-sans-latin.woff2", "dm-sans-latin-ext.woff2"]
+    _bs_installed = []
+    for _bs_file in _bs_files:
+        _src = _bs_src / _bs_file
+        if _src.exists():
+            _shutil.copy(str(_src), str(_bs_dir / _bs_file))
+            _bs_installed.append(_bs_file)
+            print(f"-> Installed {_bs_file} to browser/bearstart/")
+        else:
+            print(f"warning: {_src} not found — BearStart asset missing")
+    _bs_mozbuild = _bs_dir / "moz.build"
+    if _bs_installed and not _bs_mozbuild.exists():
+        _bs_mozbuild.write_text(
+            "# BearStart start page — packaged to dist/bin/browser/bearstart/\n"
+            "# Accessible at resource:///bearstart/ inside the browser.\n"
+            "FINAL_TARGET_FILES.bearstart += [\n"
+            + "".join(f'    "{f}",\n' for f in _bs_installed)
+            + "]\n"
+        )
+        print("-> Created browser/bearstart/moz.build")
+    _browser_mozbuild_bs = Path("browser/moz.build")
+    if _bs_installed and _browser_mozbuild_bs.exists():
+        _bm_bs = _browser_mozbuild_bs.read_text()
+        if '"bearstart"' not in _bm_bs:
+            _bm_bs = _bm_bs.replace(
+                '    "actors",\n    "base",',
+                '    "actors",\n    "base",\n    "bearstart",',
+            )
+            _browser_mozbuild_bs.write_text(_bm_bs)
+            print("-> Added bearstart to browser/moz.build DIRS")
+
     # ── BearBlocker: native adblock-rust content classifier + cosmetic filtering ──
     # Step 1: Install filter lists into browser/bearblocker/
     _bb_dir = Path("browser/bearblocker")
