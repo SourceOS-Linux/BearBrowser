@@ -368,6 +368,57 @@ spec:
         reclassifyTo: prohibited
         as: unlock-door
   # ---------------------------------------------------------------------------
+  # captureActionContract — the SAME enforcing action→class model applied to the
+  # network-visibility sidecar (capture-sidecar): session packet capture, the
+  # live connection map, and the per-domain firewall. Read surfaces (status, map
+  # snapshot, firewall list) are allowed. Starting a whole-session packet capture
+  # and exporting the resulting pcap are the two EXFILTRATION vectors here, so
+  # they are prohibited by default — no agent or injected planner can silently
+  # record or export traffic — and reclassify to gated ONLY on an explicit,
+  # present-tense cockpit user gesture (actor=user AND userGesture=true).
+  # ---------------------------------------------------------------------------
+  captureActionContract:
+    policyRef: urn:srcos:policy:bearbrowser-capture
+    defaultDecision: deny
+    actionClasses:
+      allowed:
+        - action: capture-status
+          replayClass: exact
+          eventType: capture.capture-status
+        - action: list-connections
+          replayClass: exact
+          eventType: capture.list-connections
+        - action: list-firewall
+          replayClass: exact
+          eventType: capture.list-firewall
+      gated:
+        - action: capture-stop
+          replayClass: non-replayable-side-effect
+          eventType: capture.capture-stop
+        - action: firewall-set
+          replayClass: non-replayable-side-effect
+          eventType: capture.firewall-set
+      # eventType is the NATURAL action name; the bridge derives
+      # capture.policy.violation from the prohibited CLASS at decision time, so a
+      # gesture-permitted capture attests capture.capture-start (not the
+      # violation string) — same rule as the iot contract above.
+      prohibited:
+        - action: capture-start
+          eventType: capture.capture-start
+        - action: capture-export
+          eventType: capture.capture-export
+    policyConditions:
+      - id: capture-with-user-gesture
+        description: Starting a packet capture is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: capture-start
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: export-with-user-gesture
+        description: Exporting a captured pcap is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: capture-export
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+  # ---------------------------------------------------------------------------
   # agentMachineActionContract — the SAME enforcing action→class model applied to
   # the cockpit's local agent (the bundled Noetica agent-machine loopback sidecar,
   # 127.0.0.1). Lane 4 of docs/cockpit-composition-plan.md: the cockpit talks to
