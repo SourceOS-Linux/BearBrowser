@@ -407,6 +407,19 @@ spec:
           eventType: capture.capture-start
         - action: capture-export
           eventType: capture.capture-export
+        # Installing the BPF capture-permission helper is a privileged, one-time
+        # system change (admin prompt). An agent must NEVER trigger it; only an
+        # explicit user gesture reclassifies it to gated.
+        - action: capture-enable
+          eventType: capture.capture-enable
+        # WHOIS/OSINT sends the peer IP to an external registry — an agent must
+        # never quietly fingerprint who you're connected to. User gesture only.
+        - action: whois
+          eventType: capture.whois
+        # Deep OSINT fans the IP/domain out to multiple external providers — even
+        # more reason an agent must never fire it silently. User gesture only.
+        - action: osint
+          eventType: capture.osint
     policyConditions:
       - id: capture-with-user-gesture
         description: Starting a packet capture is permitted (as gated) only on an explicit cockpit user gesture.
@@ -416,6 +429,21 @@ spec:
       - id: export-with-user-gesture
         description: Exporting a captured pcap is permitted (as gated) only on an explicit cockpit user gesture.
         appliesTo: capture-export
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: enable-with-user-gesture
+        description: Installing the capture-permission helper is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: capture-enable
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: whois-with-user-gesture
+        description: An external WHOIS/OSINT lookup is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: whois
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: osint-with-user-gesture
+        description: A deep OSINT fan-out is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: osint
         when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
         reclassifyTo: gated
   # ---------------------------------------------------------------------------

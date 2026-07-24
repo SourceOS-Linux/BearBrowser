@@ -18,3 +18,6 @@ __pycache__/
 # Rust build output
 capture-sidecar/target/
 iot-sidecar/target/
+
+# GeoIP city DB is large (131MB) — staged at build time, not committed
+capture-sidecar/geoip/dbip-city-lite.mmdb

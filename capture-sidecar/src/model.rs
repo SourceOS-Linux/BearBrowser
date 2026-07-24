@@ -93,18 +93,50 @@ impl Default for FirewallDecision {
     }
 }
 
-/// One observed connection, streamed to the cockpit map panel.
+/// Which processes the live connection monitor watches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    /// Only browser processes (bearbrowser/firefox) — "what is my browser talking to".
+    Browser,
+    /// Every process's outbound connections — the whole machine.
+    System,
+}
+
+impl Default for Scope {
+    fn default() -> Self {
+        Scope::Browser
+    }
+}
+
+/// One observed connection, streamed to the cockpit map/graph panel. Sourced
+/// either from the browser's own request hooks (rich: real host + resourceType)
+/// or the live OS connection monitor (process + remote addr, no root needed).
 #[derive(Clone, Debug, Serialize)]
 pub struct ConnectionRecord {
-    /// eTLD+1 of the endpoint (e.g. "doubleclick.net").
+    /// Stable identity for the graph: how the node is keyed (process|remote or
+    /// domain|type). Lets the panel add/update/remove a node in place.
+    pub key: String,
+    /// eTLD+1 of the endpoint (e.g. "doubleclick.net"), or reverse-DNS owner /
+    /// bare IP when that's all the monitor has.
     pub domain: String,
     #[serde(rename = "pageUrl")]
     pub page_url: String,
     #[serde(rename = "resourceType")]
     pub resource_type: String,
+    /// Owning local process (live monitor); empty for browser-hook records.
+    #[serde(default)]
+    pub process: String,
+    /// Remote endpoint "ip:port" (live monitor); empty for browser-hook records.
+    #[serde(default)]
+    pub remote: String,
     pub category: ConnCategory,
     pub blocked: bool,
-    /// Unix seconds.
+    /// Local IP intelligence (geolocation + ASN/owner), resolved from bundled
+    /// databases — no network. None for browser-hook records (no remote IP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo: Option<crate::geo::GeoInfo>,
+    /// Unix seconds, last seen.
     pub timestamp: u64,
 }
 
@@ -115,8 +147,10 @@ pub struct ConnectionRecord {
 pub enum SidecarEvent {
     /// A raw line from the capture engine.
     Packet { line: String },
-    /// A newly observed connection (from the browser's own network telemetry).
+    /// A new or updated connection (browser telemetry or live OS monitor).
     Connection(ConnectionRecord),
+    /// A connection the live monitor no longer sees — the panel fades its node.
+    ConnectionClosed { key: String },
     /// Capture lifecycle transitions, so the panel can update its controls.
     CaptureState {
         running: bool,

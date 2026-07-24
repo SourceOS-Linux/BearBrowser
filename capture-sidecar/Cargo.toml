@@ -38,3 +38,4 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # Event / capture ids.
 uuid = { version = "1", features = ["v4"] }
+maxminddb = "0.24"
