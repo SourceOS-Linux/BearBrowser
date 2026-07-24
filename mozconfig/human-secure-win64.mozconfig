@@ -16,6 +16,13 @@ ac_add_options --without-wasm-sandboxed-libraries
 # We ship via Chocolatey/winget/portable zip — not Mozilla's maintenance service.
 # (Also: the packager hard-requires maintenanceservice_installer.exe otherwise.)
 ac_add_options --disable-maintenance-service
+# Disable the crash reporter. Two reasons: (1) it phones home to Mozilla, which a
+# sovereign privacy browser does not want; (2) breakpad's Windows minidump
+# generator uses stdext::checked_array_iterator, an MSVC extension REMOVED in
+# current MSVC STL (14.4x) — so it does not compile fresh with clang-cl + the
+# SDK we cross against. (A warm-ccache build can mask this by reusing an older
+# .obj; a clean CI build cannot.) We don't ship Mozilla's crash pipeline anyway.
+ac_add_options --disable-crashreporter
 
 export CC="${MOZ_CLANG_BIN:-$HOME/.mozbuild/clang/bin}/clang-cl"
 export CXX="${MOZ_CLANG_BIN:-$HOME/.mozbuild/clang/bin}/clang-cl"
