@@ -146,11 +146,22 @@ pub fn spawn(
                 let _ = events.send(SidecarEvent::Connection(rec));
             }
 
-            // Reap connections the monitor owns (conn|…) that are no longer live.
-            for key in monitor.keys() {
-                if key.starts_with("conn|") && !live_keys.contains(&key) {
-                    if monitor.remove(&key) {
-                        let _ = events.send(SidecarEvent::ConnectionClosed { key });
+            // Reap connections the monitor owns (conn|…) that haven't been seen
+            // for a grace period. Browser HTTPS sockets are short-lived, so
+            // reaping the instant one leaves lsof makes the graph flicker; a
+            // GRACE keeps a domain "active" for a while after its last socket
+            // closes, then it fades — the way Little Snitch behaves. `timestamp`
+            // is refreshed by upsert on every sighting, so a still-live domain
+            // never ages out.
+            const GRACE_SECS: u64 = 25;
+            let now = now_secs();
+            for rec in monitor.snapshot() {
+                if rec.key.starts_with("conn|")
+                    && !live_keys.contains(&rec.key)
+                    && now.saturating_sub(rec.timestamp) > GRACE_SECS
+                {
+                    if monitor.remove(&rec.key) {
+                        let _ = events.send(SidecarEvent::ConnectionClosed { key: rec.key });
                     }
                 }
             }

@@ -140,7 +140,7 @@ canvas { display: block; width: 100%; height: 100%; }
             vx: 0, vy: 0, r: 6, born: performance.now() };
       nodes.set(rec.domain, n);
     }
-    n.cat = rec.category; n.blocked = rec.blocked;
+    n.cat = rec.category; n.blocked = rec.blocked; n.dying = null;   // traffic resumed → revive
     if (rec.process) n.procs.add(rec.process);
     return n;
   }
@@ -190,12 +190,13 @@ canvas { display: block; width: 100%; height: 100%; }
       a.vx = (a.vx + fx*dt) * 0.86; a.vy = (a.vy + fy*dt) * 0.86;
       a.x += a.vx; a.y += a.vy;
     }
-    // grow/shrink radius toward target; remove fully-dead nodes
-    var now = performance.now();
+    // grow/shrink radius toward target; remove fully-faded nodes. Growth is
+    // snappy; the dying fade is deliberately slow so an ended connection reads
+    // as a gentle fade-out, never a flicker.
     nodes.forEach(function(n, k){
       var target = n.dying ? 0 : Math.min(6 + Math.sqrt(n.count)*4.5, 30);
-      n.r += (target - n.r) * 0.15;
-      if (n.dying && n.r < 0.6) nodes.delete(k);
+      n.r += (target - n.r) * (n.dying ? 0.04 : 0.15);
+      if (n.dying && n.r < 0.5) nodes.delete(k);
     });
   }
 
