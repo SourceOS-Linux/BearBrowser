@@ -126,8 +126,7 @@ jobs:
           DATE=$(date +%Y-%m-%d)
           TAG="nightly-${DATE}"
           NOTES="$(printf 'Automated nightly build — Windows x86_64 (cross-compiled from Linux, clang-cl).\n\nPortable zip + NSIS installer. Not signed. Developer use only.\n\nCommit: `%s`\nFirefox base: %s\n' '${{ github.sha }}' '${{ env.VERSION }}')"
-          gh release upload "$TAG" "${{ steps.stage.outputs.zip }}" "${{ steps.stage.outputs.exe }}" --clobber 2>/dev/null || \
-          gh release create "$TAG" "${{ steps.stage.outputs.zip }}" "${{ steps.stage.outputs.exe }}" \
-            --title "BearBrowser Nightly ${DATE}" \
-            --notes "$NOTES" \
-            --prerelease
+          # Create-if-missing, then upload just this lane's assets (never fail on
+          # an existing shared tag; never delete the other lanes' assets).
+          gh release create "$TAG" --title "BearBrowser Nightly ${DATE}" --notes "$NOTES" --prerelease 2>/dev/null || true
+          gh release upload "$TAG" "${{ steps.stage.outputs.zip }}" "${{ steps.stage.outputs.exe }}" --clobber
