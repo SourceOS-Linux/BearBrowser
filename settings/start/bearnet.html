@@ -213,15 +213,31 @@ html,body { height:100%; background:var(--bg); color:var(--text);
   }
   function hideDetail(){ $("detail").classList.remove("show"); }
 
-  function investigate(n){ if(!n.remoteIP) return; var o=$("dOsint"); o.className="osint show"; o.innerHTML="<div class='load'>looking up registry (RDAP)…</div>";
-    post("/whois", gesture({ip:n.remoteIP, approvalToken:"action:whois"})).then(function(res){
+  function investigate(n){ if(!n.remoteIP) return; var o=$("dOsint"); o.className="osint show";
+    o.innerHTML="<div class='load'>scanning registry, ports, reverse-IP, certs…</div>";
+    post("/osint", gesture({ip:n.remoteIP, domain:n.domain, approvalToken:"action:osint"})).then(function(res){
       if(!res.ok){ o.innerHTML="<div class='load'>lookup denied: "+esc(res.body.error||res.status)+"</div>"; return; }
-      if(res.body.timedOut){ o.innerHTML="<div class='load'>registry slow — local ASN shown above</div>"; return; }
-      var w=res.body.whois||{}, html="";
+      var d=res.body, reg=d.registry||{}, host=d.host||{}, others=d.otherDomains||[], subs=d.subdomains||[], html="";
       function r(k,v){ return v?("<div class='r'><span class='k'>"+k+"</span><span class='v'>"+esc(v)+"</span></div>"):""; }
-      html += r("Owner", w.owner); html += r("Block", w.netRange); html += r("Net name", w.netName);
-      html += r("Type", w.type); html += r("Registered", w.registered); html += r("Updated", w.updated); html += r("Handle", w.handle);
-      o.innerHTML = html || "<div class='load'>no registry record</div>";
+      function sect(t){ return "<div class='t'>"+t+"</div>"; }
+      // Registry / ownership
+      html += sect("Registry");
+      html += r("Owner", reg.owner); html += r("Block", reg.netRange);
+      html += r("Type", reg.type); html += r("Registered", reg.registered); html += r("Updated", reg.updated); html += r("Abuse", reg.abuse);
+      // Host services
+      if((host.ports&&host.ports.length)||(host.vulns&&host.vulns.length)){
+        html += sect("Host");
+        html += r("Open ports", (host.ports||[]).join(", "));
+        if(host.vulns&&host.vulns.length) html += r("Vulns", host.vulns.slice(0,8).join(", "));
+        if(host.hostnames&&host.hostnames.length) html += r("Hostnames", host.hostnames.slice(0,4).join(", "));
+      }
+      // Other domains on this IP
+      if(others.length){ html += sect("Other domains on this IP ("+others.length+")");
+        html += "<div class='r'><span class='v'>"+others.slice(0,10).map(esc).join("<br>")+(others.length>10?"<br>…":"")+"</span></div>"; }
+      // Subdomains from cert transparency
+      if(subs.length){ html += sect("Subdomains ("+subs.length+")");
+        html += "<div class='r'><span class='v'>"+subs.slice(0,10).map(esc).join("<br>")+(subs.length>10?"<br>…":"")+"</span></div>"; }
+      o.innerHTML = html || "<div class='load'>no OSINT records found</div>";
     }).catch(function(e){ o.innerHTML="<div class='load'>lookup failed</div>"; });
   }
 

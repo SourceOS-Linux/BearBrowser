@@ -416,6 +416,10 @@ spec:
         # never quietly fingerprint who you're connected to. User gesture only.
         - action: whois
           eventType: capture.whois
+        # Deep OSINT fans the IP/domain out to multiple external providers — even
+        # more reason an agent must never fire it silently. User gesture only.
+        - action: osint
+          eventType: capture.osint
     policyConditions:
       - id: capture-with-user-gesture
         description: Starting a packet capture is permitted (as gated) only on an explicit cockpit user gesture.
@@ -435,6 +439,11 @@ spec:
       - id: whois-with-user-gesture
         description: An external WHOIS/OSINT lookup is permitted (as gated) only on an explicit cockpit user gesture.
         appliesTo: whois
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: osint-with-user-gesture
+        description: A deep OSINT fan-out is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: osint
         when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
         reclassifyTo: gated
   # ---------------------------------------------------------------------------

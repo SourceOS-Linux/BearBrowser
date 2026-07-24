@@ -65,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .route("/scope", get(scope_get).post(scope_set))
         .route("/geo/:ip", get(geo_lookup))
         .route("/whois", post(whois))
+        .route("/osint", post(osint))
         .route("/firewall", get(fw_list).post(fw_set).delete(fw_clear))
         .route("/events", get(ws_upgrade))
         // The panel (resource:// origin) fetches this loopback service cross-origin.
@@ -402,6 +403,40 @@ fn parse_rdap(v: &serde_json::Value) -> serde_json::Value {
         "registered": event("registration"),
         "updated": event("last changed"),
     })
+}
+
+#[derive(Deserialize)]
+struct OsintBody {
+    ip: String,
+    #[serde(default)]
+    domain: String,
+    #[serde(default)]
+    actor: Actor,
+    #[serde(rename = "userGesture", default)]
+    user_gesture: bool,
+    #[serde(rename = "approvalToken", default)]
+    approval_token: Option<String>,
+}
+
+/// Deep OSINT — fans out to several free external sources (Shodan InternetDB,
+/// reverse-IP, cert transparency, RDAP). SENDS the IP/domain to third parties,
+/// so it is prohibited for agents and gated on an explicit user gesture.
+async fn osint(State(st): State<AppState>, Json(body): Json<OsintBody>) -> ApiResult<Response> {
+    let cmd = Command {
+        action: "osint".into(),
+        actor: body.actor,
+        user_gesture: body.user_gesture,
+        approval_token: body.approval_token,
+        params: vec![("ip".into(), body.ip.clone())],
+    };
+    let decision = gate::evaluate(&st.gate, &cmd).await;
+    if !decision.permitted() {
+        return Err(denied(&decision));
+    }
+    if body.ip.parse::<std::net::IpAddr>().is_err() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "not an IP address".into()));
+    }
+    Ok(Json(crate::osint::investigate(&body.ip, &body.domain).await).into_response())
 }
 
 async fn fw_list(State(st): State<AppState>) -> Json<serde_json::Value> {

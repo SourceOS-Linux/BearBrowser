@@ -14,6 +14,7 @@ mod geo;
 mod model;
 mod netmap;
 mod netmon;
+mod osint;
 mod server;
 
 use firewall::Firewall;
