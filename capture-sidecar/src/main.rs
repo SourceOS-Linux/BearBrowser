@@ -6,11 +6,13 @@
 //! `scripts/agent-control-bridge.py --surface capture` engine — this binary
 //! reimplements NO policy and refuses to start if the bridge is absent.
 
+mod bpf;
 mod capture;
 mod firewall;
 mod gate;
 mod model;
 mod netmap;
+mod netmon;
 mod server;
 
 use firewall::Firewall;
@@ -126,13 +128,22 @@ async fn main() -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&cfg.state_dir).ok();
     let (events, _) = broadcast::channel(1024);
+    let firewall = Arc::new(Firewall::load(Some(cfg.state_dir.join("firewall.json"))));
+    let monitor = Arc::new(NetworkMonitor::new(2048));
+    let scope: netmon::SharedScope =
+        Arc::new(std::sync::RwLock::new(model::Scope::default()));
+
+    // The live connection monitor — the real, no-root network surface.
+    netmon::spawn(monitor.clone(), firewall.clone(), events.clone(), scope.clone());
+
     let state = AppState {
         gate: Arc::new(GateConfig::from_repo_root(&cfg.repo_root)),
-        firewall: Arc::new(Firewall::load(Some(cfg.state_dir.join("firewall.json")))),
-        monitor: Arc::new(NetworkMonitor::new(2048)),
+        firewall,
+        monitor,
         events,
         session: Arc::new(tokio::sync::Mutex::new(None)),
         save_dir: cfg.save_dir,
+        scope,
     };
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), cfg.port);

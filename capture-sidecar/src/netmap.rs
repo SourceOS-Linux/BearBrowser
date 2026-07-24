@@ -2,7 +2,7 @@
 //! Ported from the native shell's BBConnectionRecord / BBNetworkMonitor.
 
 use crate::model::{ConnCategory, ConnectionRecord};
-use std::collections::VecDeque;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -50,30 +50,31 @@ pub fn classify(etld: &str) -> ConnCategory {
     }
 }
 
-fn now_secs() -> u64 {
+pub fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 
-/// Bounded, in-memory record of observed connections. No persistence — the map
-/// is per-session, exactly like the shell.
+/// Live map of active/recent connections, keyed for in-place graph updates.
+/// The live OS monitor upserts on each poll and removes when a connection
+/// disappears; the browser hook upserts one-shot request records.
 pub struct NetworkMonitor {
-    recs: Mutex<VecDeque<ConnectionRecord>>,
+    conns: Mutex<HashMap<String, ConnectionRecord>>,
     cap: usize,
 }
 
 impl NetworkMonitor {
     pub fn new(cap: usize) -> Self {
         NetworkMonitor {
-            recs: Mutex::new(VecDeque::with_capacity(cap.min(1024))),
+            conns: Mutex::new(HashMap::new()),
             cap,
         }
     }
 
-    /// Build + store a record from a raw host, returning the built record so the
-    /// caller can fan it out over the event bus.
+    /// Build a classified record from a browser-hook observation (host + page +
+    /// type). Keyed by domain|type so repeat requests coalesce into one node.
     pub fn record(
         &self,
         host: &str,
@@ -82,33 +83,69 @@ impl NetworkMonitor {
         blocked: bool,
     ) -> ConnectionRecord {
         let domain = etld_plus_one(host);
+        let key = format!("host|{domain}|{resource_type}");
         let rec = ConnectionRecord {
+            key,
             category: classify(&domain),
             domain,
             page_url: page_url.to_string(),
             resource_type: resource_type.to_string(),
+            process: String::new(),
+            remote: String::new(),
             blocked,
             timestamp: now_secs(),
         };
-        if let Ok(mut q) = self.recs.lock() {
-            if q.len() >= self.cap {
-                q.pop_front();
-            }
-            q.push_back(rec.clone());
-        }
+        self.upsert(rec.clone());
         rec
     }
 
-    pub fn snapshot(&self) -> Vec<ConnectionRecord> {
-        self.recs
+    /// Insert or refresh a connection node by its key.
+    pub fn upsert(&self, rec: ConnectionRecord) {
+        if let Ok(mut m) = self.conns.lock() {
+            if m.len() >= self.cap && !m.contains_key(&rec.key) {
+                // Evict the oldest to stay bounded.
+                if let Some(oldest) = m
+                    .values()
+                    .min_by_key(|r| r.timestamp)
+                    .map(|r| r.key.clone())
+                {
+                    m.remove(&oldest);
+                }
+            }
+            m.insert(rec.key.clone(), rec);
+        }
+    }
+
+    /// Remove a connection node (the live monitor no longer sees it).
+    pub fn remove(&self, key: &str) -> bool {
+        self.conns
             .lock()
-            .map(|q| q.iter().cloned().collect())
+            .map(|mut m| m.remove(key).is_some())
+            .unwrap_or(false)
+    }
+
+    /// Keys currently present (used by the monitor to diff each poll).
+    pub fn keys(&self) -> Vec<String> {
+        self.conns
+            .lock()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn snapshot(&self) -> Vec<ConnectionRecord> {
+        self.conns
+            .lock()
+            .map(|m| {
+                let mut v: Vec<_> = m.values().cloned().collect();
+                v.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+                v
+            })
             .unwrap_or_default()
     }
 
     pub fn clear(&self) {
-        if let Ok(mut q) = self.recs.lock() {
-            q.clear();
+        if let Ok(mut m) = self.conns.lock() {
+            m.clear();
         }
     }
 }

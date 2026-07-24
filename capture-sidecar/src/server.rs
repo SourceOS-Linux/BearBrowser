@@ -32,6 +32,8 @@ pub struct AppState {
     pub session: Arc<Mutex<Option<Session>>>,
     /// Where saved captures default to (chosen path overrides per-request).
     pub save_dir: PathBuf,
+    /// Live monitor scope (browser-only vs whole machine), switchable at runtime.
+    pub scope: crate::netmon::SharedScope,
 }
 
 struct ApiError(StatusCode, String);
@@ -56,7 +58,9 @@ pub fn router(state: AppState) -> Router {
         .route("/capture/start", post(start))
         .route("/capture/stop", post(stop))
         .route("/capture/save", post(save))
+        .route("/capture/enable", post(enable))
         .route("/map", get(map).post(map_ingest).delete(map_clear))
+        .route("/scope", get(scope_get).post(scope_set))
         .route("/firewall", get(fw_list).post(fw_set).delete(fw_clear))
         .route("/events", get(ws_upgrade))
         // The panel (resource:// origin) fetches this loopback service cross-origin.
@@ -93,18 +97,38 @@ pub async fn serve(addr: SocketAddr, state: AppState) -> Result<()> {
 async fn status(State(st): State<AppState>) -> Json<serde_json::Value> {
     let det = capture::detect();
     let running = st.session.lock().await.is_some();
+    // `available` = an engine binary exists; `canCapture` = we can actually open
+    // a BPF device (the real gate). The panel offers "Enable" when available but
+    // not canCapture — the live connection map never needs either.
     Json(json!({
         "available": det.is_some(),
+        "canCapture": det.is_some() && crate::bpf::can_capture(),
         "engine": det.as_ref().map(|d| d.engine.label()),
         "binary": det.as_ref().map(|d| d.binary.to_string_lossy()),
         "running": running,
         "guidance": det.is_none().then_some(
             "No capture engine found. Install Wireshark (provides dumpcap/tshark) \
-             or ensure tcpdump is on PATH. On macOS you may also need read access \
-             to /dev/bpf* (add yourself to the access_bpf group). On Linux, grant \
-             dumpcap CAP_NET_RAW or run via the wireshark group."
+             or ensure tcpdump is on PATH."
         ),
     }))
+}
+
+async fn enable(State(st): State<AppState>, Json(body): Json<GestureBody>) -> ApiResult<Response> {
+    let cmd = Command {
+        action: "capture-enable".into(),
+        actor: body.actor,
+        user_gesture: body.user_gesture,
+        approval_token: body.approval_token,
+        params: vec![],
+    };
+    let decision = gate::evaluate(&st.gate, &cmd).await;
+    if !decision.permitted() {
+        return Err(denied(&decision));
+    }
+    match crate::bpf::enable().await {
+        Ok(instructions) => Ok(Json(json!({ "enabled": true, "instructions": instructions })).into_response()),
+        Err(e) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, e)),
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -219,6 +243,25 @@ async fn map(State(st): State<AppState>) -> Json<serde_json::Value> {
 async fn map_clear(State(st): State<AppState>) -> Json<serde_json::Value> {
     st.monitor.clear();
     Json(json!({ "cleared": true }))
+}
+
+async fn scope_get(State(st): State<AppState>) -> Json<serde_json::Value> {
+    let s = *st.scope.read().unwrap();
+    Json(json!({ "scope": s }))
+}
+
+#[derive(Deserialize)]
+struct ScopeBody {
+    scope: crate::model::Scope,
+}
+
+/// Switch the live monitor between browser-only and whole-machine. Read-ish
+/// (changes only what's observed, not what's allowed) — ungated. Clears the
+/// current node set so the graph repopulates cleanly under the new scope.
+async fn scope_set(State(st): State<AppState>, Json(b): Json<ScopeBody>) -> Json<serde_json::Value> {
+    *st.scope.write().unwrap() = b.scope;
+    st.monitor.clear();
+    Json(json!({ "scope": b.scope }))
 }
 
 #[derive(Deserialize)]

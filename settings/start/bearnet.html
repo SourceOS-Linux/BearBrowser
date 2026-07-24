@@ -3,298 +3,321 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<!-- BearNet — the network-visibility cockpit panel: session packet capture,
-     live connection map, and per-domain firewall. Talks ONLY to the loopback
-     capture-sidecar (governed by agent-control-bridge --surface capture).
-     Ported from the native shell's BBPacketCapture/BBNetworkMonitor/BBFirewall
-     panels. Packaged into browser omni.ja at browser/bearstart/; served at
-     resource:///bearstart/bearnet.html. Self-contained, no network fetches. -->
+<!-- BearNet — live network map. A force-directed graph of every endpoint the
+     browser (or the whole machine) is talking to right now, fed by the
+     capture-sidecar's no-root connection monitor over the /events WebSocket.
+     Click a node to allow/block it. Packaged at resource:///bearstart/bearnet.html. -->
+<meta name="bearbrowser-bootstrap" content="BearNet network map active">
 <title>BearNet — Network</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --bg: #0c0e0d; --panel: #121614; --border: rgba(255,255,255,.08);
+  --bg: #0a0c0b; --panel: #10141200; --border: rgba(255,255,255,.09);
   --text: #e8f0ea; --muted: #7f8b83; --accent: #45c87a; --accent-dim: #1b6b45;
-  --term-bg: #0a0c0b; --term-fg: #4ade80;
-  --tracker: #ff6b6b; --analytics: #ffa94d; --cdn: #4dabf7; --unknown: #7f8b83;
+  --tracker: #ff5d5d; --analytics: #ffab48; --cdn: #4dabf7; --unknown: #8b978f;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
-html, body {
-  height: 100%; background: var(--bg); color: var(--text);
+html, body { height: 100%; background: var(--bg); color: var(--text);
   font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-body { display: flex; flex-direction: column; min-height: 100vh; padding: 20px; gap: 16px; }
-header { display: flex; align-items: center; gap: 10px; }
-.mark { width: 30px; height: 30px; border-radius: 9px; background: var(--accent-dim);
-  display: flex; align-items: center; justify-content: center; font-size: 17px; }
-h1 { font-size: 18px; font-weight: 600; letter-spacing: -.2px; }
-.subtitle { font-size: 11.5px; color: var(--muted); margin-left: auto; display: flex; align-items: center; gap: 6px; }
+  -webkit-font-smoothing: antialiased; overflow: hidden; }
+#stage { position: fixed; inset: 0; }
+canvas { display: block; width: 100%; height: 100%; }
+
+/* top bar */
+.bar { position: fixed; top: 0; left: 0; right: 0; height: 52px; display: flex; align-items: center;
+  gap: 12px; padding: 0 16px; z-index: 5;
+  background: linear-gradient(180deg, rgba(10,12,11,.92), rgba(10,12,11,0)); }
+.mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent-dim);
+  display: flex; align-items: center; justify-content: center; font-size: 15px; }
+.title { font-size: 15px; font-weight: 600; letter-spacing: -.2px; }
+.seg { display: flex; background: #161b18; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.seg button { font: inherit; font-size: 12px; color: var(--muted); background: none; border: none;
+  padding: 6px 13px; cursor: pointer; }
+.seg button.on { background: var(--accent-dim); color: #eafff2; }
+.spacer { flex: 1; }
+.status { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.dot.live { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.dot.live { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
 .dot.err { background: var(--tracker); }
+.legend { position: fixed; bottom: 14px; left: 16px; z-index: 5; display: flex; gap: 14px;
+  font-size: 11px; color: var(--muted); }
+.legend b { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle; }
 
-.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; min-height: 0; }
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
-  padding: 16px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
-.card.wide { grid-column: 1 / -1; }
-.card h2 { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
-.card h2 .tag { font-size: 10px; font-weight: 500; color: var(--muted); border: 1px solid var(--border);
-  border-radius: 5px; padding: 1px 6px; }
+/* detail popover */
+.detail { position: fixed; z-index: 6; width: 250px; background: #12171400; backdrop-filter: blur(18px);
+  background-color: rgba(18,23,20,.86); border: 1px solid var(--border); border-radius: 13px; padding: 14px;
+  box-shadow: 0 8px 40px rgba(0,0,0,.5); display: none; }
+.detail.show { display: block; }
+.detail .dom { font-size: 15px; font-weight: 600; word-break: break-all; margin-bottom: 3px; }
+.detail .cat { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.detail .meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.6; word-break: break-all; }
+.detail .acts { display: flex; gap: 8px; margin-top: 12px; }
+.detail button { flex: 1; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--text);
+  background: #1b211d; border: 1px solid var(--border); border-radius: 9px; padding: 8px; cursor: pointer; }
+.detail button.block:hover { border-color: var(--tracker); color: var(--tracker); }
+.detail button.allow:hover { border-color: var(--accent); color: var(--accent); }
+.detail button.on-block { background: rgba(255,93,93,.16); border-color: var(--tracker); color: var(--tracker); }
+.detail button.on-allow { background: rgba(69,200,122,.16); border-color: var(--accent); color: var(--accent); }
 
-.controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-button { font-family: inherit; font-size: 12.5px; font-weight: 500; color: var(--text);
-  background: #1a201d; border: 1px solid var(--border); border-radius: 9px; padding: 7px 13px;
-  cursor: pointer; transition: background .12s, border-color .12s; }
-button:hover:not(:disabled) { background: #222a26; border-color: var(--accent-dim); }
-button.primary { background: var(--accent-dim); border-color: transparent; color: #eafff2; }
-button.primary:hover:not(:disabled) { background: #218a58; }
-button.danger:hover:not(:disabled) { border-color: var(--tracker); }
-button:disabled { opacity: .4; cursor: not-allowed; }
-
-.term { flex: 1; min-height: 160px; background: var(--term-bg); border: 1px solid var(--border);
-  border-radius: 9px; padding: 10px 12px; overflow: auto; font-family: var(--mono); font-size: 11px;
-  line-height: 1.5; color: var(--term-fg); white-space: pre-wrap; word-break: break-all; }
-.term .sys { color: var(--muted); }
-.term .err { color: var(--tracker); }
-
-.hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
-.hint a { color: var(--accent); }
-
-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-.scroll { flex: 1; min-height: 120px; overflow: auto; border: 1px solid var(--border); border-radius: 9px; }
-th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 500; color: var(--muted);
-  padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
-td { padding: 6px 10px; border-bottom: 1px solid rgba(255,255,255,.04); font-family: var(--mono); }
-tr:hover td { background: rgba(255,255,255,.02); }
-.cat { display: inline-block; font-size: 9.5px; font-weight: 600; padding: 1px 6px; border-radius: 5px;
-  text-transform: uppercase; letter-spacing: .03em; }
-.cat.tracker { color: var(--tracker); background: rgba(255,107,107,.12); }
-.cat.analytics { color: var(--analytics); background: rgba(255,169,77,.12); }
-.cat.cdn { color: var(--cdn); background: rgba(77,171,247,.12); }
-.cat.unknown { color: var(--unknown); background: rgba(127,139,131,.12); }
-.blocked { color: var(--tracker); font-weight: 600; }
-.rule-allow { color: var(--accent); } .rule-block { color: var(--tracker); }
-.fw-row { display: flex; gap: 6px; align-items: center; }
-.fw-row input { flex: 1; background: var(--term-bg); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text); font-family: var(--mono); font-size: 12px; padding: 7px 10px; outline: none; }
-.fw-row input:focus { border-color: var(--accent-dim); }
-.empty { color: var(--muted); font-size: 11.5px; padding: 14px; text-align: center; }
-.count { color: var(--muted); font-weight: 400; }
+/* capture strip */
+.cap { position: fixed; bottom: 14px; right: 16px; z-index: 5; display: flex; align-items: center; gap: 8px;
+  background: rgba(18,23,20,.82); border: 1px solid var(--border); border-radius: 11px; padding: 7px 10px; }
+.cap .cs { font-size: 11.5px; color: var(--muted); max-width: 260px; }
+.cap button { font: inherit; font-size: 12px; font-weight: 500; color: var(--text); background: #1b211d;
+  border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; cursor: pointer; }
+.cap button.go { background: var(--accent-dim); border-color: transparent; color: #eafff2; }
+.cap button:disabled { opacity: .4; cursor: not-allowed; }
+.counts { position: fixed; top: 60px; left: 16px; z-index: 4; font-size: 12px; color: var(--muted); }
+.counts .n { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
+<div id="stage"><canvas id="c"></canvas></div>
 
-<header>
-  <div class="mark">🐻</div>
-  <h1>BearNet</h1>
-  <div class="subtitle"><span class="dot" id="wsDot"></span><span id="wsLabel">connecting…</span></div>
-</header>
-
-<div class="grid">
-  <!-- ── Packet capture ─────────────────────────────────────────────── -->
-  <div class="card">
-    <h2>Packet Capture <span class="tag" id="engineTag">—</span></h2>
-    <div class="controls">
-      <button class="primary" id="btnStart">Start Capture</button>
-      <button class="danger" id="btnStop" disabled>Stop</button>
-      <button id="btnSave" disabled>Save pcap</button>
-      <button id="btnClear">Clear</button>
-    </div>
-    <div class="hint" id="captureHint" style="display:none"></div>
-    <div class="term" id="term"><span class="sys">Waiting for capture engine…</span></div>
+<div class="bar">
+  <div class="mark">🐻</div><span class="title">BearNet</span>
+  <div class="seg" id="scopeSeg">
+    <button data-scope="browser" class="on">Browser</button>
+    <button data-scope="system">Whole machine</button>
   </div>
+  <div class="spacer"></div>
+  <div class="status"><span class="dot" id="dot"></span><span id="stat">connecting…</span></div>
+</div>
 
-  <!-- ── Firewall ───────────────────────────────────────────────────── -->
-  <div class="card">
-    <h2>Firewall <span class="count" id="fwCount"></span></h2>
-    <div class="fw-row">
-      <input id="fwDomain" placeholder="domain.com" autocomplete="off" spellcheck="false">
-      <button id="btnBlock" class="danger">Block</button>
-      <button id="btnAllow">Allow</button>
-    </div>
-    <div class="scroll">
-      <table><thead><tr><th>Domain</th><th>Rule</th><th></th></tr></thead>
-      <tbody id="fwBody"></tbody></table>
-      <div class="empty" id="fwEmpty">No rules — every domain follows the blocklist.</div>
-    </div>
-  </div>
+<div class="counts"><span class="n" id="cNodes">0</span> endpoints ·
+  <span class="n" id="cBlocked">0</span> blocked ·
+  <span class="n" id="cTrackers">0</span> trackers</div>
 
-  <!-- ── Connection map ─────────────────────────────────────────────── -->
-  <div class="card wide">
-    <h2>Connection Map <span class="count" id="mapCount"></span>
-      <span style="margin-left:auto"><button id="btnMapClear">Clear map</button></span></h2>
-    <div class="scroll">
-      <table><thead><tr><th>Domain</th><th>Category</th><th>Type</th><th>Page</th><th>Status</th></tr></thead>
-      <tbody id="mapBody"></tbody></table>
-      <div class="empty" id="mapEmpty">No connections observed yet.</div>
-    </div>
+<div class="legend">
+  <span><b style="background:var(--tracker)"></b>Tracker</span>
+  <span><b style="background:var(--analytics)"></b>Analytics</span>
+  <span><b style="background:var(--cdn)"></b>CDN</span>
+  <span><b style="background:var(--unknown)"></b>Other</span>
+</div>
+
+<div class="detail" id="detail">
+  <div class="dom" id="dDom"></div>
+  <div class="cat" id="dCat"></div>
+  <div class="meta" id="dMeta"></div>
+  <div class="acts">
+    <button class="block" id="dBlock">Block</button>
+    <button class="allow" id="dAllow">Allow</button>
   </div>
+</div>
+
+<div class="cap">
+  <span class="cs" id="capStat">packet capture…</span>
+  <button class="go" id="capBtn" disabled>Capture</button>
 </div>
 
 <script>
 (function () {
   "use strict";
-  // Base URL of the loopback capture-sidecar. bearbrowser-cockpit-up rewrites
-  // this to the live port; default matches the fixed dev port.
   var cfg = (window.__COCKPIT_CONFIG__ && window.__COCKPIT_CONFIG__.bases) || {};
   var BASE = (cfg.capture || "http://127.0.0.1:8093").replace(/\/$/, "");
   var WS = BASE.replace(/^http/, "ws") + "/events";
+  var $ = function (id){ return document.getElementById(id); };
+  var COLORS = { tracker: "#ff5d5d", analytics: "#ffab48", cdn: "#4dabf7", unknown: "#8b978f" };
+  function catColor(cat){ return COLORS[cat] || COLORS.unknown; }
 
-  var $ = function (id) { return document.getElementById(id); };
-  function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){
-    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+  // ── canvas + DPI ────────────────────────────────────────────────────
+  var cv = $("c"), ctx = cv.getContext("2d"), W = 0, H = 0, DPR = Math.min(window.devicePixelRatio||1, 2);
+  function resize(){ W = cv.clientWidth; H = cv.clientHeight; cv.width = W*DPR; cv.height = H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
+  window.addEventListener("resize", resize); resize();
 
-  var running = false, engineName = null;
+  // ── graph model: one node per domain (aggregating connections) ──────
+  // nodes: domain -> { domain, cat, count, blocked, procs:Set, x,y,vx,vy, r, born }
+  var nodes = new Map();
+  var conns = new Map();   // key -> {domain} so a close can decrement its domain
+  var selected = null, hover = null;
 
-  // ── terminal ────────────────────────────────────────────────────────
-  var term = $("term"), MAX_LINES = 500;
-  function log(line, cls) {
-    var atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 24;
-    var span = document.createElement("span");
-    if (cls) span.className = cls;
-    span.textContent = line + "\n";
-    term.appendChild(span);
-    while (term.childElementCount > MAX_LINES) term.removeChild(term.firstChild);
-    if (atBottom) term.scrollTop = term.scrollHeight;
-  }
-
-  // ── status ──────────────────────────────────────────────────────────
-  function refreshStatus() {
-    fetch(BASE + "/capture/status").then(function(r){return r.json();}).then(function(s){
-      engineName = s.engine || null;
-      $("engineTag").textContent = s.available ? s.engine : "unavailable";
-      running = !!s.running;
-      applyRunning();
-      if (!s.available && s.guidance) {
-        var h = $("captureHint"); h.style.display = "block";
-        h.innerHTML = esc(s.guidance) +
-          ' <a href="https://www.wireshark.org/download.html">Get Wireshark</a>';
-      } else { $("captureHint").style.display = "none"; }
-    }).catch(function(){ $("engineTag").textContent = "offline"; });
-  }
-  function applyRunning() {
-    $("btnStart").disabled = running || $("engineTag").textContent === "unavailable";
-    $("btnStop").disabled = !running;
-    $("btnSave").disabled = !running;
-    $("btnStart").textContent = running ? "Capturing…" : "Start Capture";
-  }
-
-  // ── capture controls (Start = the explicit user gesture) ────────────
-  function gestureBody(extra) {
-    return Object.assign({ actor: "user", userGesture: true }, extra || {});
-  }
-  function post(path, body) {
-    return fetch(BASE + path, { method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body || {}) }).then(function(r){
-        return r.json().then(function(j){ return { ok: r.ok, status: r.status, body: j }; });
-      });
-  }
-  $("btnStart").onclick = function () {
-    log("$ starting capture…", "sys");
-    post("/capture/start", gestureBody({ approvalToken: "action:capture-start" }))
-      .then(function(res){
-        if (res.ok) { running = true; applyRunning(); log("● capture running ("+(res.body.engine||"")+")", "sys"); }
-        else log("✗ denied: " + (res.body.error || res.status), "err");
-      }).catch(function(e){ log("✗ " + e, "err"); });
-  };
-  $("btnStop").onclick = function () {
-    post("/capture/stop", gestureBody({ approvalToken: "action:capture-stop" }))
-      .then(function(res){ if (res.ok){ running=false; applyRunning(); log("■ capture stopped","sys"); }
-        else log("✗ " + (res.body.error||res.status), "err"); });
-  };
-  $("btnSave").onclick = function () {
-    post("/capture/save", gestureBody({ approvalToken: "action:capture-export" }))
-      .then(function(res){ if (res.ok) log("💾 saved → " + res.body.saved, "sys");
-        else log("✗ " + (res.body.error||res.status), "err"); });
-  };
-  $("btnClear").onclick = function () { term.textContent = ""; };
-
-  // ── connection map ──────────────────────────────────────────────────
-  var mapRows = {};
-  function renderMapRow(c) {
-    var key = c.domain + "|" + c.resourceType;
-    var tr = mapRows[key];
-    if (!tr) {
-      tr = document.createElement("tr"); mapRows[key] = tr; $("mapBody").appendChild(tr);
+  function nodeFor(rec) {
+    var n = nodes.get(rec.domain);
+    if (!n) {
+      var a = Math.random()*Math.PI*2, rad = 120 + Math.random()*120;
+      n = { domain: rec.domain, cat: rec.category, count: 0, blocked: rec.blocked,
+            procs: new Set(), x: W/2 + Math.cos(a)*rad, y: H/2 + Math.sin(a)*rad,
+            vx: 0, vy: 0, r: 6, born: performance.now() };
+      nodes.set(rec.domain, n);
     }
-    tr.innerHTML =
-      "<td>" + esc(c.domain) + "</td>" +
-      '<td><span class="cat ' + esc(c.category) + '">' + esc(c.category) + "</span></td>" +
-      "<td>" + esc(c.resourceType || "—") + "</td>" +
-      "<td>" + esc((c.pageUrl||"").replace(/^https?:\/\//,"").slice(0,32)) + "</td>" +
-      "<td>" + (c.blocked ? '<span class="blocked">BLOCKED</span>' : "allowed") + "</td>";
-    var n = Object.keys(mapRows).length;
-    $("mapCount").textContent = "· " + n + " endpoint" + (n===1?"":"s");
-    $("mapEmpty").style.display = n ? "none" : "block";
+    n.cat = rec.category; n.blocked = rec.blocked;
+    if (rec.process) n.procs.add(rec.process);
+    return n;
   }
-  function loadMap() {
-    fetch(BASE + "/map").then(function(r){return r.json();}).then(function(d){
-      (d.connections||[]).forEach(renderMapRow);
-    }).catch(function(){});
+  function addConn(rec) {
+    var prev = conns.get(rec.key);
+    if (prev && prev.domain !== rec.domain) decr(prev.domain);
+    if (!prev || prev.domain !== rec.domain) { nodeFor(rec).count++; }
+    else { nodeFor(rec); }
+    conns.set(rec.key, { domain: rec.domain });
+    refreshCounts();
   }
-  $("btnMapClear").onclick = function () {
-    fetch(BASE + "/map", { method: "DELETE" }).then(function(){
-      $("mapBody").innerHTML = ""; mapRows = {}; $("mapCount").textContent = "";
-      $("mapEmpty").style.display = "block";
+  function decr(domain) {
+    var n = nodes.get(domain); if (!n) return;
+    n.count--; if (n.count <= 0) { n.dying = performance.now(); }
+  }
+  function closeConn(key) {
+    var c = conns.get(key); if (!c) return;
+    conns.delete(key); decr(c.domain); refreshCounts();
+  }
+  function setBlocked(domain, blocked) {
+    var n = nodes.get(domain); if (n) n.blocked = blocked;
+    // also reflect in any node whose eTLD matches (domain rules are eTLD+1)
+    refreshCounts();
+  }
+
+  function refreshCounts() {
+    var live = 0, blk = 0, trk = 0;
+    nodes.forEach(function(n){ if (n.dying) return; live++; if (n.blocked) blk++; if (n.cat==="tracker") trk++; });
+    $("cNodes").textContent = live; $("cBlocked").textContent = blk; $("cTrackers").textContent = trk;
+  }
+
+  // ── physics: repulsion + spring to ring + center gravity ────────────
+  function tick(dt) {
+    var cx = W/2, cy = H/2, arr = [...nodes.values()];
+    for (var i=0;i<arr.length;i++){
+      var a = arr[i]; if (a.dragging) continue;
+      var fx=0, fy=0;
+      for (var j=0;j<arr.length;j++){ if (i===j) continue;
+        var b = arr[j], dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy+0.01, d=Math.sqrt(d2);
+        var rep = 900 / d2; fx += dx/d*rep; fy += dy/d*rep;
+      }
+      // spring toward a preferred radius from center (bigger nodes sit closer)
+      var ddx=a.x-cx, ddy=a.y-cy, dist=Math.sqrt(ddx*ddx+ddy*ddy)+0.01;
+      var pref = 150 + 210*Math.exp(-a.count*0.25);
+      var k = (dist - pref) * 0.012; fx -= ddx/dist*k*dist*0.02; fy -= ddy/dist*k*dist*0.02;
+      fx -= ddx*0.0008; fy -= ddy*0.0008;               // gentle center gravity
+      a.vx = (a.vx + fx*dt) * 0.86; a.vy = (a.vy + fy*dt) * 0.86;
+      a.x += a.vx; a.y += a.vy;
+    }
+    // grow/shrink radius toward target; remove fully-dead nodes
+    var now = performance.now();
+    nodes.forEach(function(n, k){
+      var target = n.dying ? 0 : Math.min(6 + Math.sqrt(n.count)*4.5, 30);
+      n.r += (target - n.r) * 0.15;
+      if (n.dying && n.r < 0.6) nodes.delete(k);
     });
-  };
-
-  // ── firewall ────────────────────────────────────────────────────────
-  function loadFirewall() {
-    fetch(BASE + "/firewall").then(function(r){return r.json();}).then(function(d){
-      var rules = d.rules || {}, keys = Object.keys(rules), body = $("fwBody");
-      body.innerHTML = "";
-      keys.forEach(function(dom){
-        var dec = rules[dom], tr = document.createElement("tr");
-        tr.innerHTML = "<td>" + esc(dom) + "</td>" +
-          '<td class="rule-' + esc(dec) + '">' + esc(dec).toUpperCase() + "</td>" +
-          '<td><button data-dom="' + esc(dom) + '" class="fwReset">reset</button></td>';
-        body.appendChild(tr);
-      });
-      Array.prototype.forEach.call(document.querySelectorAll(".fwReset"), function(b){
-        b.onclick = function(){ setRule(b.getAttribute("data-dom"), "ask"); };
-      });
-      $("fwCount").textContent = keys.length ? "· " + keys.length : "";
-      $("fwEmpty").style.display = keys.length ? "none" : "block";
-    }).catch(function(){});
   }
-  function setRule(domain, decision) {
-    if (!domain) return;
-    post("/firewall", gestureBody({ domain: domain, decision: decision,
-      approvalToken: "action:firewall-set" })).then(function(res){
-        if (res.ok) { $("fwDomain").value = ""; loadFirewall(); }
-        else log("✗ firewall: " + (res.body.error||res.status), "err");
-      });
-  }
-  $("btnBlock").onclick = function(){ setRule($("fwDomain").value.trim(), "block"); };
-  $("btnAllow").onclick = function(){ setRule($("fwDomain").value.trim(), "allow"); };
-  $("fwDomain").addEventListener("keydown", function(e){ if (e.key==="Enter") $("btnBlock").click(); });
 
-  // ── live event stream ───────────────────────────────────────────────
-  function connectWS() {
-    var ws;
-    try { ws = new WebSocket(WS); } catch (e) { setDot("err","stream error"); return; }
-    ws.onopen = function(){ setDot("live","live"); };
-    ws.onclose = function(){ setDot("","reconnecting…"); setTimeout(connectWS, 2000); };
-    ws.onerror = function(){ setDot("err","stream error"); };
-    ws.onmessage = function(ev){
-      var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      if (m.kind === "packet") log(m.line);
-      else if (m.kind === "connection") renderMapRow(m);
-      else if (m.kind === "capture-state") { running = m.running; applyRunning();
-        if (m.running) { term.textContent=""; log("● capture running ("+(m.engine||"")+")","sys"); }
-        else log("■ capture stopped","sys"); }
+  // ── render ──────────────────────────────────────────────────────────
+  function draw() {
+    ctx.clearRect(0,0,W,H);
+    var cx = W/2, cy = H/2;
+    // edges
+    ctx.lineWidth = 1;
+    nodes.forEach(function(n){
+      var al = n.dying ? 0.05 : 0.14;
+      ctx.strokeStyle = n.blocked ? "rgba(255,93,93,"+al+")" : "rgba(120,200,150,"+al+")";
+      ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(n.x,n.y); ctx.stroke();
+    });
+    // center (this machine / browser)
+    ctx.save();
+    var grd = ctx.createRadialGradient(cx,cy,2,cx,cy,26);
+    grd.addColorStop(0,"#45c87a"); grd.addColorStop(1,"#1b6b45");
+    ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(cx,cy,17,0,7); ctx.fill();
+    ctx.font = "15px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText("🐻", cx, cy+1); ctx.restore();
+    // nodes
+    nodes.forEach(function(n){
+      var col = catColor(n.cat), a = n.dying ? Math.max(0,n.r/6*0.5) : 1;
+      ctx.globalAlpha = a;
+      ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,7);
+      ctx.fillStyle = n.blocked ? "rgba(255,93,93,.18)" : col; ctx.fill();
+      if (n.blocked){ ctx.lineWidth=2; ctx.strokeStyle=col; ctx.stroke(); }
+      if (n === hover || n === selected){ ctx.lineWidth=2; ctx.strokeStyle="#fff"; ctx.stroke(); }
+      // label for larger / hovered nodes
+      if (n.r > 11 || n === hover || n === selected){
+        ctx.globalAlpha = a*0.9; ctx.fillStyle = "#cfe8d8"; ctx.font="11px "+"'DM Sans',sans-serif";
+        ctx.textAlign="center"; ctx.textBaseline="top";
+        ctx.fillText(n.domain.length>22?n.domain.slice(0,21)+"…":n.domain, n.x, n.y+n.r+3);
+      }
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  var last = performance.now();
+  function loop(now){ var dt = Math.min((now-last)/16.67, 3); last = now; tick(dt); draw(); requestAnimationFrame(loop); }
+  requestAnimationFrame(loop);
+
+  // ── hit-testing + interaction ───────────────────────────────────────
+  function nodeAt(mx,my){ var best=null, bd=1e9;
+    nodes.forEach(function(n){ if(n.dying) return; var d=Math.hypot(n.x-mx,n.y-my); if(d<Math.max(n.r+4,10)&&d<bd){bd=d;best=n;} });
+    return best; }
+  cv.addEventListener("mousemove", function(e){ var r=cv.getBoundingClientRect(); hover=nodeAt(e.clientX-r.left,e.clientY-r.top);
+    cv.style.cursor = hover?"pointer":"default"; });
+  cv.addEventListener("click", function(e){ var r=cv.getBoundingClientRect(); var n=nodeAt(e.clientX-r.left,e.clientY-r.top);
+    selected=n; if(n) showDetail(n, e.clientX, e.clientY); else hideDetail(); });
+
+  function showDetail(n, px, py){
+    var d=$("detail");
+    $("dDom").textContent = n.domain;
+    $("dCat").textContent = n.cat; $("dCat").style.color = catColor(n.cat);
+    $("dMeta").innerHTML = (n.count+" active connection"+(n.count===1?"":"s")) +
+      (n.procs.size ? "<br>via " + [...n.procs].slice(0,4).map(esc).join(", ") : "");
+    var bBlock=$("dBlock"), bAllow=$("dAllow");
+    bBlock.className = "block" + (n.blocked?" on-block":""); bAllow.className = "allow";
+    bBlock.onclick = function(){ setRule(n.domain,"block"); };
+    bAllow.onclick = function(){ setRule(n.domain,"allow"); };
+    d.style.left = Math.min(px+14, W-264)+"px"; d.style.top = Math.min(py+8, H-160)+"px"; d.classList.add("show");
+  }
+  function hideDetail(){ $("detail").classList.remove("show"); }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
+
+  // ── sidecar calls ───────────────────────────────────────────────────
+  function post(path, body){ return fetch(BASE+path,{method:"POST",headers:{"content-type":"application/json"},
+    body:JSON.stringify(body||{})}).then(function(r){return r.json().then(function(j){return {ok:r.ok,status:r.status,body:j};});}); }
+  function gesture(x){ return Object.assign({actor:"user",userGesture:true},x||{}); }
+
+  function setRule(domain, decision){
+    post("/firewall", gesture({domain:domain, decision:decision, approvalToken:"action:firewall-set"}))
+      .then(function(res){ if(res.ok){ setBlocked(domain, decision==="block"); if(selected&&selected.domain===domain){ selected.blocked=decision==="block"; showDetailRefresh(); } } });
+  }
+  function showDetailRefresh(){ if(selected){ var d=$("detail"); if(d.classList.contains("show")) { $("dBlock").className="block"+(selected.blocked?" on-block":""); } } }
+
+  // ── scope toggle ────────────────────────────────────────────────────
+  Array.prototype.forEach.call(document.querySelectorAll("#scopeSeg button"), function(b){
+    b.onclick = function(){
+      Array.prototype.forEach.call(document.querySelectorAll("#scopeSeg button"), function(x){x.classList.remove("on");});
+      b.classList.add("on");
+      nodes.clear(); conns.clear(); selected=null; hideDetail(); refreshCounts();
+      post("/scope", {scope: b.getAttribute("data-scope")});
     };
-  }
-  function setDot(cls, label){ $("wsDot").className = "dot " + cls; $("wsLabel").textContent = label; }
+  });
 
-  // ── boot ────────────────────────────────────────────────────────────
-  refreshStatus(); loadMap(); loadFirewall(); connectWS();
-  setInterval(refreshStatus, 5000);
+  // ── capture strip (honest: shows the real BPF state) ────────────────
+  function refreshCapture(){
+    fetch(BASE+"/capture/status").then(function(r){return r.json();}).then(function(s){
+      var cs=$("capStat"), btn=$("capBtn");
+      if (s.running){ cs.textContent="● capturing ("+(s.engine||"")+")"; btn.textContent="Stop"; btn.disabled=false;
+        btn.onclick=function(){ post("/capture/stop", gesture({approvalToken:"action:capture-stop"})).then(refreshCapture); }; }
+      else if (s.canCapture){ cs.textContent="packet capture ready ("+(s.engine||"")+")"; btn.textContent="Capture"; btn.disabled=false;
+        btn.onclick=function(){ post("/capture/start", gesture({approvalToken:"action:capture-start"})).then(function(res){ if(!res.ok) cs.textContent="denied: "+(res.body.error||res.status); refreshCapture(); }); }; }
+      else if (s.available){ cs.textContent="raw pcap needs capture permission (one-time)"; btn.textContent="Enable"; btn.disabled=false;
+        btn.onclick=enableCapture; }
+      else { cs.textContent="install Wireshark for raw packet capture (the live map above needs nothing)"; btn.textContent="Capture"; btn.disabled=true; }
+    }).catch(function(){ $("capStat").textContent="capture offline"; });
+  }
+  function enableCapture(){
+    post("/capture/enable", gesture({approvalToken:"action:capture-enable"})).then(function(res){
+      $("capStat").textContent = res.ok ? (res.body.instructions||"enabling…") : ("enable failed: "+(res.body.error||res.status));
+      setTimeout(refreshCapture, 1500);
+    });
+  }
+
+  // ── initial load + live stream ──────────────────────────────────────
+  function loadSnapshot(){ fetch(BASE+"/map").then(function(r){return r.json();}).then(function(d){ (d.connections||[]).forEach(addConn); }); }
+  function setDot(c,l){ $("dot").className="dot "+c; $("stat").textContent=l; }
+  function connectWS(){
+    var ws; try{ ws=new WebSocket(WS); }catch(e){ setDot("err","stream error"); return; }
+    ws.onopen=function(){ setDot("live","live"); };
+    ws.onclose=function(){ setDot("","reconnecting…"); setTimeout(connectWS,2000); };
+    ws.onerror=function(){ setDot("err","stream error"); };
+    ws.onmessage=function(ev){ var m; try{m=JSON.parse(ev.data);}catch(e){return;}
+      if(m.kind==="connection") addConn(m);
+      else if(m.kind==="connection-closed") closeConn(m.key); };
+  }
+  loadSnapshot(); connectWS(); refreshCapture(); setInterval(refreshCapture, 5000);
 })();
 </script>
-
 </body>
 </html>
