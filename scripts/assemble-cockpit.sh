@@ -47,6 +47,14 @@ else
   log "WARNING: cargo not found — skipping capture sidecar (BearNet panel will show offline)"
 fi
 
+# 2c. GeoIP databases for BearNet's map + who-owns-it view (DB-IP City + ASN,
+# CC-BY). Fetched here (the 131MB city DB is too big to commit) and staged into
+# the app so geolocation works offline, no per-connection geo-API leak.
+log "staging BearNet GeoIP databases …"
+mkdir -p "$STAGE/geoip"
+bash "$REPO_ROOT/scripts/fetch-geoip.sh" "$STAGE/geoip" || \
+  log "WARNING: GeoIP fetch failed — BearNet map dots/ASN will be partial"
+
 # 3. Stage the runtime scripts + the enforcing contract (Lane 4 + Receipts + orchestrator).
 log "staging runtime scripts + policy contract …"
 for s in bearbrowser-agent-machine bearbrowser-agent-machine-gate.py agent-control-bridge.py \

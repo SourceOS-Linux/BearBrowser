@@ -63,7 +63,8 @@ BEARBROWSER_RECEIPTS_PORT="$RECEIPTS_PORT" python3 "$RECEIPTS" >/tmp/bb-cockpit-
 # refuses to run if the bridge is missing, so this is safe to launch blindly.
 if [ -x "$CAPTURE_BIN" ]; then
   echo "[cockpit-up] capture → :$CAPTURE_PORT"
-  "$CAPTURE_BIN" --repo-root "$RES" --port "$CAPTURE_PORT" >/tmp/bb-cockpit-capture.log 2>&1 & pids+=($!)
+  CAPTURE_SIDECAR_GEOIP="$RES/geoip" \
+    "$CAPTURE_BIN" --repo-root "$RES" --port "$CAPTURE_PORT" >/tmp/bb-cockpit-capture.log 2>&1 & pids+=($!)
 fi
 
 # 2. Bounded health summary — report, don't hang.
