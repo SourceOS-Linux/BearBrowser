@@ -412,6 +412,10 @@ spec:
         # explicit user gesture reclassifies it to gated.
         - action: capture-enable
           eventType: capture.capture-enable
+        # WHOIS/OSINT sends the peer IP to an external registry — an agent must
+        # never quietly fingerprint who you're connected to. User gesture only.
+        - action: whois
+          eventType: capture.whois
     policyConditions:
       - id: capture-with-user-gesture
         description: Starting a packet capture is permitted (as gated) only on an explicit cockpit user gesture.
@@ -426,6 +430,11 @@ spec:
       - id: enable-with-user-gesture
         description: Installing the capture-permission helper is permitted (as gated) only on an explicit cockpit user gesture.
         appliesTo: capture-enable
+        when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
+        reclassifyTo: gated
+      - id: whois-with-user-gesture
+        description: An external WHOIS/OSINT lookup is permitted (as gated) only on an explicit cockpit user gesture.
+        appliesTo: whois
         when: { "and": [ { "==": [ { "var": "actor" }, "user" ] }, { "==": [ { "var": "userGesture" }, true ] } ] }
         reclassifyTo: gated
   # ---------------------------------------------------------------------------

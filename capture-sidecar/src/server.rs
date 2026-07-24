@@ -9,7 +9,7 @@ use crate::model::{Actor, Command, FirewallDecision, SidecarEvent};
 use crate::netmap::NetworkMonitor;
 use anyhow::{bail, Context, Result};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -34,6 +34,8 @@ pub struct AppState {
     pub save_dir: PathBuf,
     /// Live monitor scope (browser-only vs whole machine), switchable at runtime.
     pub scope: crate::netmon::SharedScope,
+    /// Local IP-intelligence DBs (geo + ASN) — no-network enrichment.
+    pub geo: std::sync::Arc<crate::geo::Geo>,
 }
 
 struct ApiError(StatusCode, String);
@@ -61,6 +63,8 @@ pub fn router(state: AppState) -> Router {
         .route("/capture/enable", post(enable))
         .route("/map", get(map).post(map_ingest).delete(map_clear))
         .route("/scope", get(scope_get).post(scope_set))
+        .route("/geo/:ip", get(geo_lookup))
+        .route("/whois", post(whois))
         .route("/firewall", get(fw_list).post(fw_set).delete(fw_clear))
         .route("/events", get(ws_upgrade))
         // The panel (resource:// origin) fetches this loopback service cross-origin.
@@ -283,6 +287,121 @@ async fn map_ingest(State(st): State<AppState>, Json(b): Json<MapIngest>) -> Jso
     let rec = st.monitor.record(&b.host, &b.page_url, &b.resource_type, blocked);
     let _ = st.events.send(SidecarEvent::Connection(rec));
     Json(json!({ "recorded": domain, "blocked": blocked }))
+}
+
+/// Local IP intelligence (geo + ASN/owner) for one IP. No network — answered
+/// entirely from the bundled DBs, so it's an ungated read.
+async fn geo_lookup(State(st): State<AppState>, Path(ip): Path<String>) -> Json<serde_json::Value> {
+    Json(json!({ "ip": ip, "geo": st.geo.lookup(&ip) }))
+}
+
+#[derive(Deserialize)]
+struct WhoisBody {
+    ip: String,
+    #[serde(default)]
+    actor: Actor,
+    #[serde(rename = "userGesture", default)]
+    user_gesture: bool,
+    #[serde(rename = "approvalToken", default)]
+    approval_token: Option<String>,
+}
+
+/// External OSINT: WHOIS the IP at the authoritative registry (port 43). This
+/// SENDS THE IP off-device, so it is gated — an agent can't quietly fingerprint
+/// your peers; only an explicit user "Investigate" click, carrying a token,
+/// permits it. Returns the parsed netblock owner / CIDR / org / allocation.
+async fn whois(State(st): State<AppState>, Json(body): Json<WhoisBody>) -> ApiResult<Response> {
+    let cmd = Command {
+        action: "whois".into(),
+        actor: body.actor,
+        user_gesture: body.user_gesture,
+        approval_token: body.approval_token,
+        params: vec![("ip".into(), body.ip.clone())],
+    };
+    let decision = gate::evaluate(&st.gate, &cmd).await;
+    if !decision.permitted() {
+        return Err(denied(&decision));
+    }
+    // Basic IP sanity so we never fetch arbitrary text.
+    if body.ip.parse::<std::net::IpAddr>().is_err() {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "not an IP address".into()));
+    }
+    // RDAP (the modern WHOIS replacement): structured JSON over HTTPS, one fast
+    // request via rdap.org's bootstrap → the authoritative RIR. Far faster and
+    // cleaner than port-43 whois (which referral-chains for 12–75s). Fetched via
+    // curl so we need no TLS dep in the sidecar. The panel already shows instant
+    // local geo+ASN, so a slow/failed RDAP just means less bonus detail.
+    let url = format!("https://rdap.org/ip/{}", body.ip);
+    let child = tokio::process::Command::new("curl")
+        .args(["-sSL", "--max-time", "8", "-H", "Accept: application/rdap+json", &url])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("rdap fetch failed: {e}")))?;
+    match tokio::time::timeout(std::time::Duration::from_secs(10), child.wait_with_output()).await {
+        Ok(Ok(out)) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let rdap: serde_json::Value = serde_json::from_str(&text).unwrap_or(json!({}));
+            Ok(Json(json!({ "ip": body.ip, "whois": parse_rdap(&rdap) })).into_response())
+        }
+        Ok(Err(e)) => Err(ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("rdap failed: {e}"))),
+        Err(_) => Ok(Json(json!({
+            "ip": body.ip, "timedOut": true, "whois": {},
+            "note": "registry lookup timed out — local geo + ASN shown above"
+        })).into_response()),
+    }
+}
+
+/// Pull the OSINT-relevant fields out of an RDAP IP-network record (RFC 9083).
+/// Uniform across all RIRs, so no per-registry heuristics.
+fn parse_rdap(v: &serde_json::Value) -> serde_json::Value {
+    let s = |x: &serde_json::Value| x.as_str().map(|s| s.to_string());
+    // CIDR from cidr0_cidrs, else the start–end range.
+    let cidr = v["cidr0_cidrs"].as_array().and_then(|a| a.first()).map(|c| {
+        let pfx = c["v4prefix"].as_str().or_else(|| c["v6prefix"].as_str()).unwrap_or("");
+        format!("{}/{}", pfx, c["length"].as_u64().unwrap_or(0))
+    });
+    let range = match (s(&v["startAddress"]), s(&v["endAddress"])) {
+        (Some(a), Some(b)) => Some(format!("{a} – {b}")),
+        _ => None,
+    };
+    // Registrant org: first entity carrying a "registrant" role, its vCard "fn".
+    let mut owner_org = None;
+    if let Some(entities) = v["entities"].as_array() {
+        for e in entities {
+            let is_reg = e["roles"].as_array().map(|r| r.iter().any(|x| x == "registrant")).unwrap_or(false);
+            if is_reg {
+                if let Some(vc) = e["vcardArray"].as_array().and_then(|a| a.get(1)).and_then(|x| x.as_array()) {
+                    for item in vc {
+                        if let Some(arr) = item.as_array() {
+                            if arr.first().and_then(|x| x.as_str()) == Some("fn") {
+                                owner_org = arr.get(3).and_then(|x| x.as_str()).map(|s| s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Registration + last-changed from the events array.
+    let event = |action: &str| -> Option<String> {
+        v["events"].as_array().and_then(|a| {
+            a.iter().find(|e| e["eventAction"] == action)
+                .and_then(|e| e["eventDate"].as_str())
+                .map(|d| d.split('T').next().unwrap_or(d).to_string())
+        })
+    };
+    json!({
+        "owner": owner_org.or_else(|| s(&v["name"])),
+        "netName": s(&v["name"]),
+        "netRange": cidr.or(range),
+        "type": s(&v["type"]),
+        "country": s(&v["country"]),
+        "handle": s(&v["handle"]),
+        "registered": event("registration"),
+        "updated": event("last changed"),
+    })
 }
 
 async fn fw_list(State(st): State<AppState>) -> Json<serde_json::Value> {

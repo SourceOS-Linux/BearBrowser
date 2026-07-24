@@ -5,6 +5,7 @@
 //! (raw packet capture, which does need BPF, is the separate power tool).
 
 use crate::firewall::Firewall;
+use crate::geo::Geo;
 use crate::model::{ConnectionRecord, FirewallDecision, Scope, SidecarEvent};
 use crate::netmap::{classify, etld_plus_one, now_secs, NetworkMonitor};
 use std::collections::{HashMap, HashSet};
@@ -105,6 +106,7 @@ async fn reverse_owner(ip: &str, cache: &Mutex<HashMap<String, String>>) -> Stri
 pub fn spawn(
     monitor: Arc<NetworkMonitor>,
     firewall: Arc<Firewall>,
+    geo: Arc<Geo>,
     events: broadcast::Sender<SidecarEvent>,
     scope: SharedScope,
 ) {
@@ -131,6 +133,8 @@ pub fn spawn(
                 // eTLD+1 it again or an IP like 151.101.129.91 becomes "129.91".
                 let domain = reverse_owner(&r.remote_ip, &dns_cache).await;
                 let blocked = firewall.decision_for(&domain) == FirewallDecision::Block;
+                // Local IP intelligence — geolocation + ASN/owner, no network.
+                let geoinfo = geo.lookup(&r.remote_ip);
                 let rec = ConnectionRecord {
                     key: key.clone(),
                     category: classify(&domain),
@@ -140,6 +144,7 @@ pub fn spawn(
                     process: r.process.clone(),
                     remote: format!("{}:{}", r.remote_ip, r.remote_port),
                     blocked,
+                    geo: Some(geoinfo),
                     timestamp: now_secs(),
                 };
                 monitor.upsert(rec.clone());

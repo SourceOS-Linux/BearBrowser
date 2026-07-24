@@ -10,6 +10,7 @@ mod bpf;
 mod capture;
 mod firewall;
 mod gate;
+mod geo;
 mod model;
 mod netmap;
 mod netmon;
@@ -132,9 +133,15 @@ async fn main() -> anyhow::Result<()> {
     let monitor = Arc::new(NetworkMonitor::new(2048));
     let scope: netmon::SharedScope =
         Arc::new(std::sync::RwLock::new(model::Scope::default()));
+    // Local IP-intelligence databases (geo + ASN). Dev: capture-sidecar/geoip;
+    // override with CAPTURE_SIDECAR_GEOIP; packaged builds stage them alongside.
+    let geoip_dir = std::env::var("CAPTURE_SIDECAR_GEOIP")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| cfg.repo_root.join("capture-sidecar/geoip"));
+    let geo = Arc::new(geo::Geo::load(&geoip_dir));
 
     // The live connection monitor — the real, no-root network surface.
-    netmon::spawn(monitor.clone(), firewall.clone(), events.clone(), scope.clone());
+    netmon::spawn(monitor.clone(), firewall.clone(), geo.clone(), events.clone(), scope.clone());
 
     let state = AppState {
         gate: Arc::new(GateConfig::from_repo_root(&cfg.repo_root)),
@@ -144,6 +151,7 @@ async fn main() -> anyhow::Result<()> {
         session: Arc::new(tokio::sync::Mutex::new(None)),
         save_dir: cfg.save_dir,
         scope,
+        geo,
     };
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), cfg.port);

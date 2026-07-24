@@ -398,7 +398,7 @@ def bearbrowser_patches():
     _bs_dir = Path("browser/bearstart")
     _bs_dir.mkdir(exist_ok=True)
     _bs_src = Path("../settings/start")
-    _bs_files = ["bearbrowser-start.html", "bearnet.html", "dm-sans-latin.woff2", "dm-sans-latin-ext.woff2"]
+    _bs_files = ["bearbrowser-start.html", "bearnet.html", "world.json", "dm-sans-latin.woff2", "dm-sans-latin-ext.woff2"]
     _bs_installed = []
     for _bs_file in _bs_files:
         _src = _bs_src / _bs_file

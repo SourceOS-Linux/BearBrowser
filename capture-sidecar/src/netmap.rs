@@ -93,6 +93,7 @@ impl NetworkMonitor {
             process: String::new(),
             remote: String::new(),
             blocked,
+            geo: None,
             timestamp: now_secs(),
         };
         self.upsert(rec.clone());

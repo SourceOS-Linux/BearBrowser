@@ -132,6 +132,10 @@ pub struct ConnectionRecord {
     pub remote: String,
     pub category: ConnCategory,
     pub blocked: bool,
+    /// Local IP intelligence (geolocation + ASN/owner), resolved from bundled
+    /// databases — no network. None for browser-hook records (no remote IP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo: Option<crate::geo::GeoInfo>,
     /// Unix seconds, last seen.
     pub timestamp: u64,
 }

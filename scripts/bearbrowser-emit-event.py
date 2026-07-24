@@ -47,6 +47,7 @@ EVENT_TYPES = {
     "capture.capture-stop",
     "capture.capture-export",
     "capture.capture-enable",
+    "capture.whois",
     "capture.capture-status",
     "capture.list-connections",
     "capture.list-firewall",
