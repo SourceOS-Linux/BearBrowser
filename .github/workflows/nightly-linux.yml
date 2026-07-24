@@ -230,9 +230,11 @@ jobs:
           [ -n "${{ steps.appimage.outputs.path }}" ] && [ -f "${{ steps.appimage.outputs.path }}" ] && ASSETS+=("${{ steps.appimage.outputs.path }}")
           NOTES="$(printf 'Automated nightly build — Linux (%s).\n\nNot signed. Developer use only.\n\nCommit: `%s`\nFirefox base: %s\n' '${{ matrix.distro }}' '${{ github.sha }}' '${{ env.VERSION }}')"
           if [ ${#ASSETS[@]} -gt 0 ]; then
-            gh release upload "$TAG" "${ASSETS[@]}" --clobber 2>/dev/null || \
-            gh release create "$TAG" "${ASSETS[@]}" \
-              --title "BearBrowser Nightly ${DATE}" \
-              --notes "$NOTES" \
-              --prerelease
+            # Create-if-missing, THEN upload --clobber. All three platform lanes
+            # race on the same nightly-<date> tag; the old "upload || create"
+            # order fell through to `create` (which errors "tag already exists")
+            # whenever the clobber-upload hiccuped. This order never fails on an
+            # existing release.
+            gh release create "$TAG" --title "BearBrowser Nightly ${DATE}" --notes "$NOTES" --prerelease 2>/dev/null || true
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
           fi

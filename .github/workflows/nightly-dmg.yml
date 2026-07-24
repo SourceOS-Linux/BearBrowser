@@ -210,8 +210,6 @@ jobs:
         run: |
           DATE=$(date +%Y-%m-%d)
           TAG="nightly-${DATE}"
-          # Replace any same-day release rather than fail on duplicate tag
-          gh release delete "$TAG" --yes 2>/dev/null || true
           NOTES="$(printf '%s\n' \
             'Automated nightly build from `main`.' \
             '' \
@@ -220,8 +218,9 @@ jobs:
             '' \
             "Commit: \`${{ github.sha }}\`" \
             "Firefox base: ${{ env.VERSION }}")"
-          gh release create "$TAG" \
-            "${{ steps.dmg.outputs.path }}" \
-            --title "BearBrowser Nightly ${DATE}" \
-            --notes "$NOTES" \
-            --prerelease
+          # Non-destructive: create the shared nightly-<date> release only if it
+          # doesn't exist, then upload just THIS lane's asset. The old
+          # `gh release delete` here wiped the Linux + Windows assets that the
+          # other lanes had already uploaded — never delete the shared release.
+          gh release create "$TAG" --title "BearBrowser Nightly ${DATE}" --notes "$NOTES" --prerelease 2>/dev/null || true
+          gh release upload "$TAG" "${{ steps.dmg.outputs.path }}" --clobber
