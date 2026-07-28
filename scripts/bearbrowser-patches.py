@@ -474,6 +474,7 @@ def bearbrowser_patches():
         "BearVaultParent.sys.mjs":   Path("../settings/actors"),
         "BearTrapChild.sys.mjs":     Path("../settings/actors"),
         "BearTrapParent.sys.mjs":    Path("../settings/actors"),
+        "BearTrapMonitor.sys.mjs":   Path("../settings/actors"),
     }
     for _actor_file, _actors_src in _actor_sources.items():
         _src = _actors_src / _actor_file
@@ -517,6 +518,7 @@ def bearbrowser_patches():
                 '    "BearVaultParent.sys.mjs",\n'
                 '    "BearTrapChild.sys.mjs",\n'
                 '    "BearTrapParent.sys.mjs",\n'
+                '    "BearTrapMonitor.sys.mjs",\n'
                 ']\n'
             )
             _am = _am.replace(
