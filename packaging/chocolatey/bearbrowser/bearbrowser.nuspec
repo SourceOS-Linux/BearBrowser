@@ -2,55 +2,45 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
   <metadata>
     <id>bearbrowser</id>
-    <version>0.1.0</version>
-    <packageSourceUrl>https://github.com/SourceOS-Linux/BearBrowser</packageSourceUrl>
+    <version>150.0.1</version>
+    <packageSourceUrl>https://github.com/SourceOS-Linux/BearBrowser/tree/main/packaging/chocolatey</packageSourceUrl>
     <owners>SourceOS-Linux</owners>
     <title>BearBrowser</title>
     <authors>SourceOS-Linux</authors>
     <projectUrl>https://github.com/SourceOS-Linux/BearBrowser</projectUrl>
+    <projectSourceUrl>https://github.com/SourceOS-Linux/BearBrowser</projectSourceUrl>
     <licenseUrl>https://github.com/SourceOS-Linux/BearBrowser/blob/main/LICENSE</licenseUrl>
     <requireLicenseAcceptance>false</requireLicenseAcceptance>
     <bugTrackerUrl>https://github.com/SourceOS-Linux/BearBrowser/issues</bugTrackerUrl>
-    <tags>browser privacy firefox gecko anti-fingerprinting sourceos privacy-browser</tags>
-    <summary>Gecko-first privacy browser with 101 JS anti-fingerprinting protections</summary>
+    <tags>browser privacy firefox gecko anti-fingerprinting sourceos privacy-browser honeypot</tags>
+    <summary>Sovereign privacy browser (Firefox 150 fork) with a live network monitor and honeypot</summary>
     <description><![CDATA[
 # BearBrowser
 
-A Gecko-first (Firefox ESR) privacy browser hardened against fingerprinting and tracking.
+A sovereign, privacy-first browser — a LibreWolf-mirror fork of **Firefox 150** built
+to be the most private browser you can run.
 
 ## Features
 
-- **Gecko engine (Firefox ESR)** — rides FF140 ESR cohort for fingerprinting crowd anonymity
-- **101 JS fingerprinting protections** — Canvas, WebGL, AudioContext, Fonts, Timing, WebRTC all spoofed or normalized
-- **OS spoof layer** — reports normalized platform to avoid cross-session tracking
-- **Anti-tracking** — uBlock-equivalent content filtering baked in, not as extension
-- **SourceOS sovereign** — no Google sync, no telemetry, no cloud dependency
-- **Windows native** — full Win32 browser integration, pinnable to taskbar
-- **Automatic updates** — via Chocolatey or built-in update check
+- **Hardened anti-fingerprinting** — Canvas, WebGL, AudioContext, fonts, timing,
+  navigator and WebRTC surfaces, layered on Firefox's resistFingerprinting.
+- **BearNet** — a built-in loopback network monitor. See every host this browser
+  (or the whole machine) is talking to as a live graph + world map, with
+  click-to-block and on-demand OSINT (RDAP / reverse-IP / certificate transparency).
+  All geolocation is resolved from a **local** GeoIP database — no external lookups.
+- **BearTrap honeypot** — detects and attributes fingerprinting scripts, and blocks
+  canary-token exfiltration outright.
+- **No telemetry, no Google services, no cloud dependency** — fully local-first.
 
-## Privacy Model
+## Install notes
 
-BearBrowser's fingerprinting shield operates at 101 distinct surfaces:
-- Canvas 2D + WebGL pixel data randomization
-- AudioContext frequency response spoofing
-- Font enumeration normalization (reports common set)
-- Screen resolution + color depth normalization
-- Timezone offset stabilization
-- Navigator property normalization
-- Hardware concurrency normalization
-- Battery status API disabled
-- WebRTC leak prevention
-- Sensor API disabled
-
-## Windows Notes
-
-On Windows, BearBrowser uses the Gecko engine exclusively (WKWebView is macOS-only).
-The browser registers itself as a default browser option in Windows settings.
+This package installs the real BearBrowser Windows build from the project's GitHub
+release. The build is currently **unsigned** (no code-signing cert yet), so Windows
+SmartScreen may warn on first run.
     ]]></description>
-    <releaseNotes>https://github.com/SourceOS-Linux/BearBrowser/releases</releaseNotes>
+    <releaseNotes>https://github.com/SourceOS-Linux/BearBrowser/releases/tag/v150.0.1</releaseNotes>
   </metadata>
   <files>
     <file src="tools\**" target="tools" />
-    <file src="legal\**" target="legal" />
   </files>
 </package>

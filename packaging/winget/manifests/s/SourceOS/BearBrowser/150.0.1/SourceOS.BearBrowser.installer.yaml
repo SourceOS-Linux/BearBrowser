@@ -1,5 +1,5 @@
 PackageIdentifier: SourceOS.BearBrowser
-PackageVersion: 0.1.0
+PackageVersion: 150.0.1
 InstallerLocale: en-US
 Platform:
   - Windows.Desktop
@@ -23,16 +23,14 @@ FileExtensions:
 Protocols:
   - http
   - https
-  - ftp
 Commands:
   - bearbrowser
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/SourceOS-Linux/BearBrowser/releases/download/v0.1.0/BearBrowser-0.1.0-windows-x64-setup.exe
-    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+    # sha256 of the v150.0.1 win64 installer.
+    InstallerUrl: https://github.com/SourceOS-Linux/BearBrowser/releases/download/v150.0.1/BearBrowser-150.0.1-win64-installer.exe
+    InstallerSha256: AEE5C5639938C6C39937E5220B9DF488EC7C45EE70BBEAA953844BD8D108485F
     InstallerType: nullsoft
-    ProductCode: '{BearBrowser-0.1.0}'
     UpgradeBehavior: install
-ProductCode: BearBrowser
 ManifestType: installer
 ManifestVersion: 1.6.0
