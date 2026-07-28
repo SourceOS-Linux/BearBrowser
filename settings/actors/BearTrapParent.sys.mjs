@@ -15,18 +15,18 @@
  * Never throws into the content path — a honeypot must not break browsing.
  */
 
-// origin -> Set(canary tokens). Consulted by the network-side matcher.
-const CANARIES = new Map();
-
 export class BearTrapParent extends JSWindowActorParent {
   async receiveMessage(msg) {
     try {
       if (msg.name === "BearTrap:Canary") {
+        // Register with the network-side monitor, which watches outbound
+        // traffic for the token and cancels any request that leaks it.
         const { token, origin } = msg.data || {};
-        if (token && origin) {
-          if (!CANARIES.has(origin)) CANARIES.set(origin, new Set());
-          CANARIES.get(origin).add(token);
-        }
+        const { BearTrapMonitor } = ChromeUtils.importESModule(
+          "resource:///actors/BearTrapMonitor.sys.mjs"
+        );
+        BearTrapMonitor.start();
+        BearTrapMonitor.registerCanary(origin, token);
         return;
       }
       if (msg.name === "BearTrap:Detected") {
@@ -61,16 +61,5 @@ export class BearTrapParent extends JSWindowActorParent {
         body,
       }).catch(() => {});
     } catch (e) {}
-  }
-
-  /** For the network-side matcher: is `text` a registered canary? */
-  static canaryHit(text) {
-    if (!text) return null;
-    for (const [origin, tokens] of CANARIES) {
-      for (const t of tokens) {
-        if (text.includes(t)) return { origin, token: t };
-      }
-    }
-    return null;
   }
 }
