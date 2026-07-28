@@ -514,11 +514,14 @@ def bearbrowser_patches():
                 '    "BearNavParent.sys.mjs",\n'
                 '    "BearSponsorChild.sys.mjs",\n'
                 '    "BearSponsorParent.sys.mjs",\n'
+                # mozbuild's FINAL_TARGET_FILES enforces strict alphabetical
+                # order, so BearTrap* MUST precede BearVault* (T < V) and
+                # BearTrapMonitor sorts between Child and Parent (M < P).
+                '    "BearTrapChild.sys.mjs",\n'
+                '    "BearTrapMonitor.sys.mjs",\n'
+                '    "BearTrapParent.sys.mjs",\n'
                 '    "BearVaultChild.sys.mjs",\n'
                 '    "BearVaultParent.sys.mjs",\n'
-                '    "BearTrapChild.sys.mjs",\n'
-                '    "BearTrapParent.sys.mjs",\n'
-                '    "BearTrapMonitor.sys.mjs",\n'
                 ']\n'
             )
             _am = _am.replace(
