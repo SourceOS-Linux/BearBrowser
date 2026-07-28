@@ -62,6 +62,18 @@ try {
   }
 } catch (e) {}
 
+// ── BearTrap network monitor ────────────────────────────────────────────────
+// Start the honeypot's outbound-traffic watcher early so it's live before any
+// request — it cancels any request that leaks a page's own canary token.
+try {
+  if (!Services.appinfo.inSafeMode) {
+    const { BearTrapMonitor } = ChromeUtils.importESModule(
+      "resource:///actors/BearTrapMonitor.sys.mjs"
+    );
+    BearTrapMonitor.start();
+  }
+} catch (e) {}
+
 try {
   if (!Services.appinfo.inSafeMode) {
     const { AboutNewTab } = ChromeUtils.importESModule(
