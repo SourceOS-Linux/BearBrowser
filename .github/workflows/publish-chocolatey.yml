@@ -1,0 +1,68 @@
+name: Publish Chocolatey
+
+# Packs the BearBrowser Chocolatey package and pushes it to chocolatey.org.
+# Runs automatically when a GitHub release is published, and can be dispatched
+# manually. It is a no-op (with a clear warning) until the CHOCO_API_KEY secret
+# is set, so it never fails a release that predates the key.
+
+on:
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version (defaults to the latest release tag without the leading v)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version + API-key guard
+        id: prep
+        shell: bash
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CHOCO_API_KEY:-}" ]; then
+            echo "::warning::CHOCO_API_KEY secret is not set — skipping Chocolatey publish."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          # Prefer the workflow_dispatch input, else the release tag, else the nuspec.
+          v="${{ github.event.inputs.version }}"
+          if [ -z "$v" ]; then
+            tag="${{ github.event.release.tag_name }}"
+            v="${tag#v}"
+          fi
+          if [ -z "$v" ]; then
+            v="$(grep -oE '<version>[^<]+' packaging/chocolatey/bearbrowser/bearbrowser.nuspec | sed 's/<version>//')"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved package version: $v"
+
+      - name: Pack
+        if: steps.prep.outputs.skip == 'false'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          choco pack packaging/chocolatey/bearbrowser/bearbrowser.nuspec `
+            --version ${{ steps.prep.outputs.version }} `
+            --outputdirectory dist
+
+      - name: Push
+        if: steps.prep.outputs.skip == 'false'
+        shell: pwsh
+        env:
+          CHOCO_API_KEY: ${{ secrets.CHOCO_API_KEY }}
+        run: |
+          $pkg = (Get-ChildItem dist/*.nupkg | Select-Object -First 1).FullName
+          Write-Host "Pushing $pkg"
+          choco push $pkg --source https://push.chocolatey.org/ --api-key $env:CHOCO_API_KEY
