@@ -8,12 +8,61 @@
 // mechanism is setting AboutNewTab.newTabURL from privileged autoconfig JS
 // (requires general.config.sandbox_enabled=false, set in local-settings.js).
 // Wrapped so a failure can never break browser startup.
+
+// ── resource://bearstart/ substitution ──────────────────────────────────────
+// CRITICAL: our start page + BearNet panel are staged LOOSE in the app at
+// <GreD>/browser/bearstart/. `resource:///bearstart/` does NOT resolve to that
+// (it reads from omni.ja, where FINAL_TARGET_FILES never lands + mach package
+// drops it) — verified against a real DMG: the branded new-tab was shipping
+// BROKEN. Register an explicit resource://bearstart/ → that dir so every
+// bearstart URL resolves regardless of packaging. MUST run before anything
+// below uses a bearstart URL.
+try {
+  const rp = Services.io
+    .getProtocolHandler("resource")
+    .QueryInterface(Ci.nsIResProtocolHandler);
+  const dir = Services.dirsvc.get("GreD", Ci.nsIFile);
+  dir.append("browser");
+  dir.append("bearstart");
+  if (dir.exists()) {
+    rp.setSubstitution("bearstart", Services.io.newFileURI(dir));
+  }
+} catch (e) {}
+
+// ── Launch the BearNet capture sidecar on startup ───────────────────────────
+// This is what makes BearNet LIVE instead of a paper tiger: spawn the bundled
+// loopback sidecar so the panel has a data feed. Staged at <GreD>/sidecars/,
+// governed by <GreD>/scripts/agent-control-bridge.py, geo DBs at <GreD>/geoip/.
+// Best-effort — the panel degrades honestly to "offline" if this fails.
+try {
+  if (!Services.appinfo.inSafeMode) {
+    const { Subprocess } = ChromeUtils.importESModule(
+      "resource://gre/modules/Subprocess.sys.mjs"
+    );
+    const greD = Services.dirsvc.get("GreD", Ci.nsIFile);
+    const bin = greD.clone();
+    bin.append("sidecars");
+    bin.append("bearbrowser-capture-sidecar-bin");
+    const geo = greD.clone();
+    geo.append("geoip");
+    if (bin.exists()) {
+      Subprocess.call({
+        command: bin.path,
+        arguments: ["--repo-root", greD.path, "--port", "8093"],
+        environmentAppend: true,
+        environment: { CAPTURE_SIDECAR_GEOIP: geo.path },
+        stderr: "stdout",
+      }).catch(() => {});
+    }
+  }
+} catch (e) {}
+
 try {
   if (!Services.appinfo.inSafeMode) {
     const { AboutNewTab } = ChromeUtils.importESModule(
       "resource:///modules/AboutNewTab.sys.mjs"
     );
-    AboutNewTab.newTabURL = "resource:///bearstart/bearbrowser-start.html";
+    AboutNewTab.newTabURL = "resource://bearstart/bearbrowser-start.html";
   }
 } catch (e) {
   // Leave stock about:newtab in place rather than risk startup.
@@ -25,7 +74,7 @@ try {
 // item, and a Ctrl/Cmd+Alt+N shortcut. All best-effort — never break startup.
 try {
   if (!Services.appinfo.inSafeMode) {
-    const BEARNET_URL = "resource:///bearstart/bearnet.html";
+    const BEARNET_URL = "resource://bearstart/bearnet.html";
     // Small radar glyph, themed to the toolbar's text color.
     const ICON =
       "data:image/svg+xml," +
