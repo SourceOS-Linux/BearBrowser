@@ -164,5 +164,29 @@ ulimit -n "$NOFILE"
 ./mach build -j"${MOZ_BUILD_JOBS:-$(nproc)}"
 ./mach package
 
+# ── Make BearNet LIVE on Windows ─────────────────────────────────────────────
+# Cross-compile the sidecar to Windows (mingw target — far simpler than MSVC
+# cross-linking), stage it + the pages + geo into the unpacked app (GreD =
+# dist/firefox), and re-zip the portable archive so it carries BearNet. The
+# sidecar's connection monitor uses netstat/tasklist on Windows (not lsof).
+# Best-effort — BearNet degrades to "offline" if the sidecar cross-build fails.
+log "BearNet: cross-compile sidecar (windows-gnu) + stage into the app"
+CAPWIN=""
+if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || sudo apt-get install -y -qq gcc-mingw-w64-x86-64 2>/dev/null; then
+  ( cd "$REPO_ROOT" \
+    && rustup target add x86_64-pc-windows-gnu \
+    && cargo build --release --target x86_64-pc-windows-gnu --manifest-path capture-sidecar/Cargo.toml ) \
+    && CAPWIN="$REPO_ROOT/capture-sidecar/target/x86_64-pc-windows-gnu/release/capture-sidecar.exe" || true
+fi
+if [ -d "$SRCDIR/obj-win64/dist/firefox" ]; then
+  bash "$REPO_ROOT/scripts/stage-bearnet.sh" "$SRCDIR/obj-win64/dist/firefox" "$CAPWIN" || true
+  # Re-zip the portable archive with BearNet included.
+  ZIP="$(ls "$SRCDIR"/obj-win64/dist/firefox-*.win64.zip 2>/dev/null | head -1)"
+  if [ -n "$ZIP" ]; then
+    ( cd "$SRCDIR/obj-win64/dist" && rm -f "$ZIP" && zip -qr "$(basename "$ZIP")" firefox )
+    log "re-zipped $(basename "$ZIP") with BearNet staged in"
+  fi
+fi
+
 log "artifacts"
-ls -la "$SRCDIR"/obj-win64/dist/*.win64.zip "$SRCDIR"/obj-win64/dist/*.win64.installer.exe
+ls -la "$SRCDIR"/obj-win64/dist/*.win64.zip "$SRCDIR"/obj-win64/dist/*.win64.installer.exe 2>/dev/null

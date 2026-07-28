@@ -185,10 +185,19 @@ jobs:
           # `mach package` creates, so it failed the moment the build finally
           # got far enough to package. Proven on the sovereign Linux builder.
           ( cd "$SRC" && MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach package )
-          SRC_TAR="$(ls "$OBJ"/dist/bearbrowser-*.linux-x86_64.tar.* 2>/dev/null | head -1)"
+          # Make BearNet LIVE: build the sidecar natively, then stage it + the
+          # pages + geo into the unpacked app dir (GreD = dist/bearbrowser) and
+          # RE-TAR that (mach's own tarball predates the staging). Best-effort —
+          # BearNet degrades to "offline" if the sidecar build fails.
+          CAP=""
+          if command -v cargo >/dev/null 2>&1; then
+            cargo build --release --manifest-path capture-sidecar/Cargo.toml \
+              && CAP="$PWD/capture-sidecar/target/release/capture-sidecar" || true
+          fi
+          bash scripts/stage-bearnet.sh "$OBJ/dist/bearbrowser" "$CAP" || true
           TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.xz"
           mkdir -p build/nightly
-          cp "$SRC_TAR" "build/nightly/${TAR}"
+          tar -C "$OBJ/dist" -cJf "build/nightly/${TAR}" bearbrowser
           echo "name=${TAR}" >> $GITHUB_OUTPUT
           echo "path=build/nightly/${TAR}" >> $GITHUB_OUTPUT
 
