@@ -13,8 +13,8 @@ $version     = '150.0.1'
 $installDir  = "$env:ProgramFiles\BearBrowser"
 $url64       = "https://github.com/SourceOS-Linux/BearBrowser/releases/download/v$version/BearBrowser-$version-win64.zip"
 
-# TODO(release): replace with the published win64.zip SHA256 before merge.
-$checksum64  = 'REPLACE_WITH_ZIP_SHA256'
+# sha256 of BearBrowser-150.0.1-win64.zip from the v150.0.1 release.
+$checksum64  = '01cad9eb2d3a6f828bc3e5ef37e3b9a8a162fa15da66663301aa4fcfb4dd5644'
 
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 

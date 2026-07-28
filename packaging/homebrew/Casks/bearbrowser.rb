@@ -1,7 +1,7 @@
 cask "bearbrowser" do
   version "150.0.1"
-  # TODO(release): replace with `shasum -a 256` of the published DMG before merge.
-  sha256 "REPLACE_WITH_DMG_SHA256"
+  # sha256 of BearBrowser-150.0.1-macos.dmg from the v150.0.1 release.
+  sha256 "9eb0875d6edb04a96dd103d38e2937ebedfde320c56afb9293c186c16bf46ed8"
 
   url "https://github.com/SourceOS-Linux/BearBrowser/releases/download/v#{version}/BearBrowser-#{version}-macos.dmg",
       verified: "github.com/SourceOS-Linux/BearBrowser/"

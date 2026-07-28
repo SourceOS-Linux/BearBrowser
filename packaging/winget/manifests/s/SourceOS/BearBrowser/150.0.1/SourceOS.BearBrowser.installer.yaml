@@ -27,9 +27,9 @@ Commands:
   - bearbrowser
 Installers:
   - Architecture: x64
-    # TODO(release): fill InstallerSha256 with the published .exe SHA256 before merge.
+    # sha256 of the v150.0.1 win64 installer.
     InstallerUrl: https://github.com/SourceOS-Linux/BearBrowser/releases/download/v150.0.1/BearBrowser-150.0.1-win64-installer.exe
-    InstallerSha256: REPLACE_WITH_INSTALLER_SHA256
+    InstallerSha256: AEE5C5639938C6C39937E5220B9DF488EC7C45EE70BBEAA953844BD8D108485F
     InstallerType: nullsoft
     UpgradeBehavior: install
 ManifestType: installer
