@@ -152,6 +152,37 @@ try {
       onCloseWindow() {},
       onWindowTitleChange() {},
     });
+
+    // Badge the BearNet button when BearTrap catches fingerprinting — so the
+    // honeypot is visible from anywhere, not just inside the panel.
+    try {
+      const fpOrigins = new Set();
+      Services.obs.addObserver(
+        {
+          observe(subj) {
+            try {
+              const d = subj && subj.wrappedJSObject;
+              if (d && d.kind === "fingerprint" && d.origin) fpOrigins.add(d.origin);
+              const n = fpOrigins.size;
+              const e2 = Services.wm.getEnumerator("navigator:browser");
+              while (e2.hasMoreElements()) {
+                const b = e2.getNext().document.getElementById("bearnet-button");
+                if (b) {
+                  b.setAttribute(
+                    "tooltiptext",
+                    n + " fingerprinting attempt" + (n === 1 ? "" : "s") +
+                      " caught — open BearNet"
+                  );
+                  b.setAttribute("beartrap", "1");
+                }
+              }
+            } catch (e) {}
+          },
+        },
+        "beartrap-detection",
+        false
+      );
+    } catch (e) {}
   }
 } catch (e) {
   // No entry points rather than a broken browser.

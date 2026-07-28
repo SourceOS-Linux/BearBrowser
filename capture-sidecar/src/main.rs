@@ -153,6 +153,7 @@ async fn main() -> anyhow::Result<()> {
         save_dir: cfg.save_dir,
         scope,
         geo,
+        honeypot: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), cfg.port);

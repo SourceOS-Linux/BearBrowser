@@ -76,7 +76,7 @@ html,body { height:100%; background:var(--bg); color:var(--text);
   <div class="status"><span class="dot" id="dot"></span><span id="stat">connecting…</span></div>
 </div>
 
-<div class="counts"><b id="cNodes">0</b> endpoints · <b id="cBlocked">0</b> blocked · <b id="cTrackers">0</b> trackers</div>
+<div class="counts"><b id="cNodes">0</b> endpoints · <b id="cBlocked">0</b> blocked · <b id="cTrackers">0</b> trackers<span id="hpWrap" style="display:none"> · <b id="cHoney" style="color:var(--tracker)">0</b> 🍯 fingerprinting</span></div>
 <div class="legend">
   <span><i style="background:var(--tracker)"></i>Tracker</span><span><i style="background:var(--analytics)"></i>Analytics</span>
   <span><i style="background:var(--cdn)"></i>CDN</span><span><i style="background:var(--unknown)"></i>Other</span>
@@ -278,7 +278,15 @@ html,body { height:100%; background:var(--bg); color:var(--text);
       post("/scope", { scope: "system" });
     }
   })();
-  loadSnapshot(); connectWS(); refreshCapture(); setInterval(refreshCapture,5000);
+  // BearTrap honeypot — surface fingerprinting attempts the actor caught.
+  function refreshHoneypot(){ fetch(BASE+"/honeypot").then(function(r){return r.json();}).then(function(d){
+    var dets=d.detections||[], origins={}; dets.forEach(function(x){ if(x.kind==="fingerprint") origins[x.origin]=x; });
+    var n=Object.keys(origins).length;
+    $("cHoney").textContent=n; $("hpWrap").style.display = n?"inline":"none";
+    $("hpWrap").title = n? ("Fingerprinting attempts:\n"+Object.keys(origins).map(function(o){return "• "+o.replace(/^https?:\/\//,"")+" ("+(origins[o].surfaceCount)+" surfaces)";}).join("\n")) : "";
+  }).catch(function(){}); }
+  loadSnapshot(); connectWS(); refreshCapture(); refreshHoneypot();
+  setInterval(refreshCapture,5000); setInterval(refreshHoneypot,4000);
 })();
 </script>
 </body>
