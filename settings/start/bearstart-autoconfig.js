@@ -40,12 +40,17 @@ try {
       "resource://gre/modules/Subprocess.sys.mjs"
     );
     const greD = Services.dirsvc.get("GreD", Ci.nsIFile);
-    const bin = greD.clone();
-    bin.append("sidecars");
-    bin.append("bearbrowser-capture-sidecar-bin");
     const geo = greD.clone();
     geo.append("geoip");
-    if (bin.exists()) {
+    // Unix binary or the Windows .exe, whichever was staged.
+    let bin = null;
+    for (const name of ["bearbrowser-capture-sidecar-bin", "bearbrowser-capture-sidecar-bin.exe"]) {
+      const f = greD.clone();
+      f.append("sidecars");
+      f.append(name);
+      if (f.exists()) { bin = f; break; }
+    }
+    if (bin) {
       Subprocess.call({
         command: bin.path,
         arguments: ["--repo-root", greD.path, "--port", "8093"],

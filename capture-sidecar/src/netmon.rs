@@ -24,10 +24,11 @@ struct Raw {
     remote_port: String,
 }
 
-/// Run `lsof` once and parse established outbound TCP connections. Uses field
-/// output (-F) so it's robust to spaces in process names. Best-effort: any
-/// error yields an empty list (the monitor just shows nothing that tick).
-async fn poll_lsof() -> Vec<Raw> {
+/// Unix: run `lsof` once and parse established outbound TCP connections. Uses
+/// field output (-F) so it's robust to spaces in process names. Best-effort:
+/// any error yields an empty list (the monitor just shows nothing that tick).
+#[cfg(unix)]
+async fn poll_connections() -> Vec<Raw> {
     let out = Command::new("lsof")
         .args(["-nP", "-iTCP", "-sTCP:ESTABLISHED", "-Fpcn"])
         .output()
@@ -62,6 +63,52 @@ async fn poll_lsof() -> Vec<Raw> {
                 }
             }
             _ => {}
+        }
+    }
+    rows
+}
+
+/// Windows: `lsof` doesn't exist. Enumerate established outbound TCP via
+/// `netstat -no` (connections + owning PID), then map PID → process name with a
+/// single `tasklist /fo csv` pass. Same Raw rows as the unix path.
+#[cfg(windows)]
+async fn poll_connections() -> Vec<Raw> {
+    // PID -> image name, from one tasklist call.
+    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    if let Ok(out) = Command::new("tasklist").args(["/fo", "csv", "/nh"]).output().await {
+        let text = String::from_utf8_lossy(&out.stdout);
+        for line in text.lines() {
+            // "image.exe","1234","Console","1","12,345 K"
+            let cols: Vec<&str> = line.split("\",\"").collect();
+            if cols.len() >= 2 {
+                let name = cols[0].trim_matches(['"', ' ']).to_string();
+                let pid = cols[1].trim_matches(['"', ' ']).to_string();
+                if !pid.is_empty() {
+                    names.insert(pid, name);
+                }
+            }
+        }
+    }
+    let mut rows = Vec::new();
+    let Ok(out) = Command::new("netstat").args(["-no", "-p", "TCP"]).output().await else {
+        return rows;
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        // Proto Local Foreign State PID  — established outbound only.
+        if f.len() >= 5 && f[0].eq_ignore_ascii_case("TCP") && f[3].eq_ignore_ascii_case("ESTABLISHED") {
+            let foreign = f[2];
+            if let Some(idx) = foreign.rfind(':') {
+                let (host, port) = foreign.split_at(idx);
+                let host = host.trim_matches(['[', ']']);
+                let pid = f[4].to_string();
+                rows.push(Raw {
+                    process: names.get(&pid).cloned().unwrap_or_else(|| format!("pid {pid}")),
+                    remote_ip: host.to_string(),
+                    remote_port: port[1..].to_string(),
+                });
+            }
         }
     }
     rows
@@ -114,7 +161,7 @@ pub fn spawn(
         let dns_cache: Mutex<HashMap<String, String>> = Mutex::new(HashMap::new());
         loop {
             let want_browser = matches!(*scope.read().unwrap(), Scope::Browser);
-            let rows = poll_lsof().await;
+            let rows = poll_connections().await;
 
             let mut live_keys: HashSet<String> = HashSet::new();
             for r in rows {
