@@ -472,6 +472,8 @@ def bearbrowser_patches():
         "BearSponsorParent.sys.mjs": Path("../settings/actors"),
         "BearVaultChild.sys.mjs":    Path("../settings/actors"),
         "BearVaultParent.sys.mjs":   Path("../settings/actors"),
+        "BearTrapChild.sys.mjs":     Path("../settings/actors"),
+        "BearTrapParent.sys.mjs":    Path("../settings/actors"),
     }
     for _actor_file, _actors_src in _actor_sources.items():
         _src = _actors_src / _actor_file
@@ -513,6 +515,8 @@ def bearbrowser_patches():
                 '    "BearSponsorParent.sys.mjs",\n'
                 '    "BearVaultChild.sys.mjs",\n'
                 '    "BearVaultParent.sys.mjs",\n'
+                '    "BearTrapChild.sys.mjs",\n'
+                '    "BearTrapParent.sys.mjs",\n'
                 ']\n'
             )
             _am = _am.replace(
@@ -556,6 +560,20 @@ def bearbrowser_patches():
                 '    matches: ["https://*/*", "http://*/*"],\n'
                 '    allFrames: false,\n'
                 '    enablePreference: "bearbrowser.nav.keyboard.enabled",\n'
+                '  },\n'
+                '\n  BearTrap: {\n'
+                '    parent: {\n'
+                '      esModuleURI: "resource:///actors/BearTrapParent.sys.mjs",\n'
+                '    },\n'
+                '    child: {\n'
+                '      esModuleURI: "resource:///actors/BearTrapChild.sys.mjs",\n'
+                '      events: {\n'
+                '        DOMWindowCreated: {},\n'
+                '      },\n'
+                '    },\n'
+                '    matches: ["https://*/*", "http://*/*"],\n'
+                '    allFrames: true,\n'
+                '    enablePreference: "bearbrowser.honeypot.enabled",\n'
                 '  },\n'
                 '\n  BearSponsor: {\n'
                 '    parent: {\n'
