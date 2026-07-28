@@ -343,6 +343,14 @@ user_pref("browser.link.open_newwindow.restriction", 0);
 // f=link hints, j/k=scroll, d/u=half page, gg=top, G=bottom, H/L=back/forward
 user_pref("bearbrowser.nav.keyboard.enabled", true);
 
+// ── BearTrap honeypot suite ──────────────────────────────────────────────────
+// Zero-trust detection: bait + catch fingerprinters and exfiltrators. The
+// fingerprint honeypot instruments canvas/WebGL/audio/enumeration surfaces and
+// flags a page that probes 3+ of them; the canary plants a per-origin decoy
+// token and attributes any outbound leak of it. Detection-only — never breaks a
+// page. (RFP still spoofs the values; BearTrap tells you WHO tried.)
+user_pref("bearbrowser.honeypot.enabled", true);
+
 // ── BearSponsor — native SponsorBlock integration ────────────────────────────
 // Skips sponsored segments on YouTube using hash-based SponsorBlock API.
 // Only 4 hex chars of SHA-256(videoId) are sent; full ID stays local.
