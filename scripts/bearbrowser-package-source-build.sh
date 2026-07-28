@@ -232,6 +232,40 @@ EOF_BEARSTART_WIRING
   echo "      bearstart-autoconfig.js → Contents/Resources/bearbrowser.cfg (new-tab wiring)"
 fi
 
+# ── Stage the bearstart pages LOOSE + the BearNet sidecar/bridge/geo ──────────
+# resource://bearstart/ (registered by the autoconfig) maps to
+# Contents/Resources/browser/bearstart/. FINAL_TARGET_FILES doesn't survive
+# mach package (verified on a real DMG — the branded new-tab shipped BROKEN), so
+# stage these loose here, guaranteed. This is what makes the start page render
+# and BearNet go LIVE instead of a paper tiger.
+bs_dest="$out_app/Contents/Resources/browser/bearstart"
+mkdir -p "$bs_dest"
+for f in bearbrowser-start.html bearnet.html world.json dm-sans-latin.woff2 dm-sans-latin-ext.woff2; do
+  [ -f "$repo_root/settings/start/$f" ] && cp "$repo_root/settings/start/$f" "$bs_dest/"
+done
+echo "      start page + BearNet panel → $bs_dest ($(ls "$bs_dest" | wc -l | tr -d ' ') files)"
+
+# The capture sidecar + its governance bridge + policy + geo DBs, so the
+# autoconfig can launch a LIVE BearNet. Best-effort: if the sidecar binary
+# wasn't built (no cargo at build time), BearNet degrades honestly to "offline".
+res="$out_app/Contents/Resources"
+_capbin="$repo_root/capture-sidecar/target/release/capture-sidecar"
+if [ -x "$_capbin" ]; then
+  mkdir -p "$res/sidecars" "$res/scripts" "$res/policy" "$res/geoip"
+  cp "$_capbin" "$res/sidecars/bearbrowser-capture-sidecar-bin"
+  cp "$repo_root/scripts/agent-control-bridge.py" "$res/scripts/"
+  cp "$repo_root/scripts/strip-json-comments.py" "$res/scripts/" 2>/dev/null || true
+  cp "$repo_root/policy/bearbrowser-contract.yaml" "$res/policy/"
+  # GeoIP: fetch if absent, then stage both DBs (city + ASN).
+  bash "$repo_root/scripts/fetch-geoip.sh" "$repo_root/capture-sidecar/geoip" >/dev/null 2>&1 || true
+  for db in dbip-city-lite.mmdb dbip-asn-lite.mmdb; do
+    [ -f "$repo_root/capture-sidecar/geoip/$db" ] && cp "$repo_root/capture-sidecar/geoip/$db" "$res/geoip/"
+  done
+  echo "      capture sidecar + bridge + policy + $(ls "$res/geoip" 2>/dev/null | wc -l | tr -d ' ') geoip DBs → app (BearNet live)"
+else
+  echo "      NOTE: capture-sidecar binary not built — BearNet ships but shows 'offline' (build it: scripts/build-capture-sidecar.sh)"
+fi
+
 # ── Step 5: Ad-hoc sign ───────────────────────────────────────────────────────
 echo "[5/6] Code signing..."
 if [ "$skip_sign" = "true" ]; then
