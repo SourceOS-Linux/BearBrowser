@@ -36,6 +36,8 @@ pub struct AppState {
     pub scope: crate::netmon::SharedScope,
     /// Local IP-intelligence DBs (geo + ASN) — no-network enrichment.
     pub geo: std::sync::Arc<crate::geo::Geo>,
+    /// Recent BearTrap honeypot detections (fingerprinting / canary), newest last.
+    pub honeypot: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
 }
 
 struct ApiError(StatusCode, String);
@@ -63,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .route("/capture/enable", post(enable))
         .route("/map", get(map).post(map_ingest).delete(map_clear))
         .route("/scope", get(scope_get).post(scope_set))
+        .route("/honeypot", get(honeypot_list).post(honeypot_ingest))
         .route("/geo/:ip", get(geo_lookup))
         .route("/whois", post(whois))
         .route("/osint", post(osint))
@@ -248,6 +251,28 @@ async fn map(State(st): State<AppState>) -> Json<serde_json::Value> {
 async fn map_clear(State(st): State<AppState>) -> Json<serde_json::Value> {
     st.monitor.clear();
     Json(json!({ "cleared": true }))
+}
+
+/// BearTrap detections reported by the browser's honeypot actor. Ingest is a
+/// trusted-browser telemetry POST (ungated, like /map); we tag it with a
+/// timestamp and keep a bounded recent list the panel reads.
+async fn honeypot_ingest(State(st): State<AppState>, Json(mut d): Json<serde_json::Value>) -> Json<serde_json::Value> {
+    if let Some(obj) = d.as_object_mut() {
+        obj.insert("at".into(), json!(crate::netmap::now_secs()));
+    }
+    if let Ok(mut v) = st.honeypot.lock() {
+        v.push(d);
+        let len = v.len();
+        if len > 500 {
+            v.drain(0..len - 500);
+        }
+    }
+    Json(json!({ "ok": true }))
+}
+
+async fn honeypot_list(State(st): State<AppState>) -> Json<serde_json::Value> {
+    let items = st.honeypot.lock().map(|v| v.clone()).unwrap_or_default();
+    Json(json!({ "detections": items }))
 }
 
 async fn scope_get(State(st): State<AppState>) -> Json<serde_json::Value> {
