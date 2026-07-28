@@ -174,6 +174,19 @@ jobs:
         working-directory: build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}
         run: MOZBUILD_STATE_PATH=${{ github.workspace }}/.mozbuild ./mach package
 
+      - name: Build BearNet capture sidecar (makes the network monitor live)
+        continue-on-error: true
+        run: |
+          # Build the loopback sidecar the app launches on startup. macOS runners
+          # ship Rust; if it's somehow absent the packager degrades to "offline".
+          if command -v cargo >/dev/null 2>&1; then
+            cargo build --release --manifest-path capture-sidecar/Cargo.toml
+            # Prefetch the GeoIP DBs so the packager stages them (city + ASN).
+            bash scripts/fetch-geoip.sh capture-sidecar/geoip || true
+          else
+            echo "::warning::cargo not found — BearNet will ship 'offline'"
+          fi
+
       - name: Package BearBrowser.app
         run: |
           bash scripts/bearbrowser-package-source-build.sh \

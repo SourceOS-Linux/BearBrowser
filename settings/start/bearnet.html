@@ -105,7 +105,10 @@ html,body { height:100%; background:var(--bg); color:var(--text);
   function catColor(c){ return COLORS[c]||COLORS.unknown; }
   function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];}); }
 
-  var view = "graph";   // graph | map
+  // Deep-linkable: ?view=map&scope=system opens straight into that state.
+  var _q = new URLSearchParams(location.search);
+  var view = (_q.get("view") === "map") ? "map" : "graph";   // graph | map
+  var _initialScope = (_q.get("scope") === "system") ? "system" : "browser";
   var cv = $("c"), ctx = cv.getContext("2d"), W=0,H=0, DPR=Math.min(window.devicePixelRatio||1,2);
   function resize(){ W=cv.clientWidth; H=cv.clientHeight; cv.width=W*DPR; cv.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
   window.addEventListener("resize", resize); resize();
@@ -268,6 +271,13 @@ html,body { height:100%; background:var(--bg); color:var(--text);
     ws.onopen=function(){ setDot("live","live"); }; ws.onclose=function(){ setDot("","reconnecting…"); setTimeout(connectWS,2000); }; ws.onerror=function(){ setDot("err","stream error"); };
     ws.onmessage=function(ev){ var m; try{m=JSON.parse(ev.data);}catch(e){return;} if(m.kind==="connection") addConn(m); else if(m.kind==="connection-closed") closeConn(m.key); };
   }
+  (function applyInitial(){
+    if (view === "map") { Array.prototype.forEach.call(document.querySelectorAll("#viewSeg button"), function(b){ b.classList.toggle("on", b.getAttribute("data-view")==="map"); }); }
+    if (_initialScope === "system") {
+      Array.prototype.forEach.call(document.querySelectorAll("#scopeSeg button"), function(b){ b.classList.toggle("on", b.getAttribute("data-scope")==="system"); });
+      post("/scope", { scope: "system" });
+    }
+  })();
   loadSnapshot(); connectWS(); refreshCapture(); setInterval(refreshCapture,5000);
 })();
 </script>
