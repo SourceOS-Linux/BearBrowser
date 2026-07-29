@@ -180,6 +180,7 @@ if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 || sudo apt-get install -y 
 fi
 if [ -d "$SRCDIR/obj-win64/dist/firefox" ]; then
   bash "$REPO_ROOT/scripts/stage-bearnet.sh" "$SRCDIR/obj-win64/dist/firefox" "$CAPWIN" || true
+  bash "$REPO_ROOT/scripts/stage-cockpit.sh" "$SRCDIR/obj-win64/dist/firefox" || true
   # Gate: assert the hardening landed BEFORE re-zipping a shippable artifact —
   # same control as the DMG and Linux lanes.
   bash "$REPO_ROOT/scripts/verify-package.sh" "$SRCDIR/obj-win64/dist/firefox"

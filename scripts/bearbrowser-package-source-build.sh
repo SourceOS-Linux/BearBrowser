@@ -241,6 +241,13 @@ bash "$repo_root/scripts/stage-bearnet.sh" \
   "$repo_root/capture-sidecar/target/release/capture-sidecar" \
   | sed 's/^/      /'
 
+# Sovereign cockpit (UI + agent-machine sidecar + governance gate + contract).
+# No-ops unless scripts/assemble-cockpit.sh has produced build/app-staging, so a
+# build without an assembled cockpit is completely unaffected.
+bash "$repo_root/scripts/stage-cockpit.sh" \
+  "$out_app/Contents/Resources" \
+  | sed 's/^/      /'
+
 # ── Step 5: Ad-hoc sign ───────────────────────────────────────────────────────
 echo "[5/6] Code signing..."
 if [ "$skip_sign" = "true" ]; then

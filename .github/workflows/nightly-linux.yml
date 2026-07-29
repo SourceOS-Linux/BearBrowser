@@ -195,6 +195,8 @@ jobs:
               && CAP="$PWD/capture-sidecar/target/release/capture-sidecar" || true
           fi
           bash scripts/stage-bearnet.sh "$OBJ/dist/bearbrowser" "$CAP" || true
+          # Cockpit: no-ops unless assemble-cockpit.sh has been run.
+          bash scripts/stage-cockpit.sh "$OBJ/dist/bearbrowser" || true
           # Gate: assert the hardening actually landed BEFORE we tar a shippable
           # artifact. Same control as the DMG lane — a build that lost its
           # filter lists / substitutions / stripped prefs must not ship.
