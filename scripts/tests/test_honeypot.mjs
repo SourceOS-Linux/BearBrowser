@@ -59,6 +59,33 @@ check("canary in JSON POST body → caught", !!match('{"lead":{"email":"' + TOK 
 check("body leak attributed to origin", (match("payload=" + TOK) || {}).origin, "https://shop.example");
 check("benign form body → not caught", match("q=hello&page=2"), null);
 
+// ── BearWall denylist (mirrors BearTrapMonitor DENY_HOSTS/DENY_SUFFIXES) ─────
+const DENY_HOSTS = new Set(["detectportal.firefox.com","incoming.telemetry.mozilla.org",
+ "telemetry.mozilla.org","dap.services.mozilla.com","aus5.mozilla.org","aus4.mozilla.org",
+ "ads.mozilla.org","contile.services.mozilla.com","spocs.getpocket.com","getpocket.com",
+ "normandy.cdn.mozilla.net","location.services.mozilla.com","push.services.mozilla.com",
+ "shavar.services.mozilla.com","safebrowsing.googleapis.com","www.googleapis.com",
+ "profiler.firefox.com","monitor.firefox.com","relay.firefox.com","vpn.mozilla.org",
+ "fpn.firefox.com","model-hub.mozilla.org","mozilla-ohttp.fastly-edge.com"]);
+const DENY_SUFFIXES = [".telemetry.mozilla.org",".ohttp-gateway.prod.webservices.mozgcp.net"];
+const isDenied = h => { h=String(h).toLowerCase();
+  return DENY_HOSTS.has(h) || DENY_SUFFIXES.some(s=>h.endsWith(s)); };
+
+check("BLOCK detectportal (cleartext, HTTPS-Only exempt)", isDenied("detectportal.firefox.com"), true);
+check("BLOCK aus5 GMP updater (leaks OS version)", isDenied("aus5.mozilla.org"), true);
+check("BLOCK incoming.telemetry", isDenied("incoming.telemetry.mozilla.org"), true);
+check("BLOCK DAP telemetry", isDenied("dap.services.mozilla.com"), true);
+check("BLOCK ads.mozilla.org", isDenied("ads.mozilla.org"), true);
+check("BLOCK Google safebrowsing", isDenied("safebrowsing.googleapis.com"), true);
+check("BLOCK Fastly OHTTP ad relay", isDenied("mozilla-ohttp.fastly-edge.com"), true);
+check("BLOCK suffix .telemetry.mozilla.org", isDenied("foo.telemetry.mozilla.org"), true);
+// 🔴 The load-bearing NEGATIVES — blocking these would trade SECURITY for privacy.
+check("ALLOW RemoteSettings (CRLite revocation!)", isDenied("firefox.settings.services.mozilla.com"), false);
+check("ALLOW addons.mozilla.org (add-on security updates)", isDenied("addons.mozilla.org"), false);
+check("ALLOW services.addons.mozilla.org", isDenied("services.addons.mozilla.org"), false);
+check("ALLOW unrelated site", isDenied("example.com"), false);
+check("ALLOW lookalike suffix not matched", isDenied("nottelemetry.mozilla.org.evil.com"), false);
+
 let failed = 0;
 for (const c of CASES) {
   console.log(`  [${c.ok ? "PASS" : "FAIL"}] ${c.name}`);
