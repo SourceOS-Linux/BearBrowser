@@ -21,3 +21,10 @@ iot-sidecar/target/
 
 # GeoIP city DB is large (131MB) — staged at build time, not committed
 capture-sidecar/geoip/dbip-city-lite.mmdb
+
+# Audit harness OUTPUT — machine-specific measurement snapshots. Never commit:
+# they capture the running machine's fingerprint surface (real core count,
+# canvas hash, screen metrics). Regenerate with scripts/audit/ instead.
+scripts/audit/*report*.json
+scripts/audit/probe.html
+scripts/audit/*.log
