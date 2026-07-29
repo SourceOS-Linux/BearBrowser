@@ -13,6 +13,10 @@
 set -uo pipefail
 GRE="${1:?usage: verify-package.sh <GRE_DIR>}"
 [ -d "$GRE" ] || { echo "not a directory: $GRE" >&2; exit 2; }
+# Resolve to an ABSOLUTE path: the omni.ja extraction below cd's into a temp
+# dir, so a relative $GRE would stop resolving there (it silently made the
+# prefs assertion unrunnable — the permanently-red check anti-pattern).
+GRE="$(cd "$GRE" && pwd)"
 
 PASS=0; FAIL=0
 ok(){ echo "  ✅ $1"; PASS=$((PASS+1)); }
