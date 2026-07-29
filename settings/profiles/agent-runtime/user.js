@@ -409,3 +409,32 @@ user_pref("privacy.globalprivacycontrol.functionality.enabled", true);
 user_pref("privacy.globalprivacycontrol.pbmode.enabled", true);
 user_pref("privacy.donottrackheader.enabled", true);
 user_pref("media.webspeech.synth.enabled", false);  // installed voice list = strong per-machine fingerprint
+
+// ── Mozilla RemoteSettings junk + hardcoded-endpoint features ────────────────
+// From a live console capture: the RS client attempts ~60 collection syncs per
+// launch. Many are Mozilla product junk, and some features hardcode the server
+// URL so NO pref can stop them. Kill the features themselves.
+//
+// 🔴 Translations hardcodes https://firefox.settings.services.mozilla.com/v1 in
+// SIX places in TranslationsParent.sys.mjs (+ AppConstants). It is also the
+// actor throwing "already registered" on every start. Turn the feature off.
+user_pref("browser.translations.automaticallyPopup", false);
+user_pref("browser.translations.select.enable", false);
+// Pioneer / Rally = Mozilla data-DONATION study programs. Never.
+user_pref("toolkit.telemetry.pioneerId", "");
+// In-product advertising: CFR recommendations, sponsored suggest, What's New.
+user_pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons", false);
+user_pref("browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", false);
+user_pref("browser.messaging-system.whatsNewPanel.enabled", false);
+// Content "personality"/relevance profiling models for newtab.
+user_pref("browser.newtabpage.activity-stream.discoverystream.enabled", false);
+user_pref("browser.newtabpage.activity-stream.discoverystream.personalization.enabled", false);
+// Mozilla VPN / Monitor upsell surfaces.
+user_pref("browser.contentblocking.report.monitor.enabled", false);
+user_pref("browser.contentblocking.report.vpn.enabled", false);
+user_pref("browser.contentblocking.report.hide_vpn_banner", true);
+// NOTE (deliberate, do NOT "fix" without deciding): services.settings.server is
+// left ALONE. security.pki.crlite_mode=2 (enforcing) gets certificate-revocation
+// data via RemoteSettings; blanking the server would silently degrade TLS
+// revocation. That is a privacy-vs-security trade to make consciously, not by
+// accident. See docs/vendored-supply-chain-audit.md.
