@@ -149,6 +149,34 @@ export const BearTrapMonitor = {
       const ch0 = subject.QueryInterface(Ci.nsIHttpChannel);
       const host = ch0.URI && ch0.URI.host;
       if (host && this.isDenied(host)) {
+        // Vendor traffic honeypot — pref-gated. Off = block (default, safe).
+        // On = redirect at the CHANNEL LAYER to a local sink (the capture
+        // sidecar's /vendor-sink) that records the FULL request the vendor was
+        // trying to send. That is what "honeypot Mozilla" actually means:
+        // instead of just refusing, watch what they intended to leak.
+        // Only harmless targets get the honeypot treatment; hosts on
+        // `SINK_UNSAFE` are always blocked (they can execute code / update
+        // add-ons if answered plausibly).
+        let honeypot = false;
+        try {
+          honeypot = Services.prefs.getBoolPref(
+            "bearbrowser.honeypot.vendor.sink", false);
+        } catch (e) {}
+        const SINK_UNSAFE = /aus\d+\.mozilla\.org|addons\.mozilla\.org|systemAddon/i;
+        if (honeypot && !SINK_UNSAFE.test(host)) {
+          try {
+            // Redirect to loopback sink; sidecar returns benign 204 + logs the
+            // full request headers/body it would have received. The client
+            // never talks to the real vendor.
+            const sinkURI = Services.io.newURI(
+              "http://127.0.0.1:8093/vendor-sink" +
+                "?dest=" + encodeURIComponent(host) +
+                "&path=" + encodeURIComponent(ch0.URI.pathQueryRef || "/"));
+            ch0.redirectTo(sinkURI);
+            this.noteBlockedHost(host + " → sink");
+            return;
+          } catch (e) { /* fall through to hard block */ }
+        }
         ch0.cancel(Cr.NS_ERROR_ABORT);
         this.noteBlockedHost(host);
         return;

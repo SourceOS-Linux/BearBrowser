@@ -128,8 +128,41 @@ await write("index.json", JSON.stringify({
   },
 }));
 
+// Also mirror the AMO update manifests for a small set of add-on IDs, so
+// extensions.update.url can be repointed at us. Same doctrine — we relay bytes
+// we did not author, and add-on XPIs remain Mozilla-signed end-to-end (the
+// signing chain is verified against a pinned root inside the browser, exactly
+// like RemoteSettings). We add nothing; we simply do not phone home per user.
+const AMO_IDS = (process.env.AMO_MIRROR_IDS || "").split(",").map(s=>s.trim()).filter(Boolean);
+if (AMO_IDS.length) {
+  process.stdout.write(`\namo: mirroring ${AMO_IDS.length} extension update manifest(s)\n`);
+  for (const id of AMO_IDS) {
+    try {
+      // amoAPI: /api/v5/addons/addon/<id>/versions/?filter=all_with_unlisted
+      const meta = await getJSON(
+        `https://services.addons.mozilla.org/api/v5/addons/addon/${encodeURIComponent(id)}/`
+      );
+      // Extension update manifest shape Firefox expects at extensions.update.url
+      const manifest = {
+        addons: {
+          [id]: {
+            updates: [{ version: meta.current_version.version,
+                        update_link: meta.current_version.file.url,
+                        update_hash: meta.current_version.file.hash || undefined }]
+          }
+        }
+      };
+      await write(`extensions/${encodeURIComponent(id)}.json`,
+                  JSON.stringify(manifest, null, 1));
+      records++;
+      process.stdout.write(`  amo/${id}  -> v${meta.current_version.version}\n`);
+    } catch (e) {
+      process.stdout.write(`  amo/${id}  SKIP (${e.message.slice(0,60)})\n`);
+    }
+  }
+}
 console.log(
-  `\nmirrored ${COLLECTIONS.length} collections | ${records} records | ` +
+  `\nmirrored ${COLLECTIONS.length} RS collections | ${records} records | ` +
   `${attachments} attachments | ${chains} signing chains | ` +
   `${(bytes / 1e6).toFixed(1)} MB -> ${OUT}`
 );
