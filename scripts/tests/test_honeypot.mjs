@@ -52,6 +52,13 @@ check("caught leak attributed to origin", (match("https://x/?d=" + TOK) || {}).o
 check("unrelated outbound → not caught", match("https://cdn.example/app.js?v=42"), null);
 check("similar-but-wrong token → not caught", match("https://x/?d=bt-different-token"), null);
 
+// POST/PUT body cases — BearTrapMonitor._readUploadBody feeds the rewound body
+// through the same match(); these twin that decision for the common exfil shapes.
+check("canary in form-encoded POST body → caught", !!match("email=" + TOK + "%40example.invalid&src=1"), true);
+check("canary in JSON POST body → caught", !!match('{"lead":{"email":"' + TOK + '@example.invalid"}}'), true);
+check("body leak attributed to origin", (match("payload=" + TOK) || {}).origin, "https://shop.example");
+check("benign form body → not caught", match("q=hello&page=2"), null);
+
 let failed = 0;
 for (const c of CASES) {
   console.log(`  [${c.ok ? "PASS" : "FAIL"}] ${c.name}`);
