@@ -826,7 +826,12 @@ def bearbrowser_patches():
     _target_host_re = _re2.compile(
         r'(mozilla\.org|mozilla\.com|mozilla\.net|mozgcp\.net|firefox\.com'
         r'|getpocket\.com|mozaws\.net|fastly-edge\.com|googleapis\.com'
-        r'|google\.com|play\.google\.com|apps\.apple\.com)',
+        r'|google\.com|play\.google\.com|apps\.apple\.com'
+        # Mozilla services fronted by third-party CDNs, so the hostname does not
+        # contain "mozilla". Missed on the first pass:
+        #   browser.smartwindow.endpoint
+        #     -> mlpa-prod-prod-mozilla.global.ssl.fastly.net  (Mozilla ML)
+        r'|fastly\.net|cloudfront\.net|akamai(hd|edge)?\.net)',
         _re2.I,
     )
     _swept = 0
