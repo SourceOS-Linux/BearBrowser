@@ -1,0 +1,73 @@
+<!doctype html><meta charset="utf-8"><title>BearBrowser surface audit</title>
+<style>body{font:13px ui-monospace,monospace;padding:1rem;background:#111;color:#ddd}
+h1{font-size:15px}.ok{color:#5f5}.bad{color:#f66}.warn{color:#fb4}</style>
+<h1>BearBrowser content-scope surface audit</h1><pre id="o">running…</pre>
+<script>
+const R={ua:navigator.userAgent,probes:{},values:{},errors:[]};
+const has=(o,k)=>{try{return typeof o!=="undefined"&&o!==null&&(k in o)}catch(e){return "ERR"}};
+const g=(k)=>{try{return typeof window[k]!=="undefined"}catch(e){return "ERR"}};
+// 1. Privacy-sensitive constructors/APIs exposed to CONTENT
+const SURF={
+ "WebRTC (IP leak)":"RTCPeerConnection","Geolocation":"Geolocation","Battery":"BatteryManager",
+ "Gamepad":"Gamepad","WebMIDI":"MIDIAccess","WebGL":"WebGLRenderingContext","WebGL2":"WebGL2RenderingContext",
+ "WebGPU":"GPU","AudioContext":"AudioContext","OfflineAudioContext":"OfflineAudioContext",
+ "SpeechSynthesis":"SpeechSynthesis","Notification":"Notification","PushManager":"PushManager",
+ "WebAuthn":"PublicKeyCredential","Bluetooth":"Bluetooth","USB":"USB","Serial":"Serial","HID":"HID",
+ "NFC":"NDEFReader","IdleDetector":"IdleDetector","WebTransport":"WebTransport","WebSocket":"WebSocket",
+ "ReportingObserver":"ReportingObserver","PerformanceObserver":"PerformanceObserver",
+ "IndexedDB":"IDBFactory","CacheStorage":"CacheStorage","StorageManager":"StorageManager",
+ "ServiceWorker":"ServiceWorker","SharedWorker":"SharedWorker","BroadcastChannel":"BroadcastChannel",
+ "Clipboard":"Clipboard","MediaDevices":"MediaDevices","MediaRecorder":"MediaRecorder",
+ "ScreenOrientation":"ScreenOrientation","VisualViewport":"VisualViewport","NetworkInformation":"NetworkInformation",
+ "PrivateAttribution(PPA)":"PrivateAttribution","Glean(telemetry)":"Glean","InstallTrigger":"InstallTrigger",
+ "MLS":"MLS","CredentialsContainer":"CredentialsContainer","Sanitizer":"Sanitizer",
+ "WebExtensionPolicy(chrome-only!)":"WebExtensionPolicy","ChromeUtils(chrome-only!)":"ChromeUtils",
+ "Components(chrome-only!)":"Components","Services(chrome-only!)":"Services"
+};
+for(const [label,name] of Object.entries(SURF)) R.probes[label]=g(name);
+// 2. navigator surface + fingerprint-relevant values (RFP should spoof these)
+const N=navigator;
+R.values={
+ hardwareConcurrency:N.hardwareConcurrency, deviceMemory:N.deviceMemory,
+ plugins:(N.plugins||[]).length, mimeTypes:(N.mimeTypes||[]).length,
+ doNotTrack:N.doNotTrack, globalPrivacyControl:N.globalPrivacyControl,
+ languages:(N.languages||[]).join(","), platform:N.platform, maxTouchPoints:N.maxTouchPoints,
+ pdfViewerEnabled:N.pdfViewerEnabled, webdriver:N.webdriver, cookieEnabled:N.cookieEnabled,
+ screen:[screen.width,screen.height,screen.colorDepth,screen.pixelDepth].join("x"),
+ availScreen:[screen.availWidth,screen.availHeight].join("x"),
+ devicePixelRatio:window.devicePixelRatio, timezone:(Intl.DateTimeFormat().resolvedOptions()||{}).timeZone,
+ tzOffset:new Date().getTimezoneOffset(),
+ sendBeacon:typeof N.sendBeacon, getBattery:typeof N.getBattery,
+ requestMIDIAccess:typeof N.requestMIDIAccess, geolocation:typeof N.geolocation,
+ enumerateDevices:typeof (N.mediaDevices||{}).enumerateDevices,
+ storageQuota:typeof (N.storage||{}).estimate, connection:typeof N.connection,
+ userAgentData:typeof N.userAgentData, gpu:typeof N.gpu, locks:typeof N.locks,
+ credentials:typeof N.credentials, serviceWorker:typeof N.serviceWorker,
+ scheduling:typeof N.scheduling, virtualKeyboard:typeof N.virtualKeyboard,
+ privateAttribution:typeof N.privateAttribution
+};
+// 3. Canvas / WebGL / Audio fingerprint entropy (is RFP actually spoofing?)
+try{const c=document.createElement("canvas");c.width=200;c.height=50;const x=c.getContext("2d");
+ x.textBaseline="top";x.font="14px Arial";x.fillStyle="#f60";x.fillRect(0,0,100,20);
+ x.fillStyle="#069";x.fillText("BearBrowser⚡",2,15);
+ R.values.canvasHash=c.toDataURL().slice(-32);}catch(e){R.errors.push("canvas:"+e)}
+try{const gl=document.createElement("canvas").getContext("webgl");
+ if(gl){R.values.webglVendor=gl.getParameter(gl.VENDOR);R.values.webglRenderer=gl.getParameter(gl.RENDERER);
+  R.values.webglVersion=gl.getParameter(gl.VERSION);
+  const dbg=gl.getExtension("WEBGL_debug_renderer_info");
+  R.values.webglUnmasked=dbg?gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL):"(ext blocked)";
+  R.values.webglExtCount=(gl.getSupportedExtensions()||[]).length;}else R.values.webgl="(null ctx)";
+}catch(e){R.errors.push("webgl:"+e)}
+try{const AC=window.AudioContext||window.webkitAudioContext;
+ if(AC){const ac=new AC();R.values.audioSampleRate=ac.sampleRate;
+  R.values.audioChannels=ac.destination.maxChannelCount;ac.close&&ac.close();}}catch(e){R.errors.push("audio:"+e)}
+try{R.values.fontsCheck=document.fonts?document.fonts.check("12px 'Helvetica Neue'"):"n/a";}catch(e){}
+try{R.values.perfPrecision=(()=>{const a=[];for(let i=0;i<5;i++)a.push(performance.now());return a.join(",")})();}catch(e){}
+// 4. Storage writability (persistence vectors)
+for(const [k,fn] of Object.entries({localStorage:()=>{localStorage.setItem("_a","1");localStorage.removeItem("_a");return true},
+ sessionStorage:()=>{sessionStorage.setItem("_a","1");sessionStorage.removeItem("_a");return true},
+ indexedDB:()=>!!window.indexedDB, cookies:()=>{document.cookie="_a=1";return document.cookie.includes("_a")}})){
+ try{R.values["store_"+k]=fn()}catch(e){R.values["store_"+k]="BLOCKED"}}
+document.getElementById("o").textContent=JSON.stringify(R,null,1);
+fetch("/report",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(R)});
+</script>

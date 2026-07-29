@@ -442,3 +442,20 @@ user_pref("browser.region.network.url", "");                // no region geo-loo
 user_pref("browser.region.update.enabled", false);
 user_pref("beacon.enabled", false);                         // navigator.sendBeacon tracking
 user_pref("toolkit.coverage.endpoint.base", "");            // coverage telemetry endpoint
+
+// ── Content attack-surface lockdown (measured 2026-07-29) ────────────────────
+// Found by scripts/audit/surface-audit.html running in REAL CONTENT SCOPE against
+// the shipped build. Each pref below closes a surface the audit proved was open
+// to any website. Re-run the audit after changing these.
+user_pref("dom.webgpu.enabled", false);        // WebGPU: adapter/limits/features = huge new FP surface (WebGL ctx was already blocked; this was the hole left open)
+user_pref("dom.webmidi.enabled", false);       // WebMIDI: device enumeration + fingerprint
+user_pref("midi.enabled", false);
+user_pref("dom.maxHardwareConcurrency", 2);    // audit leaked the REAL core count (8); pin to 2 like Tor
+user_pref("privacy.globalprivacycontrol.enabled", true);              // GPC: legally-meaningful opt-out signal (was OFF)
+user_pref("privacy.globalprivacycontrol.functionality.enabled", true);
+user_pref("privacy.globalprivacycontrol.pbmode.enabled", true);
+user_pref("privacy.donottrackheader.enabled", true);
+user_pref("media.webspeech.synth.enabled", false);  // installed voice list = strong per-machine fingerprint
+user_pref("dom.webnotifications.enabled", false);   // notification permission prompts = tracking vector
+user_pref("dom.webnotifications.serviceworker.enabled", false);
+user_pref("dom.push.enabled", false);               // push = persistent re-identification channel
