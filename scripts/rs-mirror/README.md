@@ -46,3 +46,34 @@ turns a safe relay into a real attack surface. A failing signature must FAIL.
 Re-run on a schedule (CRLite updates several times a day). The output is static
 files — any HTTPS host works; no application server. Verify signature
 validation against the mirror **before** repointing `services.settings.server`.
+
+## Zero trust: we review what we relay
+
+A valid signature proves only that **Mozilla signed it** — not that the content
+is benign. A compelled, compromised or simply careless upstream ships *signed*
+records. So the mirror does not relay blind:
+
+    node scripts/rs-mirror/review.mjs --dir ./mirror \
+      --baseline prev.json --write-baseline next.json
+
+It fails closed (non-zero exit) on: a collection with **no signature**, a URL in
+signed content that the collection has no business carrying, active-content
+markers (`javascript:`, `<script`, `eval(`), a **new or vanished** collection, or
+a **>25% swing in record count** — the shape a poisoned security list would take.
+
+Collection-aware, because blunt rules produce noise that gets ignored:
+`ct-logs` *is* a list of log endpoints, `intermediates` embeds CPS URIs inside
+certificate data, and `plugins`/`addons` blocklist rows carry a user-facing
+"why was this blocked" link. Those are inventoried, not failed on. Everywhere
+else, a URL in signed content is a finding.
+
+### Findings from the first real review (2026-07-29)
+Not blockers, but they are exactly why we look:
+- Mozilla ships **placeholder URLs in production CT data**:
+  `https://ct.example.com/bogus/` and `.../bogus/ipng/`.
+- Plugin-blocklist rows still carry **cleartext `http://`** advisory links
+  (oracle.com, adobe, microsoft, divx, mozilla blog).
+
+Neither is fetched by the browser in normal operation, but both are upstream
+hygiene problems we now *see* rather than assume away — and the baseline diff
+means the next change to them will surface automatically.
