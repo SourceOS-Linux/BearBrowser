@@ -10,7 +10,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        bearbrowserVersion = "0.1.0-overlay";
+        bearbrowserVersion = "150.0.1";
       in
       {
         packages.bearbrowser-human-secure = pkgs.stdenvNoCC.mkDerivation {

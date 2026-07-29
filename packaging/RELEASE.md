@@ -1,5 +1,29 @@
 # BearBrowser Release Notes
 
+## 150.0.1 — first stable (macOS + Linux + Windows)
+
+**Date:** 2026-07-28
+**Release:** https://github.com/SourceOS-Linux/BearBrowser/releases/tag/v150.0.1
+**Source:** Firefox 150 fork (LibreWolf mirror), commit `8ffb75f`
+
+First cross-platform stable release. A sovereign, privacy-first browser with
+hardened anti-fingerprinting plus two flagship features that ship live in the
+build: **BearNet** (a built-in loopback network monitor — live graph + world
+map + click-to-block + on-demand OSINT, all geolocated from a local database so
+the browser never leaks the addresses it connects to) and **BearTrap** (a
+fingerprint-probe honeypot that detects/attributes fingerprinting scripts and
+blocks canary-token exfiltration).
+
+| Platform          | Asset                                          | SHA256 (see SHA256SUMS.txt on the release) |
+|-------------------|------------------------------------------------|--------------------------------------------|
+| macOS             | `BearBrowser-150.0.1-macos.dmg`                | `9eb0875d…46ed8` |
+| Linux x86_64      | `BearBrowser-150.0.1-linux-x86_64.tar.xz`      | `52a0dcf1…3a0a37` |
+| Windows installer | `BearBrowser-150.0.1-win64-installer.exe`      | `aee5c563…08485f` |
+| Windows portable  | `BearBrowser-150.0.1-win64.zip`                | `01cad9eb…dd5644` |
+
+Install: `brew install --cask sourceos-linux/tap/bearbrowser` (macOS).
+**Unsigned** build — no code-signing cert yet; macOS/SmartScreen may warn on first run.
+
 ## 0.1.0 — `140.12.0esr-1` (Linux x86_64, first shippable binary)
 
 **Date:** 2026-06-30
