@@ -38,10 +38,13 @@ echo "stage-bearnet: pages → $bs ($(ls "$bs" | wc -l | tr -d ' ') files)"
 #     so the C++ ContentClassifierService was loading resource:///bearblocker/…
 #     and 404ing — shipping the ad/tracker blocker with NO lists. Stage them here
 #     for the resource://bearblocker/ substitution the autoconfig registers.
+#     SOURCE IS settings/filter-lists/ — NOT settings/bearblocker/ (that holds
+#     only the actor .mjs files). I got this wrong in #105 and the lists went on
+#     shipping empty; the package gate is what caught it.
 bb="$GRE/browser/bearblocker"
 mkdir -p "$bb"
 for f in bearblocker-ads.txt bearblocker-privacy.txt; do
-  [ -f "$REPO/settings/bearblocker/$f" ] && cp "$REPO/settings/bearblocker/$f" "$bb/"
+  [ -f "$REPO/settings/filter-lists/$f" ] && cp "$REPO/settings/filter-lists/$f" "$bb/"
 done
 echo "stage-bearnet: bearblocker lists → $bb ($(ls "$bb" | wc -l | tr -d ' ') files)"
 
