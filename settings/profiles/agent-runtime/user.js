@@ -543,3 +543,29 @@ user_pref("browser.region.update.region", "");
 // Nimbus/experiment enrollment — the transport for every "experiment" collection.
 user_pref("nimbus.debug", false);
 user_pref("browser.preonboarding.enabled", false);
+
+// ── newtab feeds: kill the ad + profiling machinery ─────────────────────────
+// Inspecting the shipped builtin-addons/newtab (2.7 MB) found the actual ad and
+// profiling feeds by name:
+//   AdsFeed.sys.mjs                    sponsored content
+//   DiscoveryStreamFeed.sys.mjs        spocs/Pocket sponsored
+//   InferredPersonalizationFeed.sys.mjs  ← INFERRED USER PROFILING
+//   NewTabContentPing.sys.mjs          a telemetry ping
+// Our autoconfig already overrides AboutNewTab.newTabURL to the bearstart page,
+// so this UI is dead weight for us — but the FEEDS still register and run.
+user_pref("browser.newtabpage.activity-stream.feeds.adsfeed", false);
+user_pref("browser.newtabpage.activity-stream.feeds.discoverystreamfeed", false);
+user_pref("browser.newtabpage.activity-stream.discoverystream.sendToPocket.enabled", false);
+user_pref("browser.newtabpage.activity-stream.discoverystream.spocs-endpoint", "");
+user_pref("browser.newtabpage.activity-stream.telemetry.structuredIngestion.endpoint", "");
+// Inferred personalization = building a profile of the user from browsing.
+user_pref("browser.newtabpage.activity-stream.discoverystream.sections.personalization.enabled", false);
+user_pref("browser.newtabpage.activity-stream.system.showWeather", false);
+user_pref("browser.newtabpage.activity-stream.showWeather", false);
+// NOTE: feeds.places and feeds.newtabinit are LEFT ALONE on purpose — they are
+// the plumbing (history/bookmarks + panel init), not advertising. Disabling
+// them without a build to test would risk breaking about:home startup.
+// 🔴 FUTURE (needs a build to verify): remove AdsFeed / DiscoveryStreamFeed /
+// InferredPersonalizationFeed / NewTabContentPing from the packaged addon
+// entirely. Deleting them blind breaks ActivityStream.sys.mjs imports, and an
+// untested deletion is exactly what took down all three nightlies before.
