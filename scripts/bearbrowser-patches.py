@@ -765,6 +765,12 @@ def bearbrowser_patches():
         "dom.push.serverURL",
         "toolkit.crashreporter.infoURL",
         "browser.ping-centre.production.endpoint",
+        # Out-of-band update channels — fingerprint-bearing templates that
+        # send %OS_VERSION%/%BUILD_TARGET%/%BUILD_ID%/%LOCALE% to Mozilla.
+        # These survive --disable-updater (separate channels).
+        "media.gmp-manager.url",
+        "extensions.systemAddon.update.url",
+        "app.update.url",
     ]
     import re as _re2
     _pref_files = [
