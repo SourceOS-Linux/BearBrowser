@@ -730,6 +730,73 @@ def bearbrowser_patches():
         else:
             print(f"note: {_perf_src}: ReduceTimePrecisionAsMSecs pattern not matched — RFP pref is the fallback")
 
+    # ── STRIP, don't just disable: blank phone-home endpoints AT SOURCE ───────
+    # Audit of the shipped v150.0.1 bundle (docs/vendored-supply-chain-audit.md)
+    # found these endpoint URLs still compiled into greprefs.js /
+    # defaults/preferences/firefox.js. Our profile prefs turn the FEATURES off,
+    # but a pref can be flipped — a URL that isn't in the binary cannot be
+    # called. So blank the default VALUES here, at the source of those files.
+    #
+    # Deliberately NOT touched: addons.mozilla.org (needed to install add-ons)
+    # and the webcompat shims (they replace trackers with LOCAL stubs — that is
+    # anti-tracking machinery, removing it would BREAK sites and help no one).
+    #
+    # Every edit is best-effort and reports what it did; a miss must never abort
+    # the build (a hard failure here would take down all three nightlies).
+    _phone_home_prefs = [
+        "toolkit.telemetry.server",
+        "captivedetect.canonicalURL",
+        "network.connectivity-service.IPv4.url",
+        "network.connectivity-service.IPv6.url",
+        "app.normandy.api_url",
+        "app.normandy.shieldLearnMoreUrl",
+        "browser.safebrowsing.provider.google4.updateURL",
+        "browser.safebrowsing.provider.google4.gethashURL",
+        "browser.safebrowsing.provider.google4.reportURL",
+        "browser.safebrowsing.provider.google.updateURL",
+        "browser.safebrowsing.provider.google.gethashURL",
+        "browser.safebrowsing.provider.mozilla.updateURL",
+        "browser.safebrowsing.provider.mozilla.gethashURL",
+        "browser.safebrowsing.downloads.remote.url",
+        "browser.topsites.contile.endpoint",
+        "browser.newtabpage.activity-stream.discoverystream.endpoints",
+        "geo.provider.network.url",
+        "browser.region.network.url",
+        "dom.push.serverURL",
+        "toolkit.crashreporter.infoURL",
+        "browser.ping-centre.production.endpoint",
+    ]
+    import re as _re2
+    _pref_files = [
+        "modules/libpref/init/all.js",
+        "browser/app/profile/firefox.js",
+        "browser/branding/bearbrowser/pref/firefox-branding.js",
+    ]
+    _blanked_total = 0
+    for _pfile in _pref_files:
+        _p = Path(_pfile)
+        if not _p.exists():
+            print(f"note: {_pfile} not found — skipping endpoint strip")
+            continue
+        _txt = _p.read_text()
+        _orig = _txt
+        _n = 0
+        for _pname in _phone_home_prefs:
+            # pref("name", "https://…")  ->  pref("name", "")
+            _pat = _re2.compile(
+                r'(pref\(\s*"' + _re2.escape(_pname) + r'"\s*,\s*)"[^"]*"'
+            )
+            _txt, _c = _pat.subn(r'\1""', _txt)
+            _n += _c
+        if _txt != _orig:
+            _p.write_text(_txt)
+            _blanked_total += _n
+            print(f"-> Stripped {_n} phone-home endpoint default(s) in {_pfile}")
+        else:
+            print(f"note: {_pfile}: no phone-home endpoint defaults matched")
+    print(f"-> Endpoint strip: {_blanked_total} URL default(s) blanked at source "
+          f"(they are no longer present in the binary to be re-enabled)")
+
     leave_srcdir()
 
 
