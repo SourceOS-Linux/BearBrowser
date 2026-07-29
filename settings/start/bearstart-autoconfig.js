@@ -85,6 +85,95 @@ try {
   }
 } catch (e) {}
 
+// ── Sovereign cockpit: resource://bearbrowser-cockpit/ + governed backend ───
+// Pieces 2-4 of docs/cockpit-browser-integration-handoff.md. Everything below is
+// GATED on the cockpit actually being staged (scripts/stage-cockpit.sh); if it
+// is not, nothing here runs and the browser keeps the bearstart new-tab. That
+// keeps a browser without an assembled cockpit completely unaffected.
+//
+// Topology (loopback only, no off-device egress):
+//   cockpit  ──fetch──►  gate 127.0.0.1:8080  ──classify──►  agent-machine :8091
+//                                                            receipts      :8092
+// The cockpit must NEVER reach the sidecar directly — every agent action is
+// classified by the gate against policy/bearbrowser-contract.yaml first.
+//
+// Ports are the fixed ones from the handoff, so no config rewriting is needed:
+// the app dir can be read-only (a mounted DMG, /Applications), which is exactly
+// where the `sed the live port into cockpit-config.js` approach would fail.
+try {
+  if (!Services.appinfo.inSafeMode) {
+    const greD = Services.dirsvc.get("GreD", Ci.nsIFile);
+    const ck = greD.clone();
+    ck.append("cockpit");
+
+    if (ck.exists() && ck.isDirectory()) {
+      // (2) Serve the UI from a resource:// origin — same mechanism verified
+      // working for bearstart. No localhost origin for the UI itself.
+      try {
+        const rpc = Services.io
+          .getProtocolHandler("resource")
+          .QueryInterface(Ci.nsIResProtocolHandler);
+        rpc.setSubstitution("bearbrowser-cockpit", Services.io.newFileURI(ck));
+      } catch (e) {}
+
+      // (3) Bring up the governed backend. Gate FIRST — if the gate is not
+      // listening, the cockpit simply cannot reach the sidecar, which is the
+      // correct failure mode for a governed system (closed, not open).
+      try {
+        const { Subprocess } = ChromeUtils.importESModule(
+          "resource://gre/modules/Subprocess.sys.mjs"
+        );
+        const scripts = greD.clone(); scripts.append("scripts");
+        const policy = greD.clone(); policy.append("policy");
+
+        const runPy = (name, args) => {
+          const f = scripts.clone(); f.append(name);
+          if (!f.exists()) return;
+          Subprocess.call({
+            command: "/usr/bin/env",
+            arguments: ["python3", f.path, ...args],
+            environmentAppend: true,
+            environment: {
+              BEARBROWSER_RESOURCES: greD.path,
+              BEARBROWSER_POLICY: policy.path,
+            },
+            stderr: "stdout",
+          }).catch(() => {});
+        };
+
+        // agent-machine sidecar (the compiled backend), then receipts, then the
+        // gate that fronts them.
+        let am = null;
+        for (const n of ["bearbrowser-agent-machine-bin", "bearbrowser-agent-machine-bin.exe"]) {
+          const f = greD.clone(); f.append("sidecars"); f.append(n);
+          if (f.exists()) { am = f; break; }
+        }
+        if (am) {
+          Subprocess.call({
+            command: am.path,
+            arguments: ["--port", "8091", "--host", "127.0.0.1"],
+            environmentAppend: true,
+            stderr: "stdout",
+          }).catch(() => {});
+        }
+        runPy("bearbrowser-receipts.py", ["--port", "8092"]);
+        runPy("bearbrowser-agent-machine-gate.py",
+              ["--port", "8080", "--upstream", "http://127.0.0.1:8091"]);
+      } catch (e) {}
+
+      // (4) The browser shell IS the cockpit: new tab opens it instead of the
+      // bearstart page. Only when the cockpit is present, so this never leaves
+      // a cockpit-less build with a broken new-tab.
+      try {
+        const { AboutNewTab } = ChromeUtils.importESModule(
+          "resource:///modules/AboutNewTab.sys.mjs"
+        );
+        AboutNewTab.newTabURL = "resource://bearbrowser-cockpit/index.html";
+      } catch (e) {}
+    }
+  }
+} catch (e) {}
+
 // ── BearTrap network monitor ────────────────────────────────────────────────
 // Start the honeypot's outbound-traffic watcher early so it's live before any
 // request — it cancels any request that leaks a page's own canary token.
