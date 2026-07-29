@@ -528,3 +528,18 @@ user_pref("media.peerconnection.use_document_iceservers", false);
 // data. The residual leak is "this machine has a mic and a camera", ~1 bit and
 // near-uniform for laptops. Blocking it breaks camera/mic pickers, and an EMPTY
 // list is MORE distinctive than the common answer. Not worth it.
+
+// ── Residual RemoteSettings-backed features (from Michael's console capture) ─
+// Each of these still appeared in the per-launch sync list. None is a leak on
+// its own (the fetches are blocked), but every one is a feature we do not want
+// and a code path we do not need running.
+user_pref("signon.passwordEditCapture.enabled", false);
+user_pref("browser.search.serpEventTelemetryCategorization.enabled", false); // sites-classification
+user_pref("browser.newtabpage.activity-stream.improvesearch.topSiteSearchShortcuts", false); // tippytop tiles
+user_pref("browser.newtabpage.activity-stream.feeds.snippets", false);
+user_pref("intl.multilingual.downloadEnabled", false);          // language-dictionaries fetch
+user_pref("intl.multilingual.enabled", false);
+user_pref("browser.region.update.region", "");
+// Nimbus/experiment enrollment — the transport for every "experiment" collection.
+user_pref("nimbus.debug", false);
+user_pref("browser.preonboarding.enabled", false);
