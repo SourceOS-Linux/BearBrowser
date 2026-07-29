@@ -388,9 +388,6 @@ user_pref("network.captive-portal-service.enabled", false); // no detectportal.f
 user_pref("captivedetect.canonicalURL", "");
 user_pref("network.connectivity-service.enabled", false);   // no connectivity beacons
 user_pref("dom.private-attribution.submission.enabled", false); // Firefox PPA ad-attribution (ON by default)
-user_pref("app.normandy.enabled", false);                   // Mozilla remote experiments
-user_pref("app.normandy.api_url", "");
-user_pref("app.shield.optoutstudies.enabled", false);       // Shield studies
 user_pref("browser.discovery.enabled", false);              // addon "discovery" phones home
 user_pref("browser.region.network.url", "");                // no region geo-lookup to Mozilla
 user_pref("browser.region.update.enabled", false);

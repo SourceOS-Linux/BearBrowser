@@ -442,5 +442,3 @@ user_pref("browser.region.network.url", "");                // no region geo-loo
 user_pref("browser.region.update.enabled", false);
 user_pref("beacon.enabled", false);                         // navigator.sendBeacon tracking
 user_pref("toolkit.coverage.endpoint.base", "");            // coverage telemetry endpoint
-user_pref("toolkit.telemetry.server", "");                  // belt-and-suspenders: no telemetry sink
-user_pref("geo.provider.network.url", "");                  // no Google geolocation endpoint
