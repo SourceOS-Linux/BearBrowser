@@ -355,7 +355,7 @@ user_pref("identity.fxaccounts.enabled", false);
 // block event is logged to bearblocker-receipts.jsonl for audit.
 // -----------------------------------------------------------------------------
 user_pref("privacy.trackingprotection.content.protection.enabled", true);
-user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource:///bearblocker/bearblocker-ads.txt|resource:///bearblocker/bearblocker-privacy.txt");
+user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource://bearblocker/bearblocker-ads.txt|resource://bearblocker/bearblocker-privacy.txt");
 // Cosmetic filtering runs in content process — useful even for headless sessions
 // because it prevents ad layout from consuming CPU or triggering layout reflows
 // that would otherwise affect timing-based automation.

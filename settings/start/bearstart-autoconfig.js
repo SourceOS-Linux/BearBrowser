@@ -29,6 +29,29 @@ try {
   }
 } catch (e) {}
 
+// ── resource://bearblocker/ substitution ─────────────────────────────────────
+// SAME packaging trap as bearstart, hit by the ad/tracker blocker: the filter
+// lists are staged loose at <GreD>/browser/bearblocker/, but the C++
+// ContentClassifierService loads them from the pref
+// `privacy.trackingprotection.content.protection.test_list_urls` — which pointed
+// at resource:///bearblocker/… (empty host = omni.ja, where FINAL_TARGET_FILES
+// never lands). Verified on a real build: the console logged
+//   "Missing chrome or resource URL: resource:///bearblocker/bearblocker-ads.txt"
+// i.e. the blocker shipped with NO lists. autoconfig runs during pref-service
+// init — before the classifier loads — so register resource://bearblocker/ →
+// the loose dir here, and the prefs (user.js) use resource://bearblocker/.
+try {
+  const rpb = Services.io
+    .getProtocolHandler("resource")
+    .QueryInterface(Ci.nsIResProtocolHandler);
+  const bdir = Services.dirsvc.get("GreD", Ci.nsIFile);
+  bdir.append("browser");
+  bdir.append("bearblocker");
+  if (bdir.exists()) {
+    rpb.setSubstitution("bearblocker", Services.io.newFileURI(bdir));
+  }
+} catch (e) {}
+
 // ── Launch the BearNet capture sidecar on startup ───────────────────────────
 // This is what makes BearNet LIVE instead of a paper tiger: spawn the bundled
 // loopback sidecar so the panel has a data feed. Staged at <GreD>/sidecars/,

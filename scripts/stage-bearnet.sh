@@ -33,6 +33,18 @@ for f in bearbrowser-start.html bearnet.html world.json dm-sans-latin.woff2 dm-s
 done
 echo "stage-bearnet: pages → $bs ($(ls "$bs" | wc -l | tr -d ' ') files)"
 
+# 1b. BearBlocker filter lists, loose where resource://bearblocker/ resolves.
+#     FINAL_TARGET_FILES.bearblocker (omni.ja) does NOT survive `mach package`,
+#     so the C++ ContentClassifierService was loading resource:///bearblocker/…
+#     and 404ing — shipping the ad/tracker blocker with NO lists. Stage them here
+#     for the resource://bearblocker/ substitution the autoconfig registers.
+bb="$GRE/browser/bearblocker"
+mkdir -p "$bb"
+for f in bearblocker-ads.txt bearblocker-privacy.txt; do
+  [ -f "$REPO/settings/bearblocker/$f" ] && cp "$REPO/settings/bearblocker/$f" "$bb/"
+done
+echo "stage-bearnet: bearblocker lists → $bb ($(ls "$bb" | wc -l | tr -d ' ') files)"
+
 # 2. The sidecar + governance + geo, so BearNet is LIVE (not "offline").
 if [ -n "$SIDECAR" ] && [ -f "$SIDECAR" ]; then
   mkdir -p "$GRE/sidecars" "$GRE/scripts" "$GRE/policy" "$GRE/geoip"

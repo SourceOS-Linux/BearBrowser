@@ -301,13 +301,13 @@ user_pref("network.IDN_show_punycode", true);
 // ── BearBlocker — native adblock-rust content classifier ─────────────────────
 // ContentClassifierService uses the compiled adblock-rust engine (same one Brave
 // uses) to block ad and tracker network requests at the C++ network layer before
-// any JS runs. Filter lists are bundled in the browser at resource:///bearblocker/
+// any JS runs. Filter lists are bundled in the browser at resource://bearblocker/
 // and loaded at startup. No extension process, no user-visible install.
 //
 // Cosmetic rules (CSS injection to hide ad placeholder elements) are applied by
 // the BearBlockerChild JSWindowActor registered in DesktopActorRegistry.
 user_pref("privacy.trackingprotection.content.protection.enabled", true);
-user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource:///bearblocker/bearblocker-ads.txt|resource:///bearblocker/bearblocker-privacy.txt");
+user_pref("privacy.trackingprotection.content.protection.test_list_urls", "resource://bearblocker/bearblocker-ads.txt|resource://bearblocker/bearblocker-privacy.txt");
 // Cosmetic filtering (CSS injection for leftover ad placeholders)
 user_pref("bearbrowser.bearblocker.cosmetic.enabled", true);
 
