@@ -506,3 +506,25 @@ user_pref("browser.urlbar.dnsResolveFullyQualifiedNames", false);
 // keyword.enabled=false: a bare non-URL string in the address bar is NOT silently
 // handed to a search engine. Deliberate: the user chooses when to search.
 user_pref("keyword.enabled", false);
+
+// ── WebRTC: OFF by default (decision 2026-07-29) ────────────────────────────
+// WebRTC/STUN is the best-known browser deanonymization vector: it can reveal
+// your real public IP to a site EVEN BEHIND a VPN or proxy. A browser claiming
+// to be the most private in the world cannot ship that enabled by default.
+// Tor Browser disables it for exactly this reason.
+//
+// Cost, stated plainly: browser-based video calling (Meet, Zoom web, Discord
+// web, Jitsi) will not work until re-enabled.
+// TO RE-ENABLE, one pref:  media.peerconnection.enabled = true
+// The ICE hardening below stays in force whenever it is turned back on.
+// FUTURE: a per-site prompt (grant WebRTC to meet.google.com only) — the right
+// end state; this is the safe default until that ships.
+user_pref("media.peerconnection.ice.relay_only", false);
+user_pref("media.peerconnection.identity.enabled", false);
+user_pref("media.peerconnection.use_document_iceservers", false);
+// navigator.mediaDevices.enumerateDevices is deliberately LEFT ENABLED.
+// Measured 2026-07-29 with scripts/audit/: it returns [audioinput, videoinput]
+// with labels="" and deviceIds="" — RFP already suppresses the identifying
+// data. The residual leak is "this machine has a mic and a camera", ~1 bit and
+// near-uniform for laptops. Blocking it breaks camera/mic pickers, and an EMPTY
+// list is MORE distinctive than the common answer. Not worth it.
