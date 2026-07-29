@@ -1,5 +1,5 @@
 Name: bearbrowser
-Version: 0.1.0
+Version: 150.0.1
 Release: 0.overlay%{?dist}
 Summary: SourceOS governed browser for humans and agents
 License: MPL-2.0
@@ -31,5 +31,7 @@ install -m 0644 branding/bearbrowser.svg %{buildroot}%{_datadir}/icons/hicolor/s
 %{_datadir}/icons/hicolor/scalable/apps/dev.sourceos.BearBrowser.svg
 
 %changelog
+* Tue Jul 28 2026 SourceOS <maintainers@sourceos.dev> - 150.0.1
+- Align version with the v150.0.1 stable release (Firefox 150 fork; BearNet + BearTrap).
 * Sun May 03 2026 SourceOS <maintainers@sourceos.dev> - 0.1.0-0.overlay
 - Initial BearBrowser RPM scaffold.
