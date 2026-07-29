@@ -841,7 +841,10 @@ def bearbrowser_patches():
             continue
         _txt = _p.read_text()
         def _blank(m):
-            global _swept
+            # nonlocal, NOT global: _swept lives in bearbrowser_patches()'s scope.
+            # `global` sent Python looking for a module-level _swept that does not
+            # exist -> NameError at the first match, which failed every nightly.
+            nonlocal _swept
             name, url = m.group(1), m.group(2)
             # Blank on host OR on pref-name intent — a telemetry endpoint on a
             # third-party domain (e.g. toolkit.telemetry.dap.leader.url ->
@@ -855,7 +858,11 @@ def bearbrowser_patches():
             if not _target_host_re.search(url) and not _intent:
                 return m.group(0)
             _swept += 1
-            return f'pref("{name}", "")'
+            # NO trailing ')' — the regex deliberately stops before it, so the
+            # original ');' stays in the file. Emitting one here produced
+            # `pref("x", ""));` (double paren = malformed prefs) — caught only by
+            # RUNNING this, never by a parse check.
+            return f'pref("{name}", ""'
         _new = _url_host_re.sub(_blank, _txt)
         if _new != _txt:
             _p.write_text(_new)
