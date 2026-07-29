@@ -424,3 +424,23 @@ user_pref("security.tls.version.max", 4);
 // itself, which partitioning already isolates. Disabling early data is a
 // conservative hardening with near-zero downside (slight resumption latency).
 user_pref("security.tls.enable_0rtt_data", false);
+
+// ── Phone-home lockdown (hardening pass 2026-07-29) ──────────────────────────
+// Firefox still reaches out to Mozilla/Google on startup + during use even with
+// telemetry off. Observed LIVE in the Browser Console: a cleartext hit to
+// detectportal.firefox.com on every launch (captive-portal check). Shut the
+// whole class down.
+user_pref("network.captive-portal-service.enabled", false); // no detectportal.firefox.com
+user_pref("captivedetect.canonicalURL", "");
+user_pref("network.connectivity-service.enabled", false);   // no connectivity beacons
+user_pref("dom.private-attribution.submission.enabled", false); // Firefox PPA ad-attribution (ON by default)
+user_pref("app.normandy.enabled", false);                   // Mozilla remote experiments
+user_pref("app.normandy.api_url", "");
+user_pref("app.shield.optoutstudies.enabled", false);       // Shield studies
+user_pref("browser.discovery.enabled", false);              // addon "discovery" phones home
+user_pref("browser.region.network.url", "");                // no region geo-lookup to Mozilla
+user_pref("browser.region.update.enabled", false);
+user_pref("beacon.enabled", false);                         // navigator.sendBeacon tracking
+user_pref("toolkit.coverage.endpoint.base", "");            // coverage telemetry endpoint
+user_pref("toolkit.telemetry.server", "");                  // belt-and-suspenders: no telemetry sink
+user_pref("geo.provider.network.url", "");                  // no Google geolocation endpoint
