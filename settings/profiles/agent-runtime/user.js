@@ -488,3 +488,21 @@ user_pref("browser.newtabpage.activity-stream.default.sites", "");
 // revocation is already covered by CRLite (security.pki.crlite_mode=2,
 // enforcing). If we ever lose CRLite data, flip this to true — see
 // docs/sovereign-remote-settings-mirror.md.
+
+// ── URL bar: remove vendor presets + typo/prefetch leaks ────────────────────
+// Michael spotted Mozilla's preset shortcuts (Wikipedia / YouTube / AP News /
+// Reddit) sitting in a FRESH profile's address bar. We never chose those, and
+// one fat-finger loads a site the user never asked for.
+user_pref("browser.urlbar.suggest.topsites", false);   // the preset dropdown
+user_pref("browser.topsites.useRemoteSetting", false); // stop pulling tiles from RemoteSettings
+user_pref("browser.newtabpage.activity-stream.feeds.system.topsites", false);
+// 🔴 Typo + prefetch leaks — these contact hosts you never intended:
+//   speculativeConnect  opens TCP to an autocomplete GUESS before you hit enter
+//   fixup.alternate     turns a typo like "gogle" into "www.gogle.com" and
+//                       resolves/connects to it
+//   dnsResolveFullyQualifiedNames  DNS lookups while you are still typing
+user_pref("browser.fixup.alternate.enabled", false);
+user_pref("browser.urlbar.dnsResolveFullyQualifiedNames", false);
+// keyword.enabled=false: a bare non-URL string in the address bar is NOT silently
+// handed to a search engine. Deliberate: the user chooses when to search.
+user_pref("keyword.enabled", false);
