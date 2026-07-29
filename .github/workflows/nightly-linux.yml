@@ -195,6 +195,10 @@ jobs:
               && CAP="$PWD/capture-sidecar/target/release/capture-sidecar" || true
           fi
           bash scripts/stage-bearnet.sh "$OBJ/dist/bearbrowser" "$CAP" || true
+          # Gate: assert the hardening actually landed BEFORE we tar a shippable
+          # artifact. Same control as the DMG lane — a build that lost its
+          # filter lists / substitutions / stripped prefs must not ship.
+          bash scripts/verify-package.sh "$OBJ/dist/bearbrowser"
           TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.xz"
           mkdir -p build/nightly
           tar -C "$OBJ/dist" -cJf "build/nightly/${TAR}" bearbrowser

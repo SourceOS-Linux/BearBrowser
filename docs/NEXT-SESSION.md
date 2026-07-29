@@ -17,6 +17,13 @@ not start by re-deriving context. Read this first.
 
 ## 🔴 P0 — verify the builds (blocks everything else)
 
+Fastest first check, now that the gate exists:
+
+    bash scripts/verify-package.sh /Applications/BearBrowser.app/Contents/Resources
+
+Expect **8/8** on a build from `f09b20d` or later. Anything red means the fix for
+that line did not survive packaging. Then do the runtime audit below.
+
 The moment the three lanes finish:
 
     node scripts/audit/surface-audit-server.mjs &
@@ -55,11 +62,22 @@ and pieces 1/2/4 map exactly onto mechanics already proven by BearNet:
 Topology to preserve: cockpit → gate (127.0.0.1:8080) → agent-machine/receipts.
 Loopback only, no egress.
 
-## P1 — regression protection (recommended twice, never built)
+## ✅ P1 DONE — regression protection (#129, #130)
 
-Wire `scripts/audit/` into the nightly workflows as a **post-build gate**: fail the
-build if a hardened surface reopens. This would have caught the dead ad-blocker.
-Without it, all 22 PRs can silently regress.
+`scripts/verify-package.sh` is wired into **all three** lanes (DMG before DMG
+creation, Linux before tar, Windows before re-zip). A build that loses its
+hardening now fails instead of shipping.
+
+Validated both directions, on both layouts:
+- negative control (Michael's Jul-21 install): 0/8 — it catches a bare build
+- positive control (Jul-28 DMG **and** Linux tarball): 7 pass / 4 fail, and the
+  4 are exactly the BearBlocker lists + substitution, because that build predates
+  fix #105. It discriminates; it does not just always fail.
+
+🔴 **Important context this uncovered:** Michael's installed app is from **JUL 21**
+and predates the entire BearNet staging. Every console dump in that session came
+from a build with none of this work in it. **Check the binary's date before
+diagnosing anything from its logs.**
 
 ## P1 — we only ever measured macOS
 
