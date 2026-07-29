@@ -489,3 +489,34 @@ user_pref("browser.contentblocking.report.hide_vpn_banner", true);
 // data via RemoteSettings; blanking the server would silently degrade TLS
 // revocation. That is a privacy-vs-security trade to make consciously, not by
 // accident. See docs/vendored-supply-chain-audit.md.
+
+// ── Out-of-band Mozilla update channels (MISSED until Michael spotted it) ────
+// Caught live in the console:
+//   https://aus5.mozilla.org/update/3/GMP/150.0.1-1/20260721203120/
+//     Darwin_aarch64-gcc3/en-US/default/Darwin%2025.3.0/default/default/update.xml
+// These survive --disable-updater because GMP/DRM and system add-ons are
+// SEPARATE channels. The URL templates are fingerprint-bearing BY CONSTRUCTION:
+// %VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION% — i.e.
+// every check tells Mozilla the exact OS version, CPU arch and build.
+user_pref("media.gmp-manager.url", "");
+user_pref("media.gmp-manager.url.override", "data:text/plain,");
+user_pref("media.gmp-manager.updateEnabled", false);
+user_pref("media.gmp-manager.cert.requireBuiltIn", false);
+user_pref("media.gmp-manager.checkAllPluginsForUpdates", false);
+user_pref("media.gmp-widevinecdm.enabled", false);   // Google Widevine DRM blob
+user_pref("media.gmp-widevinecdm.visible", false);
+user_pref("media.gmp-gmpopenh264.enabled", false);   // Cisco OpenH264 blob
+// 🔴 System add-ons = Mozilla silently pushing NEW CODE into the browser
+// out-of-band. Unacceptable in a sovereign build.
+user_pref("extensions.systemAddon.update.url", "");
+user_pref("extensions.systemAddon.update.enabled", false);
+// Browser updater (already --disable-updater at build time; belt and braces).
+user_pref("app.update.url", "");
+user_pref("app.update.enabled", false);
+user_pref("app.update.auto", false);
+user_pref("app.update.background.scheduling.enabled", false);
+// NOTE (deliberate): extensions.update.* is LEFT ALONE. It points at
+// versioncheck.addons.mozilla.org and is how installed add-ons receive SECURITY
+// updates. Blanking it would silently freeze add-ons on vulnerable versions —
+// a security regression bought with privacy. Conscious decision, same as
+// services.settings.server. See docs/vendored-supply-chain-audit.md.
