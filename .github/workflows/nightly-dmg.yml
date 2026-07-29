@@ -196,6 +196,14 @@ jobs:
             --version ${{ env.VERSION }} \
             --skip-verify
 
+      - name: Verify the package carries the hardening (gate)
+        # Runs AFTER packaging and BEFORE the DMG is created, so a build that
+        # lost its hardening never becomes a shippable artifact.
+        # The failures we actually shipped were PACKAGING failures, not logic
+        # bugs: BearBlocker shipped with ZERO filter lists because
+        # FINAL_TARGET_FILES does not survive `mach package` — and nothing checked.
+        run: bash scripts/verify-package.sh "build/nightly/BearBrowser.app/Contents/Resources"
+
       - name: Create DMG
         id: dmg
         run: |
