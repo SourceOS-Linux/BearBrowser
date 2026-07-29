@@ -803,6 +803,61 @@ def bearbrowser_patches():
     print(f"-> Endpoint strip: {_blanked_total} URL default(s) blanked at source "
           f"(they are no longer present in the binary to be re-enabled)")
 
+    # ── Systematic pass: blank EVERY remote-URL pref default on Mozilla/Google
+    # promo+service hosts, instead of cherry-picking names forever.
+    # A sweep of the shipped bundle found 128 prefs whose DEFAULT VALUE is a
+    # remote URL; only 21 were covered by name. Most of the rest are Mozilla
+    # advertising surfaces (VPN/Monitor/Pocket upsells) — but several are ACTIVE
+    # fetchers: ads.mozilla.org (unifiedAds), the Fastly OHTTP ad relay,
+    # model-hub.mozilla.org (ML models) and archive.mozilla.org/pub/system-addons
+    # ("train hop" = yet another out-of-band code channel).
+    #
+    # ALLOWLIST — kept on purpose, each for a reason:
+    #   addons.mozilla.org      installing/updating add-ons (security updates)
+    #   support/developer/legal user-facing help + license links, click-only
+    _url_host_re = _re2.compile(
+        r'pref\(\s*"([^"]+)"\s*,\s*"((?:https?|wss?)://[^"]*)"'
+    )
+    _keep_re = _re2.compile(
+        r'(addons\.mozilla\.org|support\.mozilla\.org|developer\.mozilla\.org'
+        r'|mozilla\.org/[a-z-]*/?legal|w3\.org|whatwg\.org|example\.(com|org))',
+        _re2.I,
+    )
+    _target_host_re = _re2.compile(
+        r'(mozilla\.org|mozilla\.com|mozilla\.net|mozgcp\.net|firefox\.com'
+        r'|getpocket\.com|mozaws\.net|fastly-edge\.com|googleapis\.com'
+        r'|google\.com|play\.google\.com|apps\.apple\.com)',
+        _re2.I,
+    )
+    _swept = 0
+    for _pfile in _pref_files:
+        _p = Path(_pfile)
+        if not _p.exists():
+            continue
+        _txt = _p.read_text()
+        def _blank(m):
+            global _swept
+            name, url = m.group(1), m.group(2)
+            # Blank on host OR on pref-name intent — a telemetry endpoint on a
+            # third-party domain (e.g. toolkit.telemetry.dap.leader.url ->
+            # dap-09-3.api.divviup.org) is still telemetry.
+            _intent = _re2.search(
+                r'(telemetry|\.dap\.|ping|normandy|shield|experiment|contile'
+                r'|spocs|unifiedAds|\.ads\.|discoverystream|trainhop|modelHub'
+                r'|ohttp|crashreporter)', name, _re2.I)
+            if _keep_re.search(url):
+                return m.group(0)
+            if not _target_host_re.search(url) and not _intent:
+                return m.group(0)
+            _swept += 1
+            return f'pref("{name}", "")'
+        _new = _url_host_re.sub(_blank, _txt)
+        if _new != _txt:
+            _p.write_text(_new)
+    print(f"-> Host sweep: {_swept} additional Mozilla/Google URL default(s) blanked "
+          f"(allowlisted: addons.mozilla.org, support/developer/legal)")
+
+
     leave_srcdir()
 
 
