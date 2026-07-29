@@ -469,3 +469,22 @@ user_pref("app.update.background.scheduling.enabled", false);
 // updates. Blanking it would silently freeze add-ons on vulnerable versions —
 // a security regression bought with privacy. Conscious decision, same as
 // services.settings.server. See docs/vendored-supply-chain-audit.md.
+
+// ── Mozilla-INDEPENDENT security + on-disk residue ──────────────────────────
+// These need nobody's server. Free wins we were leaving on the table.
+user_pref("security.mixed_content.block_active_content", true);
+user_pref("security.mixed_content.block_display_content", true);
+// AboutHomeStartupCache writes your home/newtab CONTENT to disk so startup looks
+// fast. That is forensic residue on a privacy browser (and the source of the
+// "requestCache called with no _procManager" console spam). Off.
+user_pref("browser.startup.homepage.abouthome_cache.enabled", false);
+// Sponsored/"frecency-boosted" newtab surfaces (RS collection
+// main/newtab-frecency-boosted-sponsors was still being requested).
+user_pref("browser.newtabpage.activity-stream.feeds.topsites", false);
+user_pref("browser.newtabpage.activity-stream.feeds.section.topstories.options", "{}");
+user_pref("browser.newtabpage.activity-stream.default.sites", "");
+// NOTE on security.OCSP.require: deliberately left FALSE. Hard-failing when an
+// OCSP responder is unreachable breaks browsing on flaky networks, and
+// revocation is already covered by CRLite (security.pki.crlite_mode=2,
+// enforcing). If we ever lose CRLite data, flip this to true — see
+// docs/sovereign-remote-settings-mirror.md.
