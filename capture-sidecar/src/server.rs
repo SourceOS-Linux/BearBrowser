@@ -66,6 +66,12 @@ pub fn router(state: AppState) -> Router {
         .route("/map", get(map).post(map_ingest).delete(map_clear))
         .route("/scope", get(scope_get).post(scope_set))
         .route("/honeypot", get(honeypot_list).post(honeypot_ingest))
+        // Vendor-traffic honeypot: BearTrapMonitor redirects blocked-vendor
+        // requests here when `bearbrowser.honeypot.vendor.sink=true`. We log
+        // the full request and return a benign 204. The real vendor is never
+        // contacted. That is what "honeypot Mozilla" actually means: SEE what
+        // they would have sent, don't just refuse.
+        .route("/vendor-sink", get(vendor_sink).post(vendor_sink))
         .route("/geo/:ip", get(geo_lookup))
         .route("/whois", post(whois))
         .route("/osint", post(osint))
@@ -273,6 +279,39 @@ async fn honeypot_ingest(State(st): State<AppState>, Json(mut d): Json<serde_jso
 async fn honeypot_list(State(st): State<AppState>) -> Json<serde_json::Value> {
     let items = st.honeypot.lock().map(|v| v.clone()).unwrap_or_default();
     Json(json!({ "detections": items }))
+}
+
+/// Vendor-traffic honeypot sink.
+///
+/// BearTrapMonitor redirects blocked-vendor channels here when
+/// `bearbrowser.honeypot.vendor.sink=true`. We log the intended request (host
+/// the caller wanted, path, method, headers) into the honeypot ring buffer and
+/// return HTTP 204 — the vendor never sees the connection, but we do.
+///
+/// The unsafe hosts (aus5/addons/systemAddon) are already screened out on the
+/// browser side; we don't answer plausibly anyway (204, no body), so even a
+/// misrouted request cannot become a code-execution vector.
+async fn vendor_sink(
+    State(st): State<AppState>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+    req: axum::extract::Request,
+) -> Response {
+    let record = json!({
+        "kind": "vendor-sink",
+        "dest": q.get("dest").cloned().unwrap_or_default(),
+        "path": q.get("path").cloned().unwrap_or_default(),
+        "method": req.method().as_str().to_string(),
+        "headers": req.headers().iter()
+            .filter_map(|(k, v)| v.to_str().ok().map(|s| (k.to_string(), s.to_string())))
+            .collect::<std::collections::HashMap<_, _>>(),
+        "at": crate::netmap::now_secs(),
+    });
+    if let Ok(mut v) = st.honeypot.lock() {
+        v.push(record);
+        let len = v.len();
+        if len > 500 { v.drain(0..len - 500); }
+    }
+    (StatusCode::NO_CONTENT, "").into_response()
 }
 
 async fn scope_get(State(st): State<AppState>) -> Json<serde_json::Value> {

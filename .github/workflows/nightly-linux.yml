@@ -101,6 +101,16 @@ jobs:
           ${{ matrix.pkg_update }}
           ${{ matrix.pkg_install }}
 
+      # Optional cockpit toolchain — best-effort so an install failure does not
+      # break the whole nightly. The stager no-ops without an assembled cockpit.
+      - name: Install cockpit toolchain (best effort)
+        if: matrix.container == ''
+        continue-on-error: true
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$HOME/.bun/bin" >> $GITHUB_PATH
+          npm install -g pnpm@9 || true
+
       - name: Cache Mozilla toolchain
         uses: actions/cache@v4
         with:
@@ -195,12 +205,55 @@ jobs:
               && CAP="$PWD/capture-sidecar/target/release/capture-sidecar" || true
           fi
           bash scripts/stage-bearnet.sh "$OBJ/dist/bearbrowser" "$CAP" || true
-          # Cockpit: no-ops unless assemble-cockpit.sh has been run.
+          # Assemble the sovereign cockpit if the toolchain is present. Best-effort:
+          # the browser ships with or without it; the stager and the autoconfig
+          # gate on <GreD>/cockpit existing so a missing cockpit is bit-for-bit
+          # unaffected. Install cost is trivial vs the value of exercising the
+          # runtime wiring nightly.
+          if command -v pnpm >/dev/null && command -v bun >/dev/null; then
+            bash scripts/assemble-cockpit.sh || echo "  assemble-cockpit failed — proceeding without"
+          else
+            echo "  pnpm/bun not present; skipping cockpit assembly"
+          fi
           bash scripts/stage-cockpit.sh "$OBJ/dist/bearbrowser" || true
           # Gate: assert the hardening actually landed BEFORE we tar a shippable
           # artifact. Same control as the DMG lane — a build that lost its
           # filter lists / substitutions / stripped prefs must not ship.
           bash scripts/verify-package.sh "$OBJ/dist/bearbrowser"
+          # Runtime audit — headless, on the real Linux binary we just built.
+          # The static gate proves files are there; this proves the browser
+          # BEHAVES (WebRTC gone, hardwareConcurrency clamped, sendBeacon nil,
+          # __bearTrapWrap reports its status). Fail-closed.
+          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libasound2t64 >/dev/null 2>&1 || true
+          node scripts/audit/surface-audit-server.mjs &
+          AUDIT_PID=$!
+          sleep 2
+          mkdir -p /tmp/bb-ci-profile
+          cp settings/profiles/human-secure/user.js /tmp/bb-ci-profile/
+          xvfb-run -a "$OBJ/dist/bearbrowser/bearbrowser" \
+            -no-remote -profile /tmp/bb-ci-profile "http://127.0.0.1:8099/" \
+            > /tmp/bb.log 2>&1 &
+          BB_PID=$!
+          for i in $(seq 1 40); do
+            [ -f scripts/audit/surface-report.json ] && break
+            sleep 1
+          done
+          kill $BB_PID $AUDIT_PID 2>/dev/null || true
+          # Fail if report never arrived OR if the acceptance criteria are red.
+          node -e '
+            const r=require("./scripts/audit/surface-report.json");
+            const v=r.values, p=r.probes;
+            const fail=[];
+            if(v.hardwareConcurrency!==2) fail.push("hardwareConcurrency="+v.hardwareConcurrency);
+            if(!v.bearTrapWrap||v.bearTrapWrap==="undefined") fail.push("actor did not run");
+            if(p["WebRTC (IP leak)"]===true) fail.push("WebRTC still exposed");
+            if(p["WebGPU"]===true) fail.push("WebGPU still exposed");
+            if(v.sendBeacon!=="undefined") fail.push("sendBeacon still present");
+            if(v.globalPrivacyControl!==true) fail.push("GPC off");
+            if(fail.length){console.error("RUNTIME AUDIT FAILED:\n  "+fail.join("\n  "));process.exit(1)}
+            console.log("RUNTIME AUDIT PASSED: hwCon="+v.hardwareConcurrency+" wrap="+v.bearTrapWrap);
+          '
+
           TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.xz"
           mkdir -p build/nightly
           tar -C "$OBJ/dist" -cJf "build/nightly/${TAR}" bearbrowser
