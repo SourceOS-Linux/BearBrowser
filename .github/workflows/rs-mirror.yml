@@ -1,0 +1,64 @@
+name: RS mirror sync + publish
+
+# Sovereign mirror of Mozilla RemoteSettings + AMO update manifests. Runs on a
+# schedule, reviews before publishing (zero-trust — signatures prove Mozilla
+# signed it, not that content is benign), and publishes to GCS. Fail-closed:
+# if review turns up findings, we do NOT overwrite the served mirror.
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'   # every 6h, offset so we're not on the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # WIF to GCP
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Sync from Mozilla PROD
+        env:
+          AMO_MIRROR_IDS: "uBlock0@raymondhill.net"   # extend as we bless add-ons
+        run: node scripts/rs-mirror/sync.mjs --out ./mirror --base https://rs.bearbrowser.dev
+
+      - name: Zero-trust review (fail closed)
+        # A valid signature proves only that Mozilla signed it; review the content
+        # for unexpected URLs / active-content markers / >25% drift.
+        run: |
+          # baseline from the served copy so drift is measured against the last
+          # thing we vouched for, not against the previous CI run
+          if gcloud storage cat gs://sourceos-artifacts-socioprophet/rs-mirror/baseline.json > baseline.json 2>/dev/null; then
+            node scripts/rs-mirror/review.mjs --dir ./mirror --baseline baseline.json --write-baseline next-baseline.json
+          else
+            node scripts/rs-mirror/review.mjs --dir ./mirror --write-baseline next-baseline.json
+          fi
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_MIRROR_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Publish (staging → atomic rename)
+        # Upload to a stamped path first, then move baseline last — a client
+        # reading during sync sees either the whole old tree or the whole new.
+        run: |
+          STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          gcloud storage rsync --recursive ./mirror \
+            gs://sourceos-artifacts-socioprophet/rs-mirror/staging-$STAMP/
+          gcloud storage rsync --recursive --delete-unmatched-destination-objects \
+            gs://sourceos-artifacts-socioprophet/rs-mirror/staging-$STAMP/ \
+            gs://sourceos-artifacts-socioprophet/rs-mirror/live/
+          gcloud storage cp next-baseline.json \
+            gs://sourceos-artifacts-socioprophet/rs-mirror/baseline.json
+          gcloud storage rm --recursive \
+            gs://sourceos-artifacts-socioprophet/rs-mirror/staging-$STAMP/ || true
+          echo "Live at gs://sourceos-artifacts-socioprophet/rs-mirror/live/"

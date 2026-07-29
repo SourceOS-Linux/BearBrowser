@@ -730,6 +730,46 @@ def bearbrowser_patches():
         else:
             print(f"note: {_perf_src}: ReduceTimePrecisionAsMSecs pattern not matched — RFP pref is the fallback")
 
+    # ── Newtab: RIP the ad/profiling modules at source (not just pref-mute) ───
+    # The shipped builtin-addons/newtab holds AdsFeed, DiscoveryStreamFeed,
+    # NewTabContentPing (a telemetry ping), and InferredPersonalizationFeed
+    # (profiling the user from browsing). Pref-disable is not enough — a pref
+    # can be flipped and the code path still exists. Delete the files.
+    #
+    # ActivityStream.sys.mjs lazy-imports these by resource:// URI, so deleting
+    # the files does not break import time; a first-use call is caught by
+    # ActivityStream's own try/catch (and none of these should be called at all
+    # with our prefs). Best-effort scrub of jar.mn / moz.build so packaging
+    # does not complain about missing files.
+    import re as _re_rip
+    _newtab_dir = Path("browser/builtin-addons/newtab/lib")
+    _newtab_kill = [
+        "AdsFeed.sys.mjs",
+        "DiscoveryStreamFeed.sys.mjs",
+        "InferredPersonalizationFeed.sys.mjs",
+        "NewTabContentPing.sys.mjs",
+    ]
+    _newtab_ripped = 0
+    if _newtab_dir.is_dir():
+        for _f in _newtab_kill:
+            _fp = _newtab_dir / _f
+            if _fp.exists():
+                _fp.unlink()
+                _newtab_ripped += 1
+        for _mn in [Path("browser/builtin-addons/newtab/jar.mn"),
+                    Path("browser/builtin-addons/newtab/moz.build")]:
+            if not _mn.exists():
+                continue
+            _t = _mn.read_text()
+            _before = _t
+            for _f in _newtab_kill:
+                _t = _re_rip.sub(r"^\s*.*" + _re_rip.escape(_f) + r".*\n", "", _t, flags=_re_rip.M)
+            if _t != _before:
+                _mn.write_text(_t)
+                print(f"-> Scrubbed {_mn} of ripped newtab module refs")
+    print(f"-> Newtab rip: {_newtab_ripped}/{len(_newtab_kill)} modules deleted "
+          f"(missing = already gone or upstream layout change; not a build blocker)")
+
     # ── STRIP, don't just disable: blank phone-home endpoints AT SOURCE ───────
     # Audit of the shipped v150.0.1 bundle (docs/vendored-supply-chain-audit.md)
     # found these endpoint URLs still compiled into greprefs.js /
