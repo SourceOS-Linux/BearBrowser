@@ -107,16 +107,37 @@ export class BearTrapChild extends JSWindowActorChild {
     }
 
     // Enumeration getters — navigator.plugins / hardwareConcurrency / fonts.
+    //
+    // Some of these are CLAMPED here, not merely counted. Measured against the
+    // shipped v150.0.1 with scripts/audit/: navigator.hardwareConcurrency
+    // returned the machine's REAL core count (8) even though RFP was
+    // demonstrably active on that same page (timezone spoofed to
+    // Atlantic/Reykjavik, timers quantized) — and neither
+    // `dom.maxHardwareConcurrency=2` nor `privacy.fingerprintingProtection`
+    // changed it. Rather than patch dom/base/Navigator.cpp blind (no local
+    // source tree; a bad hunk breaks every nightly), normalize it inside the
+    // interception we already own and already ship.
+    //
+    // 🔴 This rides the honeypot actor, so it follows
+    // `bearbrowser.honeypot.enabled`. Re-measure with scripts/audit/ after any
+    // change — never assume the clamp landed.
+    const CLAMP = {
+      // Tor Browser reports 2; anything above that is per-machine entropy.
+      hardwareConcurrency: v => (typeof v === "number" && v > 2 ? 2 : v),
+      deviceMemory: v => (typeof v === "number" && v > 2 ? 2 : v),
+    };
     const wrapGetter = (obj, prop, surface) => {
       try {
         const d = Object.getOwnPropertyDescriptor(obj, prop);
         if (!d || !d.get) return;
         const g = d.get;
+        const clamp = CLAMP[prop];
         Object.defineProperty(obj, prop, {
           configurable: true,
           get() {
             note(surface);
-            return g.call(this);
+            const v = g.call(this);
+            return clamp ? clamp(v) : v;
           },
         });
       } catch (e) {}

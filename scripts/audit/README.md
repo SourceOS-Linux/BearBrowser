@@ -20,11 +20,19 @@ null, Battery/Gamepad/Bluetooth/USB/Serial/HID/NFC/IdleDetector/NetworkInformati
 absent, PrivateAttribution + Glean NOT exposed to content.
 
 ## 🔴 Open, measured leaks
-- `navigator.hardwareConcurrency` returns the REAL core count (8).
-  `dom.maxHardwareConcurrency=2` did NOT take effect — suspect our
-  `anti-fp-*.patch` / `RFPTargets.inc` disabled the HardwareConcurrency RFP
-  target. Needs a source-level fix, not a pref.
-- `navigator.plugins`=5 / `mimeTypes`=2 (non-zero = entropy).
+- `navigator.hardwareConcurrency` returned the REAL core count (8). Ruled out by
+  measurement: `dom.maxHardwareConcurrency=2` (no effect) and
+  `privacy.fingerprintingProtection=true` (no effect); RFP *was* active on the
+  same page (timezone + timer spoofing both confirmed). Our anti-fp patches were
+  also cleared — they ADD RFP targets (WebAudioFarble, CanvasTextMetrics), they
+  do not remove HardwareConcurrency. **Now clamped to 2 in BearTrapChild's
+  existing getter interception** (rides `bearbrowser.honeypot.enabled`) —
+  ⚠️ NOT yet verified in a build; re-run this audit after the next build.
 - `mediaDevices.enumerateDevices` still callable (device-set fingerprint).
+
+## Corrected — NOT a leak
+- `navigator.plugins`=5 / `mimeTypes`=2 looked like entropy but is not: modern
+  Firefox reports a FIXED, identical PDF-viewer set for every user. Uniform
+  values are anti-fingerprinting; zeroing them would make us MORE unique.
 - WebRTC `RTCPeerConnection` still exposed (kept on purpose: disabling breaks
   video calls; `media.peerconnection.ice.no_host` is set). Decide explicitly.
