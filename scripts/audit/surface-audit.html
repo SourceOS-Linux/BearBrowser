@@ -44,7 +44,10 @@ R.values={
  userAgentData:typeof N.userAgentData, gpu:typeof N.gpu, locks:typeof N.locks,
  credentials:typeof N.credentials, serviceWorker:typeof N.serviceWorker,
  scheduling:typeof N.scheduling, virtualKeyboard:typeof N.virtualKeyboard,
- privateAttribution:typeof N.privateAttribution
+ privateAttribution:typeof N.privateAttribution,
+ // Did BearTrapChild's getter wrapping actually apply? "ok" | "partial:…" |
+ // undefined (= the actor never ran at all). Removes the guesswork.
+ bearTrapWrap: N.__bearTrapWrap
 };
 // 3. Canvas / WebGL / Audio fingerprint entropy (is RFP actually spoofing?)
 try{const c=document.createElement("canvas");c.width=200;c.height=50;const x=c.getContext("2d");
