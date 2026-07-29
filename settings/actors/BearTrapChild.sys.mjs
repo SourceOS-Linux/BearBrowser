@@ -126,27 +126,61 @@ export class BearTrapChild extends JSWindowActorChild {
       hardwareConcurrency: v => (typeof v === "number" && v > 2 ? 2 : v),
       deviceMemory: v => (typeof v === "number" && v > 2 ? 2 : v),
     };
+    // 🔴 Xray. This actor runs PRIVILEGED; `win.Navigator.prototype` reached
+    // from here is an Xray wrapper, and getOwnPropertyDescriptor through it does
+    // not hand back the content getter — so the old code hit `if (!d.get) return`
+    // and SILENTLY did nothing. Verified against the shipped v150.0.2:
+    // hardwareConcurrency still reported the real core count (8) even though the
+    // actor is correctly registered (DesktopActorRegistry: matches http+https,
+    // allFrames, enablePreference on) and the clamp code was present in the
+    // packaged BearTrapChild.
+    // Operate on the WAIVED object, and hand back a getter created in the
+    // CONTENT compartment via Cu.exportFunction — defining a privileged function
+    // on a content object would leak chrome into the page.
+    const Cu = Components.utils;
+    const waived = win.wrappedJSObject;
+
+    // Every failure below is REPORTED, never swallowed. A wrap that silently
+    // no-ops is exactly how this shipped broken twice.
+    const wrapFailures = [];
     const wrapGetter = (obj, prop, surface) => {
       try {
         const d = Object.getOwnPropertyDescriptor(obj, prop);
-        if (!d || !d.get) return;
+        if (!d || !d.get) {
+          wrapFailures.push(`${prop}:no-getter-descriptor`);
+          return;
+        }
         const g = d.get;
         const clamp = CLAMP[prop];
         Object.defineProperty(obj, prop, {
           configurable: true,
-          get() {
+          get: Cu.exportFunction(function () {
             note(surface);
             const v = g.call(this);
             return clamp ? clamp(v) : v;
-          },
+          }, obj),
         });
-      } catch (e) {}
+      } catch (e) {
+        wrapFailures.push(`${prop}:${e}`);
+      }
     };
-    const N = win.Navigator && win.Navigator.prototype;
+    const N = waived && waived.Navigator && waived.Navigator.prototype;
     wrapGetter(N, "plugins", "plugins");
     wrapGetter(N, "mimeTypes", "plugins");
     wrapGetter(N, "hardwareConcurrency", "hardware");
     wrapGetter(N, "deviceMemory", "hardware");
+    // Report the wrap outcome so a silent no-op can never hide again. Read it
+    // from the page with `navigator.__bearTrapWrap` or via /honeypot.
+    try {
+      const status = wrapFailures.length
+        ? `partial:${wrapFailures.join(",")}`
+        : "ok";
+      Object.defineProperty(N || {}, "__bearTrapWrap", {
+        configurable: true,
+        get: Cu.exportFunction(() => status, N || {}),
+      });
+    } catch (e) {}
+
     if (win.document && win.document.fonts) {
       wrap(win.document.fonts, "check", "fonts");
     }
