@@ -7,8 +7,8 @@ Maintainer: SourceOS <maintainers@sourceos.dev>
 Depends: libgtk-3-0, libdbus-glib-1-2, libx11-6, libxcomposite1, libxdamage1, libxext6, libxfixes3, libxrandr2, libasound2
 Homepage: https://github.com/SourceOS-Linux/BearBrowser
 Description: SourceOS governed browser for humans and agents
- BearBrowser is a sovereign, privacy-first browser: a LibreWolf-mirror fork of
- Firefox 150 with hardened anti-fingerprinting (Canvas, WebGL, AudioContext,
+ BearBrowser is a sovereign, privacy-first browser built on Firefox 150,
+ with hardened anti-fingerprinting (Canvas, WebGL, AudioContext,
  fonts, timing), BearNet (a built-in loopback network monitor with a live graph,
  world map and on-demand OSINT), and BearTrap (a fingerprint-probe honeypot that
  also blocks canary-token exfiltration). No telemetry, no cloud dependency.
