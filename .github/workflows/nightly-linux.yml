@@ -107,9 +107,13 @@ jobs:
         if: matrix.container == ''
         continue-on-error: true
         run: |
-          curl -fsSL https://bun.sh/install | bash
+          # Pin bun to a released version — curl-piping to an unpinned URL is
+          # the moving-tag trap (per memory: :latest = fix never rolls out).
+          # Update this deliberately when we bump.
+          BUN_VERSION=1.1.42
+          curl -fsSL "https://bun.sh/install" | BUN_VERSION="bun-v${BUN_VERSION}" bash
           echo "$HOME/.bun/bin" >> $GITHUB_PATH
-          npm install -g pnpm@9 || true
+          npm install -g pnpm@9.15.4 || true
 
       - name: Cache Mozilla toolchain
         uses: actions/cache@v4
@@ -220,39 +224,6 @@ jobs:
           # artifact. Same control as the DMG lane — a build that lost its
           # filter lists / substitutions / stripped prefs must not ship.
           bash scripts/verify-package.sh "$OBJ/dist/bearbrowser"
-          # Runtime audit — headless, on the real Linux binary we just built.
-          # The static gate proves files are there; this proves the browser
-          # BEHAVES (WebRTC gone, hardwareConcurrency clamped, sendBeacon nil,
-          # __bearTrapWrap reports its status). Fail-closed.
-          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libasound2t64 >/dev/null 2>&1 || true
-          node scripts/audit/surface-audit-server.mjs &
-          AUDIT_PID=$!
-          sleep 2
-          mkdir -p /tmp/bb-ci-profile
-          cp settings/profiles/human-secure/user.js /tmp/bb-ci-profile/
-          xvfb-run -a "$OBJ/dist/bearbrowser/bearbrowser" \
-            -no-remote -profile /tmp/bb-ci-profile "http://127.0.0.1:8099/" \
-            > /tmp/bb.log 2>&1 &
-          BB_PID=$!
-          for i in $(seq 1 40); do
-            [ -f scripts/audit/surface-report.json ] && break
-            sleep 1
-          done
-          kill $BB_PID $AUDIT_PID 2>/dev/null || true
-          # Fail if report never arrived OR if the acceptance criteria are red.
-          node -e '
-            const r=require("./scripts/audit/surface-report.json");
-            const v=r.values, p=r.probes;
-            const fail=[];
-            if(v.hardwareConcurrency!==2) fail.push("hardwareConcurrency="+v.hardwareConcurrency);
-            if(!v.bearTrapWrap||v.bearTrapWrap==="undefined") fail.push("actor did not run");
-            if(p["WebRTC (IP leak)"]===true) fail.push("WebRTC still exposed");
-            if(p["WebGPU"]===true) fail.push("WebGPU still exposed");
-            if(v.sendBeacon!=="undefined") fail.push("sendBeacon still present");
-            if(v.globalPrivacyControl!==true) fail.push("GPC off");
-            if(fail.length){console.error("RUNTIME AUDIT FAILED:\n  "+fail.join("\n  "));process.exit(1)}
-            console.log("RUNTIME AUDIT PASSED: hwCon="+v.hardwareConcurrency+" wrap="+v.bearTrapWrap);
-          '
 
           TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.xz"
           mkdir -p build/nightly
@@ -285,6 +256,98 @@ jobs:
           name: ${{ steps.appimage.outputs.name }}
           path: ${{ steps.appimage.outputs.path }}
           retention-days: 30
+
+      # Runtime audit — a REAL browser run against the tarball we just built.
+      # Ubuntu only: fedora runs in a container without apt and without xvfb
+      # from Mozilla toolchains, and it's continue-on-error anyway. Splitting
+      # this out (instead of leaving it inline in "Package — tarball") makes
+      # the distro guard explicit and lets us always upload the report — pass
+      # or fail — so we can diff over time and see slow drift.
+      - name: Runtime audit (ubuntu only)
+        if: matrix.distro == 'ubuntu'
+        run: |
+          set -e
+          SRC="build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}"
+          OBJ="$SRC/obj-x86_64-pc-linux-gnu"
+          BIN="$OBJ/dist/bearbrowser/bearbrowser"
+          [ -x "$BIN" ] || { echo "::error::bearbrowser binary missing at $BIN"; exit 1; }
+          sudo apt-get install -y --no-install-recommends xvfb libgtk-3-0 libdbus-glib-1-2 libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 libasound2t64
+          command -v xvfb-run >/dev/null || { echo "::error::xvfb-run install failed"; exit 1; }
+          rm -f scripts/audit/surface-report.json
+          node scripts/audit/surface-audit-server.mjs > /tmp/audit-server.log 2>&1 &
+          AUDIT_PID=$!
+          sleep 3
+          mkdir -p /tmp/bb-ci-profile
+          cp settings/profiles/human-secure/user.js /tmp/bb-ci-profile/
+          # Flip the vendor honeypot sink ON for this run so the same session
+          # ALSO tests that BearTrapMonitor's redirect-to-sink path is real.
+          # On startup Firefox pings detectportal.firefox.com; with the sink on,
+          # that request is redirected to /vendor-sink and shows up as a
+          # `vendor-sink` record. If nothing is recorded, the whole "we honeypot
+          # them, we do not just block them" claim is theatre.
+          echo 'user_pref("bearbrowser.honeypot.vendor.sink", true);' >> /tmp/bb-ci-profile/user.js
+          xvfb-run -a "$BIN" -no-remote -profile /tmp/bb-ci-profile \
+            "http://127.0.0.1:8099/" > /tmp/bb.log 2>&1 &
+          BB_PID=$!
+          # Longer timeout — cold Firefox startup on CI can push past 40s.
+          for i in $(seq 1 90); do
+            [ -f scripts/audit/surface-report.json ] && break
+            sleep 1
+          done
+          pkill -TERM -P $BB_PID 2>/dev/null || true
+          kill $BB_PID $AUDIT_PID 2>/dev/null || true
+          if [ ! -f scripts/audit/surface-report.json ]; then
+            echo "::error::runtime audit: report never arrived — browser did not reach the harness in 90s"
+            tail -50 /tmp/bb.log || true
+            exit 1
+          fi
+          node -e '
+            const r = require("./scripts/audit/surface-report.json");
+            const v = r.values, p = r.probes;
+            const fail = [];
+            if (v.hardwareConcurrency !== 2) fail.push("hardwareConcurrency=" + v.hardwareConcurrency);
+            if (!v.bearTrapWrap || v.bearTrapWrap === "undefined") fail.push("actor did not run");
+            if (p["WebRTC (IP leak)"] === true) fail.push("WebRTC still exposed");
+            if (p["WebGPU"] === true) fail.push("WebGPU still exposed");
+            if (v.sendBeacon !== "undefined") fail.push("sendBeacon still present");
+            if (v.globalPrivacyControl !== true) fail.push("GPC off");
+            if (fail.length) { console.error("RUNTIME AUDIT FAILED:\n  " + fail.join("\n  ")); process.exit(1); }
+            console.log("RUNTIME AUDIT PASSED: hwCon=" + v.hardwareConcurrency + " wrap=" + v.bearTrapWrap);
+          '
+          # Vendor honeypot integration test — with the sink pref on, the
+          # browser's own outbound to detectportal.firefox.com must have been
+          # captured by /vendor-sink. Fetches /honeypot from the sidecar and
+          # verifies at least one vendor-sink record exists.
+          curl -s --max-time 5 http://127.0.0.1:8093/honeypot 2>/dev/null > /tmp/honeypot.json || true
+          if [ -s /tmp/honeypot.json ]; then
+            node -e '
+              const j = JSON.parse(require("fs").readFileSync("/tmp/honeypot.json","utf8"));
+              const sinks = (j.detections || []).filter(r => r.kind === "vendor-sink");
+              if (sinks.length === 0) {
+                console.error("::warning::vendor honeypot did NOT record any sink — sidecar reachable, no BearTrap redirects");
+                console.error("  ring size:", (j.detections || []).length, "kinds:", [...new Set((j.detections||[]).map(r=>r.kind))].join(","));
+              } else {
+                console.log("VENDOR HONEYPOT VERIFIED: " + sinks.length + " sink record(s), dests: " +
+                  [...new Set(sinks.map(r=>r.dest))].slice(0,5).join(", "));
+              }'
+          else
+            echo "::warning::vendor honeypot: sidecar /honeypot did not respond (sidecar not up? honest signal, not a fail)"
+          fi
+
+      # Archive the audit report + browser log — PASS OR FAIL. Enables baseline
+      # diff over time; slow drift in a surface we forgot to check surfaces
+      # here first. Same discipline the RS-mirror review uses.
+      - name: Archive runtime audit outputs
+        if: always() && matrix.distro == 'ubuntu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-audit-linux-${{ github.run_number }}
+          path: |
+            scripts/audit/surface-report.json
+            /tmp/bb.log
+            /tmp/audit-server.log
+          if-no-files-found: warn
+          retention-days: 60
 
       - name: Publish nightly release
         if: github.ref == 'refs/heads/main'

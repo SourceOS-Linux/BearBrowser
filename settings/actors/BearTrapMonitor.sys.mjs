@@ -162,7 +162,10 @@ export const BearTrapMonitor = {
           honeypot = Services.prefs.getBoolPref(
             "bearbrowser.honeypot.vendor.sink", false);
         } catch (e) {}
-        const SINK_UNSAFE = /aus\d+\.mozilla\.org|addons\.mozilla\.org|systemAddon/i;
+        // These MUST stay hard-blocked even in honeypot mode — a plausible-looking
+        // 204 would let a caller believe an update check succeeded. Values are
+        // HOSTS; `systemAddon` is served from aus5, already covered.
+        const SINK_UNSAFE = /^(aus\d+\.mozilla\.org|addons\.mozilla\.org|services\.addons\.mozilla\.org)$/i;
         if (honeypot && !SINK_UNSAFE.test(host)) {
           try {
             // Redirect to loopback sink; sidecar returns benign 204 + logs the
