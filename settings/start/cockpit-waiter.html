@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset=utf-8>
+<title>BearBrowser cockpit — starting</title>
+<style>
+  :root { color-scheme: dark light }
+  body{font:14px system-ui,sans-serif;margin:0;display:grid;place-items:center;
+       min-height:100vh;background:#111;color:#eee}
+  main{max-width:32rem;padding:2rem;text-align:center}
+  h1{font-weight:500;font-size:1.1rem;margin:0 0 .5rem}
+  p{opacity:.7;margin:.5rem 0}
+  .dot{display:inline-block;width:.5rem;height:.5rem;border-radius:50%;
+       background:#5a5;animation:p 1s infinite ease-in-out}
+  @keyframes p{50%{opacity:.2}}
+  code{background:#222;padding:.15rem .35rem;border-radius:.15rem}
+</style>
+<main>
+  <h1><span class="dot"></span> BearBrowser cockpit — starting</h1>
+  <p id="msg">Waiting for the governed backend to bind on 127.0.0.1:8080.</p>
+  <p><small id="detail"></small></p>
+</main>
+<script>
+// Poll the gate's health endpoint; navigate to the cockpit UI when it responds.
+// Fixed the cockpit startup race: the autoconfig kicks off the gate + sidecar
+// but they need a beat to bind — if the cockpit UI itself makes the FIRST call
+// it hits ECONNREFUSED and shows a broken app. A small waiter with backoff
+// gives an honest signal while it comes up.
+const GATE = "http://127.0.0.1:8080/health";
+const COCKPIT = "resource://bearbrowser-cockpit/index.html";
+const DEADLINE_MS = 20000;  // if the gate is not up in 20s something is wrong
+const start = Date.now();
+const msg = document.getElementById("msg");
+const detail = document.getElementById("detail");
+async function poll() {
+  const elapsed = Date.now() - start;
+  detail.textContent = `elapsed ${Math.round(elapsed/1000)}s`;
+  try {
+    const r = await fetch(GATE, { cache: "no-store" });
+    if (r.ok) { location.replace(COCKPIT); return; }
+  } catch (e) { /* not up yet */ }
+  if (elapsed > DEADLINE_MS) {
+    msg.textContent = "The governed backend never bound. Check that the " +
+      "cockpit was assembled into this build (scripts/assemble-cockpit.sh).";
+    detail.textContent = "gate: 127.0.0.1:8080  •  see BearNet → /honeypot";
+    return;
+  }
+  setTimeout(poll, 250);
+}
+poll();
+</script>

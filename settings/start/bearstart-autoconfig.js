@@ -168,9 +168,57 @@ try {
         const { AboutNewTab } = ChromeUtils.importESModule(
           "resource:///modules/AboutNewTab.sys.mjs"
         );
-        AboutNewTab.newTabURL = "resource://bearbrowser-cockpit/index.html";
+        // Point at the waiter, not the cockpit itself. The waiter polls the
+        // gate's /health and forwards to the cockpit only once the backend is
+        // bound. Fixes the cockpit-startup race where new-tab opened before
+        // the gate had a chance to listen.
+        AboutNewTab.newTabURL = "resource://bearstart/cockpit-waiter.html";
       } catch (e) {}
     }
+  }
+} catch (e) {}
+
+// ── Sovereign update check (once/week, one request, no per-install fingerprint) ──
+// We killed aus5.mozilla.org because it phones home %OS_VERSION%/%BUILD_TARGET%/
+// %LOCALE% per install. Our version: fetch a static latest.json from the release
+// page ONCE PER WEEK, compare, notify via observer if newer. No auto-download.
+// One GitHub HTTPS request per user per week, no fingerprint-bearing template.
+try {
+  const LAST_KEY = "bearbrowser.update.last_check";
+  const WEEK_MS = 7 * 24 * 3600 * 1000;
+  const last = Services.prefs.getIntPref(LAST_KEY, 0);
+  const now = Math.floor(Date.now() / 1000);
+  if (now - last > WEEK_MS / 1000) {
+    Services.prefs.setIntPref(LAST_KEY, now);
+    // 30s delay so this never adds to startup latency
+    setTimeout(() => {
+      fetch("https://github.com/SourceOS-Linux/BearBrowser/releases/latest/download/latest.json",
+            { cache: "no-store",
+              credentials: "omit",          // never send GitHub any cookie
+              referrer: "",                 // no Referer header at all
+              referrerPolicy: "no-referrer" })
+        .then(r => r.ok ? r.json() : null)
+        .then(m => {
+          if (!m || !m.version) return;
+          const here = Services.appinfo.version;
+          // Robust integer parse — "150.0.4-rc1" becomes [150,0,4], not [150,0,NaN].
+          const parse = v => String(v).split(".").map(p => parseInt(p, 10) || 0);
+          const cmp = parse(m.version);
+          const cur = parse(here);
+          for (let i = 0; i < Math.max(cmp.length, cur.length); i++) {
+            const a = cmp[i] || 0, b = cur[i] || 0;
+            if (a > b) {
+              Services.obs.notifyObservers(
+                { wrappedJSObject: { available: m.version, current: here, url: m.release_url } },
+                "bearbrowser-update-available"
+              );
+              return;
+            }
+            if (a < b) return;
+          }
+        })
+        .catch(() => {}); // offline, GitHub down, etc. — silent, no retry storm
+    }, 30000);
   }
 } catch (e) {}
 
