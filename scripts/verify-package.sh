@@ -28,6 +28,7 @@ echo
 echo "— BearNet / start page (resource://bearstart) —"
 have "$GRE/browser/bearstart/bearnet.html"          && ok "bearnet.html staged"          || no "bearnet.html MISSING"
 have "$GRE/browser/bearstart/bearbrowser-start.html" && ok "start page staged"            || no "start page MISSING"
+have "$GRE/browser/bearstart/cockpit-waiter.html"     && ok "cockpit-waiter staged"       || no "cockpit-waiter MISSING (cockpit new-tab will race)"
 
 echo "— BearBlocker filter lists (the paper tiger that shipped empty) —"
 for f in bearblocker-ads.txt bearblocker-privacy.txt; do

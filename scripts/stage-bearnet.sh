@@ -28,7 +28,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # 1. The pages, loose where resource://bearstart/ resolves.
 bs="$GRE/browser/bearstart"
 mkdir -p "$bs"
-for f in bearbrowser-start.html bearnet.html world.json dm-sans-latin.woff2 dm-sans-latin-ext.woff2; do
+for f in bearbrowser-start.html bearnet.html cockpit-waiter.html world.json dm-sans-latin.woff2 dm-sans-latin-ext.woff2; do
   [ -f "$REPO/settings/start/$f" ] && cp "$REPO/settings/start/$f" "$bs/"
 done
 echo "stage-bearnet: pages → $bs ($(ls "$bs" | wc -l | tr -d ' ') files)"
