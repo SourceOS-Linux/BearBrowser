@@ -1,0 +1,30 @@
+name: Publish latest.json (on release)
+
+# Writes and uploads a small update manifest to any release. The client fetches
+# https://github.com/SourceOS-Linux/BearBrowser/releases/latest/download/latest.json
+# once a week and shows a passive banner if a newer version exists. No
+# fingerprint-bearing template, no auto-download.
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          bash scripts/publish-latest-json.sh "$TAG"

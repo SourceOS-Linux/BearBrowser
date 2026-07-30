@@ -1,0 +1,71 @@
+name: Windows sign (dispatch)
+
+# GATED on the two Windows secrets — no-op with a clear message until Michael
+# adds them. Uses signtool with a code-signing cert stored as a base64 PFX.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to sign (e.g. v150.0.4)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  sign:
+    runs-on: windows-latest
+    steps:
+      - name: Guard on secrets
+        shell: bash
+        env:
+          PFX: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          if [ -z "$PFX" ] || [ -z "$PFX_PASS" ]; then
+            echo "::warning::Signing skipped — missing WINDOWS_CODESIGN_PFX_BASE64 or _PASSWORD"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          else
+            echo "  Both secrets present. Proceeding to sign."
+          fi
+
+      - name: Download unsigned artifacts
+        if: env.SKIP != '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${{ inputs.tag }}" -R "${{ github.repository }}" \
+            --pattern '*-win64-installer.exe' --clobber
+          ls -la *.exe
+
+      - name: Sign with signtool
+        if: env.SKIP != '1'
+        shell: pwsh
+        env:
+          PFX: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          PFX_PASS: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+        run: |
+          $bytes = [Convert]::FromBase64String($env:PFX)
+          [IO.File]::WriteAllBytes("$env:TEMP\cert.pfx", $bytes)
+          $exe = Get-ChildItem -Filter '*-win64-installer.exe' | Select-Object -First 1
+          # Use the SDK signtool + timestamped SHA-256, per current guidance.
+          $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin' -Recurse -Filter signtool.exe |
+                      Where-Object { $_.DirectoryName -match 'x64' } | Select-Object -First 1
+          & $signtool.FullName sign /f "$env:TEMP\cert.pfx" /p "$env:PFX_PASS" `
+            /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /v $exe.FullName
+          & $signtool.FullName verify /pa /v $exe.FullName
+          Remove-Item "$env:TEMP\cert.pfx" -Force
+
+      - name: Upload signed installer
+        if: env.SKIP != '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Overwrite the unsigned asset with the signed one — same filename, so
+          # existing brew/choco/winget URLs keep working.
+          gh release upload "${{ inputs.tag }}" *-win64-installer.exe \
+            --clobber -R "${{ github.repository }}"
