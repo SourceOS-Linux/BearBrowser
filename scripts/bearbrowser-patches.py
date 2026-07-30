@@ -767,6 +767,13 @@ def bearbrowser_patches():
             if _t != _before:
                 _mn.write_text(_t)
                 print(f"-> Scrubbed {_mn} of ripped newtab module refs")
+    if _newtab_ripped == 0 and _newtab_dir.is_dir():
+        # 0/N with the DIR present means every target moved or renamed. We do
+        # not want the ad/profiling modules ever shipping again, so shout —
+        # this is the exact 'silent success on upstream drift' pattern.
+        print("::warning::Newtab rip matched NONE of its targets — inspect "
+              "browser/builtin-addons/newtab/lib for renames "
+              "(AdsFeed/DiscoveryStreamFeed/InferredPersonalizationFeed/NewTabContentPing)")
     print(f"-> Newtab rip: {_newtab_ripped}/{len(_newtab_kill)} modules deleted "
           f"(missing = already gone or upstream layout change; not a build blocker)")
 

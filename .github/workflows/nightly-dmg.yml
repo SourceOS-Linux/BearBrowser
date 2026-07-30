@@ -202,7 +202,16 @@ jobs:
         # The failures we actually shipped were PACKAGING failures, not logic
         # bugs: BearBlocker shipped with ZERO filter lists because
         # FINAL_TARGET_FILES does not survive `mach package` — and nothing checked.
-        run: bash scripts/verify-package.sh "build/nightly/BearBrowser.app/Contents/Resources"
+        run: bash scripts/verify-package.sh "build/nightly/BearBrowser.app/Contents/Resources" | tee /tmp/verify-package-dmg.log
+
+      - name: Archive package-verify output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-package-dmg-${{ github.run_number }}
+          path: /tmp/verify-package-dmg.log
+          if-no-files-found: warn
+          retention-days: 60
 
       - name: Create DMG
         id: dmg
