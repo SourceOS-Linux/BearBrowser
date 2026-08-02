@@ -25,7 +25,10 @@ ALLOWED_PURPOSES = {"discover", "egress"}
 
 def main() -> int:
     doc = yaml.safe_load((ROOT / "TRUST_SURFACE.yaml").read_text())
-    cp = (doc or {}).get("consent_plane")
+    if not isinstance(doc, dict):
+        print("ERR: TRUST_SURFACE.yaml top-level must be a mapping", file=sys.stderr)
+        return 1
+    cp = doc.get("consent_plane")
     errors: list[str] = []
 
     if not cp:
