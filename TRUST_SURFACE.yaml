@@ -130,3 +130,19 @@ compensating_controls:
   - Keep non-loopback automation disabled unless explicitly declared and authenticated.
   - Redact browser auth/session material from diagnostics, logs, traces, and reports.
   - Verify upstream parity and automation surfaces before release.
+
+# Consent-plane surface binding. The browser is the containment-critical surface:
+# untrusted web content is the input, so this surface is PINNED to agent-space and
+# may never `implement` or `operate`. This directly mitigates the known_risks
+# "exfiltrate page data" and "bridge web content into local agent workspaces".
+# Enforced by scripts/verify-consent-plane-surface.py (trust-surface CI).
+# Standard: socioprophet-agent-standards consent-plane/001; spaces from
+# sourceos-spec isolation-spaces-and-taints.
+consent_plane:
+  surface_id: browser
+  conforms_to: socioprophet-agent-standards/standards/consent-plane/surfaces_v1.yaml#browser
+  untrusted_input: true
+  purposes: [discover, egress]              # egress only to allowlisted origins
+  deny_purposes: [implement, operate]
+  data_classes: [external]
+  space_deny: [kernel-space, system-space, user-space, data-namespace]  # agent-space ONLY
