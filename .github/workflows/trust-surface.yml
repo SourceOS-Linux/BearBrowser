@@ -21,3 +21,11 @@ jobs:
           test -f scripts/policy-surface
           test -f scripts/purge
           test -f scripts/prove-clean
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Enforce consent-plane surface envelope (browser = agent-space only)
+        run: |
+          pip install pyyaml
+          python3 scripts/verify-consent-plane-surface.py
