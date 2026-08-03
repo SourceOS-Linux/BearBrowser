@@ -1,0 +1,11 @@
+{
+  "schemaVersion": "0.1.0",
+  "kind": "DeceptionSignal",
+  "signalId": "sig-bad",
+  "timestamp": "2026-08-03T00:00:00Z",
+  "signalType": "mystery",
+  "severity": "high",
+  "evidence": {
+    "detail": "x"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sourceos.dev/bearbrowser/deception-signal.schema.json",
+  "title": "BearBrowser Deception Signal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "signalId", "timestamp", "signalType", "severity", "evidence"],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "kind": { "const": "DeceptionSignal" },
+    "signalId": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "signalType": { "type": "string", "enum": ["z-index-spike", "offscreen-link", "pointer-events-trap", "position-fixed-overlay", "has-deception"] },
+    "severity": { "type": "string", "enum": ["low", "medium", "high"] },
+    "evidence": { "type": "object", "additionalProperties": false, "required": ["detail"],
+      "properties": { "selector": { "type": "string" }, "value": { "type": "string" }, "threshold": { "type": "string" }, "detail": { "type": "string", "minLength": 1 } } }
+  }
+}

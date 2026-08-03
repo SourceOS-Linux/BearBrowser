@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "0.1.0",
+  "kind": "CssPolicy",
+  "policyId": "css-policy:default-skin",
+  "allowedProperties": [
+    "color",
+    "background-color",
+    "font-size",
+    "font-family",
+    "margin",
+    "padding",
+    "border",
+    "display",
+    "flex",
+    "grid",
+    "gap",
+    "text-align",
+    "line-height"
+  ],
+  "allowedSelectors": [
+    "class",
+    "id",
+    "descendant",
+    "child"
+  ],
+  "zIndexCap": 100,
+  "overlays": {
+    "positionFixedAllowed": false
+  },
+  "hasSelector": {
+    "allowed": false
+  }
+}

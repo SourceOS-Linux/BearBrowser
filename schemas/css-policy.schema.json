@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sourceos.dev/bearbrowser/css-policy.schema.json",
+  "title": "BearBrowser CSS Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "policyId", "allowedProperties", "zIndexCap", "overlays", "hasSelector"],
+  "properties": {
+    "schemaVersion": { "type": "string" },
+    "kind": { "const": "CssPolicy" },
+    "policyId": { "type": "string", "minLength": 1 },
+    "allowedProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1,
+      "description": "allow-list of CSS properties; anything not listed is blocked (fail-closed)." },
+    "allowedSelectors": { "type": "array", "items": { "type": "string" } },
+    "zIndexCap": { "type": "integer", "minimum": 0, "maximum": 100000,
+      "description": "strict z-index cap; content declaring a higher z-index is clamped." },
+    "overlays": { "type": "object", "additionalProperties": false, "required": ["positionFixedAllowed"],
+      "properties": { "positionFixedAllowed": { "type": "boolean" } } },
+    "hasSelector": { "type": "object", "additionalProperties": false, "required": ["allowed"],
+      "properties": { "allowed": { "type": "boolean" } } }
+  }
+}
