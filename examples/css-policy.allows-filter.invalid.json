@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "0.1.0",
+  "kind": "CssPolicy",
+  "policyId": "css-policy:bad",
+  "allowedProperties": [
+    "color",
+    "filter",
+    "mix-blend-mode"
+  ],
+  "zIndexCap": 100,
+  "overlays": {
+    "positionFixedAllowed": false
+  },
+  "hasSelector": {
+    "allowed": false
+  }
+}

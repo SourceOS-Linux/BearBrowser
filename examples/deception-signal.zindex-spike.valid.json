@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "0.1.0",
+  "kind": "DeceptionSignal",
+  "signalId": "sig-001",
+  "timestamp": "2026-08-03T00:00:00Z",
+  "signalType": "z-index-spike",
+  "severity": "high",
+  "evidence": {
+    "selector": ".overlay-trap",
+    "value": "2147483647",
+    "threshold": "100",
+    "detail": "z-index far above the policy cap \u2014 likely clickjacking overlay"
+  }
+}
