@@ -64,10 +64,18 @@ clang -fobjc-arc -O2 \
 
 echo "[3/6] Rendering Info.plist (version=$version)..."
 python3 - "$info_template" "$app/Contents/Info.plist" "$version" <<'PY'
+# See prepare-macos-app-bundle.sh for the sentinel-substitution rationale — this
+# is the same class of bug (silent no-op on stale placeholder), same fix.
 from pathlib import Path
 import sys
 src, dst, version = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
-text = src.read_text().replace('<string>0.1.0-overlay</string>', f'<string>{version}</string>')
+text = src.read_text()
+sentinel = "__BEARBROWSER_VERSION__"
+if sentinel not in text:
+    raise SystemExit(f"ERROR: Info.plist template missing sentinel {sentinel}")
+text = text.replace(sentinel, version)
+if sentinel in text:
+    raise SystemExit(f"ERROR: sentinel {sentinel} still present after substitution")
 dst.write_text(text)
 PY
 

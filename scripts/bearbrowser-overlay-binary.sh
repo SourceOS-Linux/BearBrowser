@@ -168,8 +168,14 @@ src = Path(sys.argv[1])
 dst = Path(sys.argv[2])
 version = sys.argv[3]
 text = src.read_text()
-# Inject the version
-text = text.replace('<string>0.1.0-overlay</string>', f'<string>{version}</string>')
+# Inject the version. Sentinel-based substitution — fail on stale placeholder
+# instead of silently no-op'ing (see prepare-macos-app-bundle.sh).
+sentinel = "__BEARBROWSER_VERSION__"
+if sentinel not in text:
+    raise SystemExit(f"ERROR: Info.plist template missing sentinel {sentinel}")
+text = text.replace(sentinel, version)
+if sentinel in text:
+    raise SystemExit(f"ERROR: sentinel {sentinel} still present after substitution")
 # Ensure CFBundleExecutable is BearBrowser (the wrapper we just created)
 import re
 text = re.sub(
