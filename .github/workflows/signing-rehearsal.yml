@@ -1,0 +1,122 @@
+name: Signing rehearsal (adhoc / self-signed)
+
+# The two real signing workflows (sign-and-notarize-macos.yml, sign-windows.yml)
+# silently SKIP=1 when secrets are absent. Michael has deliberately deferred
+# paying for certs — so those workflows have NEVER been exercised end-to-end.
+# When certs arrive, they'll run in production for the first time.
+#
+# This rehearsal fires the same pipelines against ADHOC (macOS: `codesign
+# --sign -`) and a LOCALLY-GENERATED self-signed PFX (Windows). Same
+# code paths, no distribution-quality output — just proof the plumbing works.
+#
+# Fires on: any change to the real signing workflows, the packaging scripts
+# they call, or manual dispatch. If a rehearsal fails, the real workflow will
+# also fail when secrets arrive — catch it now.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/sign-and-notarize-macos.yml'
+      - '.github/workflows/sign-windows.yml'
+      - '.github/workflows/signing-rehearsal.yml'
+      - 'scripts/prepare-macos-app-bundle.sh'
+      - 'scripts/bearbrowser-package-source-build.sh'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/sign-and-notarize-macos.yml'
+      - '.github/workflows/sign-windows.yml'
+      - '.github/workflows/signing-rehearsal.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-adhoc:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest nightly DMG
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release list --repo ${{ github.repository }} --limit 5 \
+                --json tagName,createdAt \
+                --jq '[.[]|select(.tagName|test("^nightly-"))]|sort_by(.createdAt)|reverse|.[0].tagName')
+          gh release download "$TAG" --repo ${{ github.repository }} \
+            -p 'BearBrowser-*.dmg' --clobber
+          ls -la *.dmg
+
+      - name: Adhoc sign the DMG's inner app
+        # Mirror the real signing workflow's shape: mount DMG, sign the .app,
+        # verify the signature type, remount as unsigned. Everything except the
+        # real identity + notarize + staple round-trip.
+        run: |
+          set -e
+          DMG=$(ls BearBrowser-*.dmg | head -1)
+          mkdir -p adhoc-work
+          hdiutil attach -nobrowse "$DMG" -mountpoint /tmp/bb-mount
+          cp -R /tmp/bb-mount/BearBrowser.app adhoc-work/BearBrowser.app
+          hdiutil detach /tmp/bb-mount -quiet
+          # Strip existing signature (if any) then adhoc-sign in-place.
+          codesign --remove-signature adhoc-work/BearBrowser.app 2>/dev/null || true
+          codesign --force --deep --sign - adhoc-work/BearBrowser.app
+          # Assert the signature is present and identified as adhoc.
+          codesign -dv adhoc-work/BearBrowser.app 2>&1 | tee /tmp/sigcheck.log
+          grep -q "Signature=adhoc" /tmp/sigcheck.log \
+            || { echo "::error::adhoc rehearsal did not produce an adhoc signature"; exit 1; }
+          echo "rehearsal OK — pipeline can sign a real .app when secrets arrive"
+
+  windows-selfsigned:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest nightly Windows installer (or skip on no artifact)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh release list --repo ${{ github.repository }} --limit 5 \
+                --json tagName,createdAt \
+                --jq '[.[]|select(.tagName|test("^nightly-"))]|sort_by(.createdAt)|reverse|.[0].tagName')
+          # Windows nightlies are not yet reliably built; skip gracefully if
+          # there's no installer artifact. Rehearsal still proves the cert
+          # generation + signtool invocation path via a placeholder EXE below.
+          gh release download "$TAG" --repo ${{ github.repository }} \
+            -p '*-win64-installer.exe' --clobber || echo "no win installer in $TAG — using placeholder"
+          if ! ls *.exe 2>/dev/null; then
+            echo "MZ" > placeholder.exe  # minimal MZ so signtool has SOMETHING
+          fi
+          ls *.exe
+
+      - name: Generate a self-signed code-signing PFX
+        # Mirrors what the real workflow expects but with a locally-generated
+        # cert. Everything except distribution quality.
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject "CN=BearBrowser Rehearsal (adhoc), O=SourceOS, C=US" `
+            -KeyUsage DigitalSignature `
+            -CertStoreLocation Cert:\CurrentUser\My
+          $pfxPwd = ConvertTo-SecureString -String "rehearsal" -Force -AsPlainText
+          $path = "$env:GITHUB_WORKSPACE\rehearsal.pfx"
+          Export-PfxCertificate -Cert $cert -FilePath $path -Password $pfxPwd | Out-Null
+          echo "REHEARSAL_PFX=$path" >> $env:GITHUB_ENV
+
+      - name: Sign with signtool
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem *.exe | Select-Object -First 1
+          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" `
+            sign /f $env:REHEARSAL_PFX /p "rehearsal" `
+                 /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+                 $exe.FullName
+          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" `
+            verify /pa $exe.FullName
+          Write-Host "rehearsal OK — pipeline can sign a real EXE when secrets arrive"

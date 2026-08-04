@@ -14,6 +14,11 @@ on:
         description: 'Release tag'
         required: true
         type: string
+      channel:
+        description: 'Update channel (stable|canary). Default: auto-detect from tag suffix (-rc / -canary → canary)'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -27,4 +32,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ github.event.release.tag_name || inputs.tag }}"
-          bash scripts/publish-latest-json.sh "$TAG"
+          # Channel resolution:
+          #  1. explicit workflow_dispatch input wins
+          #  2. tag suffix -rc | -canary → canary
+          #  3. default → stable
+          CHANNEL="${{ inputs.channel }}"
+          if [ -z "$CHANNEL" ]; then
+            case "$TAG" in
+              *-rc*|*-canary*) CHANNEL="canary" ;;
+              *)               CHANNEL="stable" ;;
+            esac
+          fi
+          echo "publishing manifest for tag=$TAG channel=$CHANNEL"
+          bash scripts/publish-latest-json.sh "$TAG" --channel "$CHANNEL"
