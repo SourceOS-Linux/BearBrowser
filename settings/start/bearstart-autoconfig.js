@@ -325,27 +325,40 @@ try {
       onWindowTitleChange() {},
     });
 
-    // Badge the BearNet button when BearTrap catches fingerprinting — so the
-    // honeypot is visible from anywhere, not just inside the panel.
+    // Badge the BearNet button when BearTrap catches fingerprinting OR when
+    // BearWall blocks a vendor host — so the honeypot + firewall are visible
+    // from anywhere, not just inside the panel. Total count on tooltip; the
+    // per-kind counts show up on the BearTrap surface page.
     try {
-      const fpOrigins = new Set();
+      const fpOrigins = new Set();      // fingerprint probe origins seen
+      const vendorHosts = new Set();    // BearWall-blocked hosts seen
+      const canaryOrigins = new Set();  // canary-token exfiltration origins
+      const summary = () => {
+        const bits = [];
+        if (fpOrigins.size)    bits.push(fpOrigins.size    + " fingerprint attempt"     + (fpOrigins.size    === 1 ? "" : "s"));
+        if (vendorHosts.size)  bits.push(vendorHosts.size  + " vendor request"          + (vendorHosts.size  === 1 ? "" : "s") + " blocked");
+        if (canaryOrigins.size) bits.push(canaryOrigins.size + " canary exfiltration"   + (canaryOrigins.size === 1 ? "" : "s"));
+        return bits.length ? bits.join(", ") + " — open BearTrap" : "BearNet — see and block what this browser is talking to";
+      };
+      const total = () => fpOrigins.size + vendorHosts.size + canaryOrigins.size;
       Services.obs.addObserver(
         {
           observe(subj) {
             try {
               const d = subj && subj.wrappedJSObject;
-              if (d && d.kind === "fingerprint" && d.origin) fpOrigins.add(d.origin);
-              const n = fpOrigins.size;
+              if (!d) return;
+              if (d.kind === "fingerprint"    && d.origin) fpOrigins.add(d.origin);
+              if (d.kind === "vendor-blocked" && (d.dest || d.host)) vendorHosts.add(d.dest || d.host);
+              if (d.kind === "canary"         && d.origin) canaryOrigins.add(d.origin);
+              const n = total();
+              const active = fpOrigins.size + vendorHosts.size + canaryOrigins.size > 0;
               const e2 = Services.wm.getEnumerator("navigator:browser");
               while (e2.hasMoreElements()) {
                 const b = e2.getNext().document.getElementById("bearnet-button");
                 if (b) {
-                  b.setAttribute(
-                    "tooltiptext",
-                    n + " fingerprinting attempt" + (n === 1 ? "" : "s") +
-                      " caught — open BearNet"
-                  );
-                  b.setAttribute("beartrap", "1");
+                  b.setAttribute("tooltiptext", summary());
+                  b.setAttribute("beartrap", active ? "1" : "0");
+                  b.setAttribute("data-block-count", String(n));
                 }
               }
             } catch (e) {}
@@ -375,8 +388,8 @@ try {
   if (!Services.appinfo.inSafeMode) {
     const ENTRIES = [
       { id: "bearbrowser-appmenu-bearnet",    label: "BearNet — Network Monitor",  url: "resource://bearstart/bearnet.html",             accessKey: "N" },
-      { id: "bearbrowser-appmenu-beartrap",   label: "BearTrap — Fingerprint Log", url: "resource://bearstart/bearnet.html#beartrap",    accessKey: "T" },
-      { id: "bearbrowser-appmenu-bearwall",   label: "BearWall — Blocked Vendors", url: "resource://bearstart/bearnet.html#bearwall",    accessKey: "W" },
+      { id: "bearbrowser-appmenu-beartrap",   label: "BearTrap — Fingerprint Log", url: "resource://bearstart/beartrap.html#beartrap",   accessKey: "T" },
+      { id: "bearbrowser-appmenu-bearwall",   label: "BearWall — Blocked Vendors", url: "resource://bearstart/beartrap.html#bearwall",   accessKey: "W" },
       { id: "bearbrowser-appmenu-cockpit",    label: "Cockpit",                    url: "resource://bearbrowser-cockpit/index.html",     accessKey: "C" },
     ];
     const ensureAppMenuSection = (win) => {
