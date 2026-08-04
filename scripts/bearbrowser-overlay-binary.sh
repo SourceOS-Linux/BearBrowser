@@ -37,9 +37,10 @@ Steps:
   4. Write BearBrowser Info.plist from the canonical template.
   5. Install the BearBrowser icon.
   6. Inject profile settings (user.js, policies.json).
-  7. Strip quarantine extended attributes.
-  8. Apply ad-hoc code signature.
-  9. Run branding and identity verification (unless --skip-verify).
+  7. Pack and install bundled extensions (Bear Spaces, Bear Containers).
+  8. Strip quarantine extended attributes.
+  9. Apply ad-hoc code signature.
+  10. Run branding and identity verification (unless --skip-verify).
 
 Options:
   --input-app     Path to the source LibreWolf.app bundle. Required.
@@ -98,14 +99,14 @@ echo "version=$version"
 echo
 
 # ── Step 1: Copy the base bundle ─────────────────────────────────────────────
-echo "[1/9] Copying base bundle..."
+echo "[1/10] Copying base bundle..."
 rm -rf "$out_app"
 mkdir -p "$(dirname "$out_app")"
 cp -R "$input_app" "$out_app"
 echo "      done → $out_app"
 
 # ── Step 2: Apply text-format branding overlay ───────────────────────────────
-echo "[2/9] Applying BearBrowser text branding overlay..."
+echo "[2/10] Applying BearBrowser text branding overlay..."
 bash "$script_dir/apply-bearbrowser-branding.sh" --workspace "$out_app"
 # The branding script creates .bearbrowser/branding.json at the workspace root.
 # Inside an app bundle this file sits outside Contents/ and breaks codesign's
@@ -122,7 +123,7 @@ find "$out_app" -maxdepth 1 -not -name "Contents" -not -path "$out_app" -delete 
 echo "      done"
 
 # ── Step 3: Create the BearBrowser wrapper launcher ──────────────────────────
-echo "[3/9] Creating BearBrowser launcher wrapper..."
+echo "[3/10] Creating BearBrowser launcher wrapper..."
 macos_dir="$out_app/Contents/MacOS"
 
 # Detect the real Firefox/LibreWolf executable name. The main entry point is
@@ -155,7 +156,7 @@ chmod +x "$macos_dir/BearBrowser"
 echo "      created $macos_dir/BearBrowser → exec $real_bin"
 
 # ── Step 4: Write BearBrowser Info.plist ──────────────────────────────────────
-echo "[4/9] Writing BearBrowser Info.plist..."
+echo "[4/10] Writing BearBrowser Info.plist..."
 if [ ! -f "$info_template" ]; then
   echo "ERROR: Info.plist template missing: $info_template" >&2
   exit 1
@@ -189,7 +190,7 @@ PY
 echo "      done"
 
 # ── Step 5: Install BearBrowser icon ─────────────────────────────────────────
-echo "[5/9] Installing BearBrowser icon..."
+echo "[5/10] Installing BearBrowser icon..."
 icon_svg="$repo_root/branding/bearbrowser.svg"
 if [ -f "$icon_svg" ]; then
   cp "$icon_svg" "$out_app/Contents/Resources/BearBrowser.svg"
@@ -204,7 +205,7 @@ else
 fi
 
 # ── Step 6: Inject profile settings ─────────────────────────────────────────
-echo "[6/9] Injecting profile settings (profile=$profile)..."
+echo "[6/10] Injecting profile settings (profile=$profile)..."
 profile_dir="$repo_root/settings/profiles/$profile"
 if [ -d "$profile_dir" ]; then
   # The packaged app applies shipped prefs from a default-pref file
@@ -276,16 +277,22 @@ else
   echo "      WARNING: no bundled fonts in $fonts_src — font allowlist will be a safe no-op"
 fi
 
-# ── Step 7: Strip quarantine extended attributes ─────────────────────────────
-echo "[7/9] Stripping quarantine attributes..."
+# ── Step 7: Pack and install bundled extensions ──────────────────────────────
+echo "[7/10] Packing and installing bundled extensions..."
+"$script_dir/bearbrowser-pack-extensions.sh" "$repo_root/build/extensions" 2>&1 | sed 's/^/       /'
+"$script_dir/bearbrowser-install-extensions.sh" "$out_app" 2>&1 | sed 's/^/       /'
+echo "       done"
+
+# ── Step 8: Strip quarantine extended attributes ─────────────────────────────
+echo "[8/10] Stripping quarantine attributes..."
 xattr -cr "$out_app" 2>/dev/null || true
 echo "      done"
 
-# ── Step 8: Ad-hoc code signature ────────────────────────────────────────────
+# ── Step 9: Ad-hoc code signature ────────────────────────────────────────────
 if [ "$skip_sign" = "true" ]; then
-  echo "[8/9] Skipping signing (--skip-sign)."
+  echo "[9/10] Skipping signing (--skip-sign)."
 else
-  echo "[8/9] Applying ad-hoc code signature..."
+  echo "[9/10] Applying ad-hoc code signature..."
   if command -v codesign >/dev/null 2>&1; then
     # Ad-hoc signing a modified Gecko bundle requires signing inner components
     # first (frameworks, helpers, nested apps) then the outer bundle.
@@ -306,11 +313,11 @@ else
   fi
 fi
 
-# ── Step 9: Verify BearBrowser identity ──────────────────────────────────────
+# ── Step 10: Verify BearBrowser identity ─────────────────────────────────────
 if [ "$skip_verify" = "true" ]; then
-  echo "[9/9] Skipping verification (--skip-verify)."
+  echo "[10/10] Skipping verification (--skip-verify)."
 else
-  echo "[9/9] Verifying BearBrowser identity..."
+  echo "[10/10] Verifying BearBrowser identity..."
   # Pass --skip-signing to the verifier since ad-hoc signatures won't pass
   # spctl --assess (Gatekeeper requires a notarized Developer ID signature).
   bash "$script_dir/verify-macos-app.sh" --app "$out_app" --skip-signing 2>&1 | sed 's/^/      /'
