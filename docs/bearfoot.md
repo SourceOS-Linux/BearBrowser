@@ -64,16 +64,52 @@ Nothing here reproduces or claims any of it.
 
 For the Lenape specifically, on whose homelands much of this estate's founding geography sits: the
 **Mesingw** (Misingw, *Living Solid Face*, the Mask Spirit) is the guardian of the game animals —
-deer, bear and the rest — a sacred medicine being, and a focus of living Big House ceremony. He is
-described here only as the Delaware Tribe and public language resources describe him, and he is a
+deer, bear and the rest — a sacred medicine being, and a focus of living Big House ceremony. He is a
 **guardian**, not a returning god.
 
-**An honest gap.** This document was asked to name a Lenape "returning god" figure associated with
-the bear. **It could not be verified and is deliberately not supplied.** The nearest attested things
+What is described below is drawn only from **published ethnography in the public domain**, quoted
+rather than paraphrased. It is a matter of record, not of access, and nothing here claims
+ceremonial knowledge.
+
+The being is impersonated in a **bear's own skin**. M. R. Harrington, *Religion and Ceremonies of the
+Lenape* (1921), p. 34:
+
+> "To the back of the mask is fastened the skin of the bear's head, which effectively conceals the
+> head and neck of the impersonator, while the bear's ears, projecting, add to the uncanny effect."
+
+And Harrington at p. 41, quoting David Brainerd's account of **1745** — the earliest description we
+have of it:
+
+> "a coat of bear skins, dressed with the hair on, and hanging down to his toes; a pair of bear skin
+> stockings; and a great wooden face painted"
+
+Red on the right of the face, black on the left; a stick, a turtle-shell rattle, a bearskin bag.
+
+**And this is the hinge of the whole idea.** The track makes the bear look like a man. The garb
+makes a man look like the bear. It is *the same resemblance read in both directions* — and where the
+track is something you merely observe, the skin is something you **put on**. The kinship is not
+noticed; it is **worn**.
+
+**Three honest gaps**, kept as gaps rather than filled with something plausible.
+
+1. **A Lenape "returning god" tied to the bear.** Not verified, and deliberately **not supplied.** The nearest attested things
 are Mesingw (a guardian, not a returner) and the prophet **Neolin** (1761), whose Master-of-Life
 vision drove a renewal movement — *restoration of ways*, not the return of a deity. Inventing or
 mis-naming another people's sacred figure would be a real harm, so the blank is left as a blank.
-If the source turns up, it can be added with proper attribution.
+
+2. **The bearskin garb being shed or removed during the ceremony.** Searched for and **not found**
+   in Harrington, the primary source. He has the impersonator appearing about the camp and
+   following the hunters out; he does not describe the costume coming off. Recorded here as
+   unverified rather than repeated.
+
+3. **A first-bear-hunt coming-of-age legend** — a young man skinning his first bear and recognising
+   how like a man it looks. **Not present in Harrington**, and not otherwise attested to the Lenape
+   in what could be checked. The *motif* is entirely real: a skinned bear's resemblance to a human
+   body is remarked on by hunting peoples right across the northern hemisphere, and it is one of the
+   roots of the kinship this page is built on. But "widespread motif" and "this people's legend" are
+   different claims, and only the first one is made here.
+
+If sources turn up for (2) or (3), they can be added with proper attribution.
 
 ---
 
@@ -82,6 +118,7 @@ history (plantigrade gait, human-like tracks, the resulting kinship motif) is pu
 Where this document and the checker disagree, the checker ships.*
 
 *Further reading, as cited rather than paraphrased:*
+- M. R. Harrington, [*Religion and Ceremonies of the Lenape*](https://www.gutenberg.org/ebooks/72988) (1921, public domain) — the primary ethnography, and the source of both quotations above
 - [Mesingw, the Lenape Mask Spirit](http://www.native-languages.org/mesingw.htm) · [Delaware Tribe of Indians — Culture FAQs](https://delawaretribe.org/cultural-education/culture-and-language/culture-faqs-3/)
 - [Neolin, the Delaware Prophet](https://en.wikipedia.org/wiki/Neolin)
 - [Sukkah 53a](https://www.sefaria.org/Sukkah.53a)
