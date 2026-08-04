@@ -4,7 +4,7 @@
 
 **Date:** 2026-07-28
 **Release:** https://github.com/SourceOS-Linux/BearBrowser/releases/tag/v150.0.1
-**Source:** Firefox 150 fork (LibreWolf mirror), commit `8ffb75f`
+**Source:** hardened Gecko 150 (upstream-mirror), commit `8ffb75f`
 
 First cross-platform stable release. A sovereign, privacy-first browser with
 hardened anti-fingerprinting plus two flagship features that ship live in the
@@ -27,7 +27,7 @@ Install: `brew install --cask sourceos-linux/tap/bearbrowser` (macOS).
 ## 0.1.0 — `140.12.0esr-1` (Linux x86_64, first shippable binary)
 
 **Date:** 2026-06-30
-**Build:** `bearbrowser-build-20260630-100322` (Mozilla BearBrowser `140.12.0esr-1`)
+**Build:** `bearbrowser-build-20260630-100322` (BearBrowser `140.12.0esr-1`)
 
 This is the **first successful BearBrowser binary build** — the prior 10 GCP
 build attempts failed. Two real Linux x86_64 runtimes now exist and are wired
@@ -56,7 +56,7 @@ extracting.
 
 The following recipes now fetch the real tarball from GCS (or a staged copy),
 verify the SHA256, extract the Gecko runtime, and launch `bin/bearbrowser` — no
-more "binary not present / GCP build pending" stub or Firefox-ESR fallback:
+more "binary not present / GCP build pending" stub or unbranded Gecko fallback:
 
 - `packaging/linux/deb/build-deb.sh` — extracts into `/usr/lib/bearbrowser`,
   `/usr/bin/bearbrowser` shim; `--variant human|tor`.
