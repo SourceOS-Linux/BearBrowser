@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <!-- Bear Containers icon 48×48 | MIT | mdheller -->
+  <!-- Layered circles suggesting container isolation -->
+  <circle cx="15" cy="24" r="12" fill="none" stroke="#39C5CF" stroke-width="2.5" opacity="0.40"/>
+  <circle cx="24" cy="24" r="12" fill="none" stroke="#39C5CF" stroke-width="2.5" opacity="0.68"/>
+  <circle cx="33" cy="24" r="12" fill="none" stroke="#39C5CF" stroke-width="2.5"/>
+  <!-- Center accent dot -->
+  <circle cx="24" cy="24" r="2.5" fill="#39C5CF"/>
+</svg>

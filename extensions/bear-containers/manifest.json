@@ -1,0 +1,50 @@
+{
+  "manifest_version": 2,
+  "name": "Bear Containers",
+  "version": "1.0.0",
+  "description": "Multi-Account Containers for BearBrowser — isolate cookies, localStorage, and cache per container.",
+  "author": "mdheller",
+  "license": "MIT",
+  "homepage_url": "https://github.com/mdheller",
+
+  "permissions": [
+    "cookies",
+    "tabs",
+    "storage",
+    "contextMenus",
+    "webRequest",
+    "webRequestBlocking",
+    "contextualIdentities",
+    "<all_urls>"
+  ],
+
+  "browser_action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/container-16.svg",
+      "32": "icons/container-32.svg",
+      "48": "icons/container-48.svg",
+      "96": "icons/container-96.svg"
+    },
+    "default_title": "Bear Containers"
+  },
+
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+
+  "icons": {
+    "16": "icons/container-16.svg",
+    "32": "icons/container-32.svg",
+    "48": "icons/container-48.svg",
+    "96": "icons/container-96.svg"
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bear-containers@mdheller",
+      "strict_min_version": "77.0"
+    }
+  }
+}

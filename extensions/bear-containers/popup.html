@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: MIT | author: mdheller -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bear Containers</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header>
+      <div id="header-icon" aria-hidden="true">
+        <svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" width="22" height="22">
+          <circle cx="10" cy="16" r="9" fill="none" stroke="#39C5CF" stroke-width="2.5" opacity="0.5"/>
+          <circle cx="16" cy="16" r="9" fill="none" stroke="#39C5CF" stroke-width="2.5" opacity="0.75"/>
+          <circle cx="22" cy="16" r="9" fill="none" stroke="#39C5CF" stroke-width="2.5"/>
+        </svg>
+      </div>
+      <span id="header-title">Bear Containers</span>
+    </header>
+
+    <!-- API unavailable notice (hidden by default) -->
+    <div id="api-warning" class="warning hidden">
+      <strong>Containers not enabled.</strong><br/>
+      Go to <em>Preferences → Privacy → Enable Container Tabs</em> in LibreWolf, then reload this extension.
+    </div>
+
+    <!-- Current container -->
+    <section id="current-section" class="hidden">
+      <p class="section-label">Current tab</p>
+      <div id="current-container" class="container-row current">
+        <span id="current-dot" class="dot"></span>
+        <span id="current-name">—</span>
+      </div>
+    </section>
+
+    <!-- Container list -->
+    <section id="list-section" class="hidden">
+      <p class="section-label">Switch to</p>
+      <ul id="container-list" role="list"></ul>
+    </section>
+
+    <!-- New container -->
+    <section id="new-section" class="hidden">
+      <button id="new-container-btn" type="button">+ New Container</button>
+    </section>
+
+    <!-- New container form (inline, hidden until btn clicked) -->
+    <section id="new-form" class="hidden">
+      <p class="section-label">New container</p>
+      <div class="form-row">
+        <input id="new-name" type="text" placeholder="Name" maxlength="30" autocomplete="off" />
+      </div>
+      <div class="form-row color-picker" id="color-picker" role="group" aria-label="Container color"></div>
+      <div class="form-row form-actions">
+        <button id="cancel-new-btn" type="button" class="btn-secondary">Cancel</button>
+        <button id="confirm-new-btn" type="button" class="btn-primary">Create</button>
+      </div>
+    </section>
+
+    <!-- Status message -->
+    <div id="status" class="status hidden"></div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

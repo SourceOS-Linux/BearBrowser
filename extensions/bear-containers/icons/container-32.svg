@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Bear Containers icon 32×32 | MIT | mdheller -->
+  <circle cx="10" cy="16" r="8" fill="none" stroke="#39C5CF" stroke-width="2" opacity="0.45"/>
+  <circle cx="16" cy="16" r="8" fill="none" stroke="#39C5CF" stroke-width="2" opacity="0.72"/>
+  <circle cx="22" cy="16" r="8" fill="none" stroke="#39C5CF" stroke-width="2"/>
+</svg>

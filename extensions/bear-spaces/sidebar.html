@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<!--
+  Bear Spaces — sidebar.html
+  SPDX-License-Identifier: MIT
+  Author: mdheller
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bear Spaces</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+
+  <!-- ── Header ──────────────────────────────────────────────────────── -->
+  <div id="header">
+    <!-- Bear logo inline SVG (no external assets) -->
+    <svg class="bear-logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" aria-hidden="true">
+      <defs>
+        <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stop-color="#3b2a1a"/>
+          <stop offset="1" stop-color="#8a5a2b"/>
+        </linearGradient>
+        <linearGradient id="face" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0" stop-color="#d8a15d"/>
+          <stop offset="1" stop-color="#9a632f"/>
+        </linearGradient>
+      </defs>
+      <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+      <circle cx="158" cy="156" r="70" fill="#5c351d"/>
+      <circle cx="354" cy="156" r="70" fill="#5c351d"/>
+      <circle cx="158" cy="156" r="39" fill="#c98b4a"/>
+      <circle cx="354" cy="156" r="39" fill="#c98b4a"/>
+      <path d="M96 282c0-105 71-183 160-183s160 78 160 183c0 91-61 150-160 150S96 373 96 282Z" fill="url(#face)"/>
+      <path d="M172 285c0 20-13 36-29 36s-29-16-29-36 13-36 29-36 29 16 29 36Zm226 0c0 20-13 36-29 36s-29-16-29-36 13-36 29-36 29 16 29 36Z" fill="#1c1410"/>
+      <path d="M211 336c0-22 20-40 45-40s45 18 45 40-20 40-45 40-45-18-45-40Z" fill="#2a1912"/>
+      <path d="M232 399c17 12 31 12 48 0" fill="none" stroke="#2a1912" stroke-width="18" stroke-linecap="round"/>
+    </svg>
+
+    <h1>Spaces</h1>
+
+    <button id="btn-show-all" title="Show all tabs (no space filter)">All tabs</button>
+  </div>
+
+  <!-- ── Spaces list ─────────────────────────────────────────────────── -->
+  <div id="spaces-list">
+    <div id="empty-state">
+      No spaces yet.<br>Create one below to get started.
+    </div>
+    <!-- .space-card elements injected by sidebar.js -->
+  </div>
+
+  <!-- ── Footer / create space ───────────────────────────────────────── -->
+  <div id="footer">
+    <form id="new-space-form" autocomplete="off">
+      <input
+        id="new-space-input"
+        type="text"
+        placeholder="New space name…"
+        maxlength="40"
+        spellcheck="false"
+      >
+      <button id="btn-create-space" type="submit">+ Add</button>
+    </form>
+  </div>
+
+  <!-- ── Toast ───────────────────────────────────────────────────────── -->
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <!-- Bear Containers icon 96×96 | MIT | mdheller -->
+  <!-- Three overlapping circles — privacy/isolation motif in brand teal -->
+  <defs>
+    <clipPath id="left-clip">
+      <rect x="0" y="0" width="48" height="96"/>
+    </clipPath>
+    <clipPath id="right-clip">
+      <rect x="48" y="0" width="48" height="96"/>
+    </clipPath>
+  </defs>
+
+  <!-- Back circle (faintest) -->
+  <circle cx="30" cy="48" r="24" fill="none" stroke="#39C5CF" stroke-width="3" opacity="0.35"/>
+  <!-- Mid circle -->
+  <circle cx="48" cy="48" r="24" fill="none" stroke="#39C5CF" stroke-width="3" opacity="0.65"/>
+  <!-- Front circle (full opacity) -->
+  <circle cx="66" cy="48" r="24" fill="none" stroke="#39C5CF" stroke-width="3"/>
+
+  <!-- Inner rings for depth -->
+  <circle cx="48" cy="48" r="14" fill="none" stroke="#39C5CF" stroke-width="1.5" opacity="0.30"/>
+
+  <!-- Center dot -->
+  <circle cx="48" cy="48" r="4" fill="#39C5CF"/>
+</svg>
