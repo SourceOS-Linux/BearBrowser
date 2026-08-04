@@ -112,11 +112,28 @@ jobs:
       - name: Sign with signtool
         shell: pwsh
         run: |
+          # Locate signtool dynamically — the Windows SDK version subdir under
+          # 'Windows Kits\10\bin\' moves across runner-image revisions.
+          # Hardcoding one version (as the first rehearsal did) breaks whenever
+          # the runner is updated. Search all 10.0.* SDK subdirs, prefer newest.
+          $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\10.0.*\x64\signtool.exe" `
+                        -ErrorAction SilentlyContinue |
+                        Sort-Object -Property { [Version]$_.Directory.Parent.Name } -Descending |
+                        Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) {
+            # Fallback: any signtool.exe under Windows Kits\10\bin\x64 (root of tree).
+            $signtool = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe" `
+                          -ErrorAction SilentlyContinue |
+                          Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $signtool) {
+            Write-Error "signtool.exe not found on this runner — Windows Kits layout has changed"
+            exit 1
+          }
+          Write-Host "using signtool: $signtool"
           $exe = Get-ChildItem *.exe | Select-Object -First 1
-          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" `
-            sign /f $env:REHEARSAL_PFX /p "rehearsal" `
-                 /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
-                 $exe.FullName
-          & "C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\signtool.exe" `
-            verify /pa $exe.FullName
+          & $signtool sign /f $env:REHEARSAL_PFX /p "rehearsal" `
+                     /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
+                     $exe.FullName
+          & $signtool verify /pa $exe.FullName
           Write-Host "rehearsal OK — pipeline can sign a real EXE when secrets arrive"

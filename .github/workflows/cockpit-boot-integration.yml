@@ -63,7 +63,16 @@ jobs:
       - name: Extract + start browser under xvfb
         run: |
           mkdir -p ext
-          tar -xJf nightly/BearBrowser-*.tar.xz -C ext
+          # Pick exactly ONE tarball. A nightly tag may carry BOTH the schedule
+          # artifact (150.0.1-dev) and a workflow_dispatch versioned artifact
+          # (e.g. 150.0.6). A bare glob passed to tar treats extras as archive
+          # members, not additional inputs → "Not found in archive". Pick one
+          # deterministically, prefer ubuntu variant.
+          TAR=$(ls nightly/BearBrowser-*linux-x86_64-ubuntu*.tar.xz 2>/dev/null | head -1)
+          [ -z "$TAR" ] && TAR=$(ls nightly/BearBrowser-*linux-x86_64*.tar.xz 2>/dev/null | head -1)
+          [ -n "$TAR" ] || { echo "::error::no linux tarball in nightly/"; ls -la nightly/; exit 1; }
+          echo "extracting: $TAR"
+          tar -xJf "$TAR" -C ext
           BB=$(find ext -maxdepth 3 -name bearbrowser -type f -perm -111 | head -1)
           [ -n "$BB" ] || { echo "::error::no bearbrowser executable found"; find ext -maxdepth 3; exit 1; }
           echo "browser: $BB"

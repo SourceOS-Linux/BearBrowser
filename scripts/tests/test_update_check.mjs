@@ -88,21 +88,31 @@ check(
   "shipped code sets referrerPolicy:\"no-referrer\"",
   /referrerPolicy\s*:\s*"no-referrer"/.test(SRC),
 );
-// They must be on the SAME fetch call. Extract the update-check fetch block and
-// assert both keywords appear inside a single fetch(...).
-const fetchBlocks = SRC.match(/fetch\s*\([^)]*\{[^}]+\}[^)]*\)/gs) || [];
-const updateFetch = fetchBlocks.find(f =>
-  /latest\.json|github\.com\/.*releases\/latest/.test(f),
+// They must be on the SAME fetch call. Locate the "update-check region" — the
+// contiguous source lines around the update-check fetch — and assert both
+// keywords appear inside it. Prior regex required latest.json to appear
+// INSIDE the fetch() args, which broke when the URL was moved into a `url`
+// variable for the canary channel refactor. New approach: scope by comment
+// anchor + 40 lines, tolerant to future refactors.
+const anchor = SRC.indexOf("Sovereign update check");
+check(
+  "update-check anchor comment present",
+  anchor >= 0,
+);
+const updateRegion = anchor >= 0 ? SRC.slice(anchor, anchor + 3000) : "";
+check(
+  "update-check region references latest.json (either directly or via manifest var)",
+  /latest(-canary)?\.json/.test(updateRegion),
 );
 check(
-  "update-check fetch block exists",
-  Boolean(updateFetch),
+  "update-check region contains a fetch(...) call",
+  /fetch\s*\(/.test(updateRegion),
 );
-if (updateFetch) {
+if (updateRegion) {
   check(
-    "update-fetch block sets BOTH credentials:omit AND referrerPolicy:no-referrer",
-    /credentials\s*:\s*"omit"/.test(updateFetch) &&
-    /referrerPolicy\s*:\s*"no-referrer"/.test(updateFetch),
+    "update-check region sets BOTH credentials:omit AND referrerPolicy:no-referrer",
+    /credentials\s*:\s*"omit"/.test(updateRegion) &&
+    /referrerPolicy\s*:\s*"no-referrer"/.test(updateRegion),
     "one without the other = a leak that would take another release to notice",
   );
 }
