@@ -5,10 +5,10 @@ on:
     - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to bake into Info.plist and artifact names (defaults to nightly 150.0.1)'
+      release_version:
+        description: 'BearBrowser release version to bake into Info.plist + artifact filename (upstream Firefox version stays pinned at 150.0.1). Defaults to nightly.'
         required: false
-        default: '150.0.1'
+        default: ''
         type: string
   push:
     branches: [main]
@@ -30,11 +30,15 @@ jobs:
 
     env:
       MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
-      # A workflow_dispatch input overrides the nightly default; every other
-      # trigger (schedule, push) still ships a dev-versioned artifact. This
-      # closes the "release artifacts carry nightly version 150.0.1" root
-      # cause behind the plist-version-equals-tag gate rejection.
-      VERSION: ${{ inputs.version || '150.0.1' }}
+      # VERSION = pinned UPSTREAM Firefox tarball we build on (workspace paths,
+      # cache keys, tarball URL). Never overridden — the upstream source is
+      # what it is.
+      VERSION: 150.0.1
+      # BEARBROWSER_VERSION = what we call OUR release. Baked into Info.plist
+      # via prepare-macos-app-bundle.sh's --version arg and into the artifact
+      # filename. workflow_dispatch input overrides for release cuts; every
+      # other trigger falls back to VERSION so nightlies keep dev semantics.
+      BEARBROWSER_VERSION: ${{ inputs.release_version != '' && inputs.release_version || '150.0.1' }}
       RELEASE: 1
       PROFILE: human-secure
 
@@ -199,11 +203,13 @@ jobs:
 
       - name: Package BearBrowser.app
         run: |
+          # --version is the RELEASE version baked into Info.plist, NOT the
+          # upstream Firefox tarball version (which stays pinned via VERSION).
           bash scripts/bearbrowser-package-source-build.sh \
             --workspace build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }} \
             --profile ${{ env.PROFILE }} \
             --out-dir build/nightly \
-            --version ${{ env.VERSION }} \
+            --version ${{ env.BEARBROWSER_VERSION }} \
             --skip-verify
 
       - name: Verify the package carries the hardening (gate)
@@ -227,7 +233,10 @@ jobs:
         id: dmg
         run: |
           DATE=$(date +%Y%m%d)
-          DMG="BearBrowser-${{ env.VERSION }}-${DATE}-dev.dmg"
+          # Filename uses the RELEASE version (BEARBROWSER_VERSION), not the
+          # Firefox upstream version, so a release cut produces a correctly-
+          # named artifact ready for `gh release create v<version>`.
+          DMG="BearBrowser-${{ env.BEARBROWSER_VERSION }}-${DATE}-dev.dmg"
           hdiutil create \
             -volname "BearBrowser" \
             -srcfolder "build/nightly/BearBrowser.app" \

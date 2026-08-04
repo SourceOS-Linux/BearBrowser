@@ -5,10 +5,10 @@ on:
     - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to bake into artifact names + Info metadata (defaults to nightly 150.0.1)'
+      release_version:
+        description: 'BearBrowser release version to bake into artifact filename (upstream Firefox version stays pinned at 150.0.1). Defaults to nightly.'
         required: false
-        default: '150.0.1'
+        default: ''
         type: string
   push:
     # anti-fingerprint-verify added so the compile can be triggered on this branch
@@ -75,10 +75,13 @@ jobs:
 
     env:
       MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
-      # workflow_dispatch input overrides for release cuts; other triggers get
-      # the nightly default. Root cause of the "release ships nightly version"
-      # bug that promotion-gate now catches.
-      VERSION: ${{ inputs.version || '150.0.1' }}
+      # VERSION = pinned UPSTREAM Firefox tarball (workspace paths, cache
+      # keys, tarball URL). Never overridden — the upstream source is what
+      # it is.
+      VERSION: 150.0.1
+      # BEARBROWSER_VERSION = what we ship as. Baked into the tarball
+      # filename. workflow_dispatch input overrides for release cuts.
+      BEARBROWSER_VERSION: ${{ inputs.release_version != '' && inputs.release_version || '150.0.1' }}
       RELEASE: 1
       PROFILE: human-secure
 
@@ -234,7 +237,10 @@ jobs:
           # filter lists / substitutions / stripped prefs must not ship.
           bash scripts/verify-package.sh "$OBJ/dist/bearbrowser"
 
-          TAR="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.xz"
+          # Filename uses the RELEASE version (BEARBROWSER_VERSION), not the
+          # Firefox upstream version, so release cuts produce correctly-named
+          # artifacts ready for `gh release create v<version>`.
+          TAR="BearBrowser-${{ env.BEARBROWSER_VERSION }}-${DATE}-${{ matrix.artifact_suffix }}.tar.xz"
           mkdir -p build/nightly
           tar -C "$OBJ/dist" -cJf "build/nightly/${TAR}" bearbrowser
           echo "name=${TAR}" >> $GITHUB_OUTPUT
@@ -247,8 +253,8 @@ jobs:
           bash scripts/package-linux-appimage.sh \
             --workspace "build/workspaces/${{ env.PROFILE }}-${{ env.VERSION }}-${{ env.RELEASE }}/source/bearbrowser-${{ env.VERSION }}-${{ env.RELEASE }}" \
             --out-dir build/nightly \
-            --version ${{ env.VERSION }} || echo "AppImage packaging non-fatal" >&2
-          APPIMG="BearBrowser-${{ env.VERSION }}-${DATE}-${{ matrix.appimage_suffix }}.AppImage"
+            --version ${{ env.BEARBROWSER_VERSION }} || echo "AppImage packaging non-fatal" >&2
+          APPIMG="BearBrowser-${{ env.BEARBROWSER_VERSION }}-${DATE}-${{ matrix.appimage_suffix }}.AppImage"
           [ -f "build/nightly/${APPIMG}" ] && echo "name=${APPIMG}" >> $GITHUB_OUTPUT && echo "path=build/nightly/${APPIMG}" >> $GITHUB_OUTPUT || true
 
       - name: Upload tarball artifact
