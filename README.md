@@ -106,3 +106,7 @@ This repository contains SourceOS overlays only:
 ## Rule
 
 Do not bury SourceOS product behavior inside the upstream mirror. Keep the mirror clean. Keep SourceOS changes explicit here.
+
+## bearfoot
+
+A bear is plantigrade — its hind track looks like a barefoot human print, which is why so many peoples call it kin. Anti-fingerprinting works the same way: it does not hide your track, it makes **every track the same track**. So the **bearfoot property** is that every profile claiming to flatten its print must flatten it *identically* — a disagreement between profiles is itself a distinguishing bit. Checked by `scripts/bearbrowser-verify-bearfoot.py`; the story is in [docs/bearfoot.md](docs/bearfoot.md).
