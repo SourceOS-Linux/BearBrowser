@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bear Split</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; background: #0d1117; color: #e6edf3; font-family: system-ui, -apple-system, sans-serif; overflow: hidden; }
+#container { display: flex; height: 100vh; }
+.pane { display: flex; flex-direction: column; overflow: hidden; flex: 1; min-width: 80px; }
+.urlbar { background: #161b22; border-bottom: 1px solid #30363d; display: flex; align-items: center; gap: 5px; padding: 4px 8px; flex-shrink: 0; }
+.urlbar label { font-size: 10px; color: #8b949e; white-space: nowrap; }
+.urlbar input { flex: 1; background: #0d1117; border: 1px solid #30363d; border-radius: 4px; color: #e6edf3; font-size: 12px; padding: 3px 7px; outline: none; min-width: 0; }
+.urlbar input:focus { border-color: #39C5CF; }
+.urlbar button { background: none; border: 1px solid #30363d; border-radius: 3px; color: #8b949e; cursor: pointer; font-size: 11px; padding: 2px 8px; white-space: nowrap; flex-shrink: 0; }
+.urlbar button:hover { border-color: #39C5CF; color: #39C5CF; }
+.pane iframe { flex: 1; border: none; background: #ffffff; display: block; }
+#divider {
+  width: 6px; background: #21262d; cursor: col-resize; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.1s; position: relative;
+}
+#divider:hover, #divider.dragging { background: #39C5CF; }
+#divider::after {
+  content: "⋮⋮"; color: rgba(255,255,255,0.4); font-size: 10px;
+  writing-mode: vertical-lr; letter-spacing: -2px;
+}
+#divider.dragging::after { color: rgba(255,255,255,0.8); }
+</style>
+</head>
+<body>
+<div id="container">
+  <div class="pane" id="pane-left" style="flex:1">
+    <div class="urlbar">
+      <label>LEFT</label>
+      <input id="url-left" type="url" placeholder="https://" spellcheck="false">
+      <button id="btn-left">Go</button>
+    </div>
+    <iframe id="frame-left"
+      sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads"
+      referrerpolicy="no-referrer-when-downgrade"></iframe>
+  </div>
+
+  <div id="divider" title="Drag to resize"></div>
+
+  <div class="pane" id="pane-right" style="flex:1">
+    <div class="urlbar">
+      <label>RIGHT</label>
+      <input id="url-right" type="url" placeholder="https://" spellcheck="false">
+      <button id="btn-right">Go</button>
+    </div>
+    <iframe id="frame-right"
+      sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads"
+      referrerpolicy="no-referrer-when-downgrade"></iframe>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const params   = new URLSearchParams(location.search);
+  const leftUrl  = params.get("left")  || "about:blank";
+  const rightUrl = params.get("right") || "about:blank";
+
+  const urlL = document.getElementById("url-left");
+  const urlR = document.getElementById("url-right");
+  const fL   = document.getElementById("frame-left");
+  const fR   = document.getElementById("frame-right");
+  const btnL = document.getElementById("btn-left");
+  const btnR = document.getElementById("btn-right");
+
+  // Load initial URLs
+  urlL.value = leftUrl;
+  fL.src     = leftUrl;
+  if (rightUrl && rightUrl !== "about:blank") {
+    urlR.value = rightUrl;
+    fR.src     = rightUrl;
+  }
+
+  function navigate(frame, input) {
+    let url = input.value.trim();
+    if (!url) return;
+    if (!/^[a-z][a-z0-9+\-.]*:/i.test(url)) url = "https://" + url;
+    input.value = url;
+    frame.src   = url;
+    // Memory mesh ping (fire-and-forget)
+    try {
+      fetch("http://localhost:7788/api/append", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ts: new Date().toISOString(),
+          type: "split-navigate",
+          title: "split view navigate",
+          data: { url }
+        })
+      }).catch(() => {});
+    } catch (_) {}
+  }
+
+  btnL.addEventListener("click", () => navigate(fL, urlL));
+  btnR.addEventListener("click", () => navigate(fR, urlR));
+  urlL.addEventListener("keydown", e => { if (e.key === "Enter") navigate(fL, urlL); });
+  urlR.addEventListener("keydown", e => { if (e.key === "Enter") navigate(fR, urlR); });
+
+  // Draggable divider
+  const divider   = document.getElementById("divider");
+  const container = document.getElementById("container");
+  const paneL     = document.getElementById("pane-left");
+  const paneR     = document.getElementById("pane-right");
+
+  let dragging = false, startX = 0, startLW = 0, totalW = 0;
+
+  divider.addEventListener("mousedown", e => {
+    dragging = true;
+    startX   = e.clientX;
+    startLW  = paneL.getBoundingClientRect().width;
+    totalW   = paneL.getBoundingClientRect().width + paneR.getBoundingClientRect().width;
+    divider.classList.add("dragging");
+    document.body.style.userSelect = "none";
+    document.body.style.cursor     = "col-resize";
+    fL.style.pointerEvents = "none";
+    fR.style.pointerEvents = "none";
+  });
+
+  document.addEventListener("mousemove", e => {
+    if (!dragging) return;
+    const newL = Math.max(80, Math.min(totalW - 80, startLW + (e.clientX - startX)));
+    const newR = totalW - newL;
+    paneL.style.flex  = "none";
+    paneR.style.flex  = "none";
+    paneL.style.width = newL + "px";
+    paneR.style.width = newR + "px";
+  });
+
+  document.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    divider.classList.remove("dragging");
+    document.body.style.userSelect = "";
+    document.body.style.cursor     = "";
+    fL.style.pointerEvents = "";
+    fR.style.pointerEvents = "";
+  });
+
+  // Mesh ping on open
+  try {
+    fetch("http://localhost:7788/api/append", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ts: new Date().toISOString(),
+        type: "split-view",
+        title: "split view opened",
+        data: { left: leftUrl, right: rightUrl }
+      })
+    }).catch(() => {});
+  } catch (_) {}
+})();
+</script>
+</body>
+</html>
