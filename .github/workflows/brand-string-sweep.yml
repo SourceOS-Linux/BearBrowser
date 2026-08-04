@@ -1,0 +1,35 @@
+name: Brand string sweep
+
+# Prevent regressions of the sweep in scripts/verify-brand-strings.sh — 11
+# files (README, top-level package metadata, and shipped module strings) must
+# stay free of "Firefox 150 fork" / "LibreWolf-mirror" / "Firefox ETP strict"
+# / "Firefox Downloads" / etc. Legal attribution (MPL) and technical facts
+# (hostnames, XPCOM CIDs, extension IDs) are exempted by design — see the
+# script header.
+
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'settings/actors/*.sys.mjs'
+      - 'settings/extensions/**'
+      - 'packaging/**'
+      - 'scripts/verify-brand-strings.sh'
+      - '.github/workflows/brand-string-sweep.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'settings/actors/*.sys.mjs'
+      - 'settings/extensions/**'
+      - 'packaging/**'
+      - 'scripts/verify-brand-strings.sh'
+      - '.github/workflows/brand-string-sweep.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/verify-brand-strings.sh

@@ -29,7 +29,7 @@ The OCI lane packages `bearbrowser-agent-runtime` as a governed browser runtime 
 
 Replace the runtime scaffold with a multi-stage image:
 
-1. Build BearBrowser agent-runtime from the Nix package or LibreWolf-derived workspace.
+1. Build BearBrowser agent-runtime from the Nix package or upstream-derived workspace.
 2. Copy only the required runtime closure into the OCI image.
 3. Run browser automation through a policy-mediated entrypoint.
 4. Export session artifacts through governed mounts.

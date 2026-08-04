@@ -1,10 +1,10 @@
 # BearBrowser
 
-BearBrowser is a LibreWolf-derived SourceOS browser product for humans and agents.
+BearBrowser is a sovereign, privacy-first SourceOS browser for humans and agents.
 
 It has two primary execution modes:
 
-1. **Human Secure Browser** — a privacy-first desktop browser profile based on LibreWolf defaults.
+1. **Human Secure Browser** — a privacy-first desktop browser with hardened upstream defaults.
 2. **Agent Browser Runtime** — a governed browser execution surface for local, cloud, and fog agents.
 
 ## Install

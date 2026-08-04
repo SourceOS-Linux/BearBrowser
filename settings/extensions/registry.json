@@ -24,7 +24,7 @@
       "name": "Privacy Badger",
       "disposition": "native",
       "native_replacement": "ETP strict mode + BearBlocker privacy filter list",
-      "rationale": "Heuristic tracker blocking covered by Firefox ETP strict + our curated lists."
+      "rationale": "Heuristic tracker blocking is covered by the built-in tracking-protection layer + our curated lists."
     },
 
     {
@@ -32,14 +32,14 @@
       "name": "HTTPS Everywhere",
       "disposition": "native",
       "native_replacement": "dom.security.https_only_mode = true (user.js)",
-      "rationale": "Firefox native HTTPS-only mode is more complete than the extension."
+      "rationale": "The browser's native HTTPS-only mode is more complete than the extension."
     },
 
     {
       "id": "{b9db16a4-6edc-47ec-a1f4-b86292ed211d}",
       "name": "Video DownloadHelper",
       "disposition": "native",
-      "native_replacement": "BearCapture (BearCaptureChild/BearCaptureParent) — scans DOM for video/audio/media links, floating ▼N badge, Cmd+Shift+D panel, queues to Firefox Downloads",
+      "native_replacement": "BearCapture (BearCaptureChild/BearCaptureParent) — scans DOM for video/audio/media links, floating ▼N badge, Cmd+Shift+D panel, queues to the browser Downloads panel",
       "rationale": "Extension used webRequest API (intercepts ALL network traffic) for what is actually a DOM scan + download manager call. BearCapture does the same with zero extension privilege surface."
     },
 
@@ -143,8 +143,8 @@
       "id": "addon@darkreader.org",
       "name": "Dark Reader",
       "disposition": "native",
-      "native_replacement": "System prefers-color-scheme + Firefox layout.css.prefers-color-scheme.content-override",
-      "rationale": "OS dark mode propagates through Firefox natively. For sites that don't respect it, add userContent.css rules."
+      "native_replacement": "System prefers-color-scheme + the layout.css.prefers-color-scheme.content-override pref",
+      "rationale": "OS dark mode propagates through the engine natively. For sites that don't respect it, add userContent.css rules."
     },
 
     {
@@ -159,7 +159,7 @@
       "name": "Disconnect",
       "disposition": "native",
       "native_replacement": "ETP strict mode uses Disconnect tracker lists natively",
-      "rationale": "Firefox ETP strict ships the Disconnect list. Extension is redundant."
+      "rationale": "The engine's tracking-protection ships the Disconnect list. Extension is redundant."
     },
 
     {

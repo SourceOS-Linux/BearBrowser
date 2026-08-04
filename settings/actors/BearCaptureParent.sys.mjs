@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
- * BearCaptureParent — downloads media URLs via Firefox's download manager.
+ * BearCaptureParent — downloads media URLs via the platform download manager.
  *
  * Receives BearCapture:Download from the child with a media URL and filename.
  * Uses the toolkit Downloads API to queue a download to the user's preferred

@@ -32,6 +32,6 @@ install -m 0644 branding/bearbrowser.svg %{buildroot}%{_datadir}/icons/hicolor/s
 
 %changelog
 * Tue Jul 28 2026 SourceOS <maintainers@sourceos.dev> - 150.0.1
-- Align version with the v150.0.1 stable release (Firefox 150 fork; BearNet + BearTrap).
+- Align version with the v150.0.1 stable release (hardened Gecko engine; BearNet + BearTrap).
 * Sun May 03 2026 SourceOS <maintainers@sourceos.dev> - 0.1.0-0.overlay
 - Initial BearBrowser RPM scaffold.
