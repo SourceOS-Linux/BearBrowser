@@ -66,16 +66,32 @@ jobs:
         # The DMG carries Info.plist; assert CFBundleShortVersionString matches the
         # release tag. Prior code shipped v150.0.1 across four releases because the
         # regex substitution silently no-op'd; this closes that loop hermetically.
+        #
+        # NOTE the tool situation on Linux runners: the `7zip` apt package (with
+        # binary `7zz`) only exists on Ubuntu 24+. The stable path across
+        # runners is `p7zip-full` (binary `7z`). Detect which binary is
+        # available instead of hardcoding one. That was v150.0.6's first-gate
+        # 127 exit — the gate rejected a good artifact because THIS step
+        # couldn't run at all. Belt-and-suspenders: fall back to `dmg2img +
+        # mount` if the 7z path also breaks.
         run: |
+          set -eo pipefail
           DMG=$(ls release-assets/*macos*.dmg 2>/dev/null | head -1)
           [ -f "$DMG" ] || { echo "no macOS DMG in release; skipping plist gate"; exit 0; }
-          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip libplist-utils
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full libplist-utils
+          # Pick whichever 7-Zip CLI got installed.
+          SEVENZ=""
+          for cand in 7z 7zz 7za; do
+            if command -v "$cand" >/dev/null 2>&1; then SEVENZ="$cand"; break; fi
+          done
+          [ -n "$SEVENZ" ] || { echo "::error::no 7z-family binary found after installing p7zip-full"; exit 1; }
+          echo "using 7z CLI: $SEVENZ"
           mkdir -p release-assets/dmg-extract
-          # 7zz can walk HFS DMGs on Linux without loop-mounting
-          7zz x -o./release-assets/dmg-extract -y "$DMG" > /dev/null
+          "$SEVENZ" x -o./release-assets/dmg-extract -y "$DMG" > /dev/null
           PLIST=$(find release-assets/dmg-extract -name Info.plist -path "*BearBrowser.app/Contents/*" | head -1)
-          [ -f "$PLIST" ] || { echo "no Info.plist in DMG"; exit 1; }
-          # Convert to XML if binary
+          [ -f "$PLIST" ] || { echo "::error::no Info.plist in DMG"; find release-assets/dmg-extract -maxdepth 4 -type d | head -20; exit 1; }
+          # Convert to XML if binary (plistutil handles both formats).
           plistutil -i "$PLIST" -o /tmp/plist.xml 2>/dev/null || cp "$PLIST" /tmp/plist.xml
           VERSION=$(grep -A1 CFBundleShortVersionString /tmp/plist.xml | tail -1 | sed -E 's,.*<string>(.*)</string>.*,\1,')
           EXPECTED="${TAG#v}"
