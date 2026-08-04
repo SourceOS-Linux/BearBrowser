@@ -175,6 +175,9 @@ def bb_to_mesh(db: dict) -> int:
 
             url   = _extract_url(ev)
             title = _extract_title(ev)
+            # If title is just the raw URL (no real page title), ask Noetica for a summary
+            if url and title == url[:80]:
+                title = _noetica_summarize(url)
             ts    = ev.get("timestamp", now_iso())
 
             content_parts = []
