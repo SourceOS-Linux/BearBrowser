@@ -1,0 +1,414 @@
+/*
+ * Bear Spaces — sidebar.css
+ * Dark minimal aesthetic matching BearBrowser.
+ * SPDX-License-Identifier: MIT
+ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --bg:           #0d1117;
+  --surface:      #161b22;
+  --surface-hi:   #1f2937;
+  --border:       #21262d;
+  --teal:         #39C5CF;
+  --teal-dim:     rgba(57, 197, 207, 0.15);
+  --teal-glow:    rgba(57, 197, 207, 0.35);
+  --text:         #e6edf3;
+  --text-muted:   #8b949e;
+  --danger:       #f85149;
+  --danger-dim:   rgba(248, 81, 73, 0.15);
+  --radius:       8px;
+  --radius-sm:    5px;
+  --font:         -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --transition:   150ms ease;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────────── */
+
+#header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#header .bear-logo {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+#header h1 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--teal);
+  flex: 1;
+}
+
+#btn-show-all {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition), background var(--transition);
+  white-space: nowrap;
+}
+
+#btn-show-all:hover {
+  color: var(--text);
+  background: var(--surface-hi);
+}
+
+#btn-show-all.active {
+  color: var(--teal);
+}
+
+/* ── Spaces list ─────────────────────────────────────────────────────────────── */
+
+#spaces-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+#spaces-list::-webkit-scrollbar { width: 4px; }
+#spaces-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+.space-card {
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color var(--transition);
+  overflow: hidden;
+}
+
+.space-card.is-active {
+  border-color: var(--teal);
+  background: var(--teal-dim);
+}
+
+.space-card.is-active .space-header {
+  background: rgba(57, 197, 207, 0.08);
+}
+
+/* ── Space header row ────────────────────────────────────────────────────────── */
+
+.space-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--transition);
+}
+
+.space-header:hover {
+  background: var(--surface-hi);
+}
+
+.space-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--teal);
+  flex-shrink: 0;
+  transition: box-shadow var(--transition);
+}
+
+.is-active .space-dot {
+  box-shadow: 0 0 6px var(--teal-glow);
+}
+
+.space-name {
+  flex: 1;
+  font-weight: 500;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-count {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--surface-hi);
+  padding: 1px 6px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.is-active .space-count {
+  background: var(--teal-dim);
+  color: var(--teal);
+}
+
+.space-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity var(--transition);
+}
+
+.space-header:hover .space-actions {
+  opacity: 1;
+}
+
+.space-actions button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+  line-height: 1;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--transition), background var(--transition);
+}
+
+.space-actions button:hover { color: var(--text); background: var(--surface-hi); }
+.space-actions .btn-delete:hover { color: var(--danger); background: var(--danger-dim); }
+
+/* ── Tab list inside a space ──────────────────────────────────────────────────── */
+
+.space-tabs {
+  display: none;
+  padding: 0 10px 8px;
+  border-top: 1px solid var(--border);
+}
+
+.space-card.expanded .space-tabs {
+  display: block;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border-radius: var(--radius-sm);
+  transition: background var(--transition);
+  cursor: default;
+}
+
+.tab-item:hover {
+  background: var(--surface-hi);
+}
+
+.tab-favicon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.tab-favicon-fallback {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.tab-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.tab-item:hover .tab-title {
+  color: var(--text);
+}
+
+.btn-tab-remove {
+  background: none;
+  border: none;
+  color: transparent;
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+  font-size: 12px;
+  line-height: 1;
+  transition: color var(--transition), background var(--transition);
+}
+
+.tab-item:hover .btn-tab-remove {
+  color: var(--text-muted);
+}
+
+.tab-item:hover .btn-tab-remove:hover {
+  color: var(--danger);
+  background: var(--danger-dim);
+}
+
+/* ── Quick-assign current tab ─────────────────────────────────────────────────── */
+
+.btn-assign-current {
+  display: none;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+  color: var(--teal);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.space-card:hover .btn-assign-current {
+  display: block;
+}
+
+.btn-assign-current:hover {
+  background: var(--teal-dim);
+}
+
+/* ── Footer / create new space ───────────────────────────────────────────────── */
+
+#footer {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  flex-shrink: 0;
+}
+
+#new-space-form {
+  display: flex;
+  gap: 6px;
+}
+
+#new-space-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+  transition: border-color var(--transition);
+  font-family: var(--font);
+}
+
+#new-space-input::placeholder {
+  color: var(--text-muted);
+}
+
+#new-space-input:focus {
+  border-color: var(--teal);
+}
+
+#btn-create-space {
+  background: var(--teal);
+  color: #0d1117;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity var(--transition);
+}
+
+#btn-create-space:hover {
+  opacity: 0.85;
+}
+
+/* ── Inline rename input ──────────────────────────────────────────────────────── */
+
+.rename-input {
+  flex: 1;
+  background: var(--surface-hi);
+  border: 1px solid var(--teal);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 1px 5px;
+  outline: none;
+  font-family: var(--font);
+  min-width: 0;
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────────────── */
+
+#empty-state {
+  text-align: center;
+  padding: 24px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.7;
+  display: none;
+}
+
+#empty-state.visible {
+  display: block;
+}
+
+/* ── Toast notification ───────────────────────────────────────────────────────── */
+
+#toast {
+  position: fixed;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: var(--surface-hi);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 12px;
+  border-radius: 99px;
+  font-size: 11px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease, transform 200ms ease;
+  white-space: nowrap;
+  z-index: 999;
+}
+
+#toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
