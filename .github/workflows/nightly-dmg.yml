@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 4 * * *'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to bake into Info.plist and artifact names (defaults to nightly 150.0.1)'
+        required: false
+        default: '150.0.1'
+        type: string
   push:
     branches: [main]
     paths:
@@ -24,7 +30,11 @@ jobs:
 
     env:
       MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
-      VERSION: 150.0.1
+      # A workflow_dispatch input overrides the nightly default; every other
+      # trigger (schedule, push) still ships a dev-versioned artifact. This
+      # closes the "release artifacts carry nightly version 150.0.1" root
+      # cause behind the plist-version-equals-tag gate rejection.
+      VERSION: ${{ inputs.version || '150.0.1' }}
       RELEASE: 1
       PROFILE: human-secure
 

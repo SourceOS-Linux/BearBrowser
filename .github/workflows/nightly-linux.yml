@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 5 * * *'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to bake into artifact names + Info metadata (defaults to nightly 150.0.1)'
+        required: false
+        default: '150.0.1'
+        type: string
   push:
     # anti-fingerprint-verify added so the compile can be triggered on this branch
     # (workflow_dispatch only works from the default branch, which is behind).
@@ -69,7 +75,10 @@ jobs:
 
     env:
       MOZBUILD_STATE_PATH: ${{ github.workspace }}/.mozbuild
-      VERSION: 150.0.1
+      # workflow_dispatch input overrides for release cuts; other triggers get
+      # the nightly default. Root cause of the "release ships nightly version"
+      # bug that promotion-gate now catches.
+      VERSION: ${{ inputs.version || '150.0.1' }}
       RELEASE: 1
       PROFILE: human-secure
 
