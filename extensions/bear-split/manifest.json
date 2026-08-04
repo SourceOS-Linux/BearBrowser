@@ -1,0 +1,45 @@
+{
+  "manifest_version": 2,
+  "name": "Bear Split",
+  "version": "1.0.0",
+  "description": "Side-by-side split view tabs for BearBrowser. Closes the Arc split-view gap.",
+  "author": "mdheller",
+  "license": "MIT",
+
+  "permissions": ["tabs", "storage", "commands"],
+
+  "commands": {
+    "open-split": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Backslash",
+        "mac": "Command+Shift+Backslash"
+      },
+      "description": "Open current tab in split view"
+    }
+  },
+
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  },
+
+  "web_accessible_resources": ["split.html"],
+
+  "browser_action": {
+    "default_title": "Bear Split",
+    "default_icon": {
+      "48": "icons/split-48.svg"
+    }
+  },
+
+  "icons": {
+    "48": "icons/split-48.svg"
+  },
+
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "bear-split@bearbrowser.local",
+      "strict_min_version": "114.0"
+    }
+  }
+}
