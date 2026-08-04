@@ -148,16 +148,24 @@ if [ ! -f "$info_template" ]; then
 fi
 
 python3 - "$info_template" "$out_app/Contents/Info.plist" "$version" <<'PY'
-import sys, re
+# Substitute __BEARBROWSER_VERSION__ in the template — fail loudly if the
+# sentinel is absent (template drift) or still present after (broken write).
+# Prior code used a scaffold-era regex that no longer matched the template and
+# silently shipped v150.0.1 across four releases.
+import sys
 from pathlib import Path
 src = Path(sys.argv[1])
 dst = Path(sys.argv[2])
 version = sys.argv[3]
 text = src.read_text()
-# Replace placeholder version strings
-text = re.sub(r'<string>0\.\d+\.\d+-[^<]+</string>', f'<string>{version}</string>', text)
+sentinel = "__BEARBROWSER_VERSION__"
+if sentinel not in text:
+    raise SystemExit(f"ERROR: Info.plist template missing sentinel {sentinel} — check template drift")
+text = text.replace(sentinel, version)
+if sentinel in text:
+    raise SystemExit(f"ERROR: sentinel {sentinel} still present after substitution")
 dst.write_text(text)
-print(f"      Info.plist written: {dst}")
+print(f"      Info.plist written: {dst}  (version={version})")
 PY
 
 # ── Step 3: Install BearBrowser icon ─────────────────────────────────────────

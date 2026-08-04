@@ -359,3 +359,82 @@ try {
 } catch (e) {
   // No entry points rather than a broken browser.
 }
+
+// ── BearBrowser appMenu (hamburger) section ────────────────────────────────
+// The classic macOS Tools menu is niche — the hamburger appMenu is where every
+// Windows/Linux user + most macOS users actually find things. Adding a
+// BearBrowser subsection here surfaces BearNet, BearTrap, BearWall and the
+// Cockpit at the top-level flat menu, so they are reachable without knowing
+// resource:// URLs.
+//
+// Injection strategy: the appMenu is lazy-loaded; the panel's main view
+// (#appMenu-mainView) only exists after the panel opens once. Observing the
+// panel's `ViewShowing` event catches the first open reliably, and re-adds
+// on subsequent opens if a customize wipe removed our nodes.
+try {
+  if (!Services.appinfo.inSafeMode) {
+    const ENTRIES = [
+      { id: "bearbrowser-appmenu-bearnet",    label: "BearNet — Network Monitor",  url: "resource://bearstart/bearnet.html",             accessKey: "N" },
+      { id: "bearbrowser-appmenu-beartrap",   label: "BearTrap — Fingerprint Log", url: "resource://bearstart/bearnet.html#beartrap",    accessKey: "T" },
+      { id: "bearbrowser-appmenu-bearwall",   label: "BearWall — Blocked Vendors", url: "resource://bearstart/bearnet.html#bearwall",    accessKey: "W" },
+      { id: "bearbrowser-appmenu-cockpit",    label: "Cockpit",                    url: "resource://bearbrowser-cockpit/index.html",     accessKey: "C" },
+    ];
+    const ensureAppMenuSection = (win) => {
+      try {
+        const doc = win.document;
+        if (doc.documentElement.getAttribute("windowtype") !== "navigator:browser") return;
+        const view = doc.getElementById("appMenu-mainView");
+        if (!view) return;
+        const body = view.querySelector(".panel-subview-body") || view;
+        // Separator marks the start of our section — presence == already inserted.
+        if (doc.getElementById("bearbrowser-appmenu-separator")) return;
+        const sep = doc.createXULElement("toolbarseparator");
+        sep.id = "bearbrowser-appmenu-separator";
+        body.insertBefore(sep, body.firstChild);
+        for (let i = ENTRIES.length - 1; i >= 0; i--) {
+          const e = ENTRIES[i];
+          if (doc.getElementById(e.id)) continue;
+          const btn = doc.createXULElement("toolbarbutton");
+          btn.id = e.id;
+          btn.className = "subviewbutton subviewbutton-iconic";
+          btn.setAttribute("label", e.label);
+          btn.setAttribute("accesskey", e.accessKey);
+          btn.addEventListener("command", () => {
+            try {
+              win.PanelUI && win.PanelUI.hide && win.PanelUI.hide();
+              win.openTrustedLinkIn(e.url, "tab");
+            } catch (err) {}
+          });
+          body.insertBefore(btn, sep.nextSibling);
+        }
+      } catch (e) {}
+    };
+    const armPerWindow = (win) => {
+      try {
+        // Try immediately, in case the panel has been opened before.
+        ensureAppMenuSection(win);
+        // Re-arm on every open so a Customize-reset doesn't strand our items.
+        const panel = win.document.getElementById("appMenu-popup");
+        if (panel && !panel.hasAttribute("bearbrowser-hooked")) {
+          panel.setAttribute("bearbrowser-hooked", "1");
+          panel.addEventListener("ViewShowing", () => ensureAppMenuSection(win));
+        }
+      } catch (e) {}
+    };
+    const en = Services.wm.getEnumerator("navigator:browser");
+    while (en.hasMoreElements()) armPerWindow(en.getNext());
+    Services.wm.addListener({
+      onOpenWindow(xw) {
+        try {
+          const win = xw.docShell.domWindow;
+          win.addEventListener("load", () => armPerWindow(win), { once: true });
+        } catch (e) {}
+      },
+      onCloseWindow() {},
+      onWindowTitleChange() {},
+    });
+  }
+} catch (e) {
+  // appMenu injection is best-effort — the nav-bar button + Tools menu are the
+  // primary paths; hamburger is nice-to-have.
+}

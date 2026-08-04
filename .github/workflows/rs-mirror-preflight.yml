@@ -1,0 +1,62 @@
+name: RS mirror preflight (validate WIF + GCS before scheduled sync)
+
+# The RS mirror workflow (rs-mirror.yml) runs on a 6h cron and only exposes auth
+# gaps when it fires against prod. In one afternoon we hit: audience mismatch
+# after adding allowedAudiences, GH secret hygiene (trailing newlines), IAM
+# condition breaking bucket-level list. Each burned one scheduled run.
+#
+# This preflight runs on ANY change to the mirror pipeline OR the workflow OR
+# manual dispatch. It exercises the exact WIF handshake + a no-op gs list —
+# fail fast, in seconds, in the PR — instead of finding out 6h later.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/rs-mirror.yml'
+      - '.github/workflows/rs-mirror-preflight.yml'
+      - 'scripts/rs-mirror/**'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/rs-mirror.yml'
+      - 'scripts/rs-mirror/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_MIRROR_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Auth handshake + bucket-list smoke
+        # These are the two ops that broke the first three mirror runs. If either
+        # fails the WIF binding / IAM roles are wrong; catch it here, not at cron
+        # time.
+        run: |
+          gcloud auth list --filter=status:ACTIVE --format='value(account)'
+          echo "listing rs-mirror/ prefix (needs storage.objects.list on bucket + objectViewer/objectAdmin on prefix)"
+          gcloud storage ls gs://sourceos-artifacts-socioprophet/rs-mirror/ | head -5
+
+      - name: Write-perm smoke (upload + delete a preflight marker)
+        # Prove we CAN write under rs-mirror/ WITHOUT scanning the whole live tree
+        # (rsync of a large destination hangs the runner). Bounded, deterministic:
+        # upload a tiny marker, delete it, done in seconds.
+        timeout-minutes: 3
+        run: |
+          MARKER="preflight-$(date -u +%Y%m%dT%H%M%S)-${GITHUB_RUN_ID}.txt"
+          echo "rs-mirror-preflight ok at $(date -u +%FT%TZ)" > "/tmp/$MARKER"
+          gcloud storage cp "/tmp/$MARKER" "gs://sourceos-artifacts-socioprophet/rs-mirror/preflight/$MARKER"
+          gcloud storage rm "gs://sourceos-artifacts-socioprophet/rs-mirror/preflight/$MARKER"
+          echo "write-perm smoke ok — WIF can upload + delete under rs-mirror/"

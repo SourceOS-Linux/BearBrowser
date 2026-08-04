@@ -76,13 +76,22 @@ cp -R "$input_app" "$out_app"
 mkdir -p "$out_app/Contents/Resources"
 
 python3 - "$info_template" "$out_app/Contents/Info.plist" "$version" <<'PY'
+# Substitute __BEARBROWSER_VERSION__ in the template — assert both the sentinel
+# WAS present (else the template drifted) and that the result no longer contains
+# the sentinel (else the write is broken). Prior version silently no-op'd on a
+# stale placeholder ("0.1.0-overlay") and shipped v150.0.1 across four releases.
 from pathlib import Path
 import sys
 src = Path(sys.argv[1])
 dst = Path(sys.argv[2])
 version = sys.argv[3]
 text = src.read_text()
-text = text.replace('<string>0.1.0-overlay</string>', f'<string>{version}</string>')
+sentinel = "__BEARBROWSER_VERSION__"
+if sentinel not in text:
+    raise SystemExit(f"ERROR: Info.plist template missing sentinel {sentinel} — was substitution done twice?")
+text = text.replace(sentinel, version)
+if sentinel in text:
+    raise SystemExit(f"ERROR: sentinel {sentinel} still present after substitution")
 dst.write_text(text)
 PY
 

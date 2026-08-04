@@ -68,4 +68,16 @@ if ! grep -q 'cockpit-config.js' "$OUT/index.html"; then
   log "injected cockpit-config.js loader into index.html"
 fi
 
+# Rebrand the tab title. The upstream client-vue index.html ships with
+# <title>SocioProphet Web</title> — a lie when the same bundle is embedded in
+# BearBrowser under a resource:// origin. Rewrite the tag in place and assert
+# it took. (If the upstream renames the title, this will start failing and we
+# will find out at build-time, not on a user's screen.)
+if grep -q '<title>SocioProphet Web</title>' "$OUT/index.html"; then
+  perl -0pi -e 's{<title>SocioProphet Web</title>}{<title>BearBrowser Cockpit</title>}' "$OUT/index.html"
+fi
+grep -q '<title>BearBrowser Cockpit</title>' "$OUT/index.html" \
+  || { log "ERROR: failed to rewrite cockpit tab title; current title: $(grep -o '<title>[^<]*</title>' "$OUT/index.html")"; exit 1; }
+log "cockpit tab title → BearBrowser Cockpit"
+
 log "done: embedded cockpit at $OUT ($(find "$OUT" -type f | wc -l | tr -d ' ') files)"

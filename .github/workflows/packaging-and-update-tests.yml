@@ -1,0 +1,53 @@
+name: Packaging + update-check tests
+
+# Runs the two unit-test files that exist specifically to catch the classes of
+# bug that shipped in v150.0.1 → v150.0.5:
+#
+#   test_bearbrowser_patches.py  → actors alpha-sort, sweep NameError, pref line
+#                                  round-trip (bugs that only surface when the
+#                                  module actually executes, not on parse)
+#   test_update_check.mjs        → semver parser table (rc suffix), fetch
+#                                  hygiene keywords colocated on the update-call
+#
+# The larger `feature-plane.yml` is scoped to the agent-sidecar surface and was
+# not the right home for these. Keeping them in a dedicated workflow means one
+# change to the actor list or the update-check block triggers exactly the tests
+# that guard against known bugs, not the whole 21-check plane.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/bearbrowser-patches.py'
+      - 'settings/actors/*.sys.mjs'
+      - 'settings/start/bearstart-autoconfig.js'
+      - 'scripts/tests/test_bearbrowser_patches.py'
+      - 'scripts/tests/test_update_check.mjs'
+      - '.github/workflows/packaging-and-update-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/bearbrowser-patches.py'
+      - 'settings/actors/*.sys.mjs'
+      - 'settings/start/bearstart-autoconfig.js'
+      - 'scripts/tests/test_bearbrowser_patches.py'
+      - 'scripts/tests/test_update_check.mjs'
+      - '.github/workflows/packaging-and-update-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  patches-py:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -m pip install pytest
+      - run: python -m pytest scripts/tests/test_bearbrowser_patches.py -q
+
+  update-check-js:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node scripts/tests/test_update_check.mjs

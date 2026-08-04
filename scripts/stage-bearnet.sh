@@ -31,6 +31,10 @@ mkdir -p "$bs"
 for f in bearbrowser-start.html bearnet.html cockpit-waiter.html world.json dm-sans-latin.woff2 dm-sans-latin-ext.woff2; do
   [ -f "$REPO/settings/start/$f" ] && cp "$REPO/settings/start/$f" "$bs/"
 done
+# Wordmark SVG referenced by bearbrowser-start.html — sits next to the HTML so
+# it resolves from the same resource://bearstart/ origin without an extra
+# substitution. Without this, the wordmark falls back to nothing.
+[ -f "$REPO/branding/bearbrowser.svg" ] && cp "$REPO/branding/bearbrowser.svg" "$bs/"
 echo "stage-bearnet: pages → $bs ($(ls "$bs" | wc -l | tr -d ' ') files)"
 
 # 1b. BearBlocker filter lists, loose where resource://bearblocker/ resolves.

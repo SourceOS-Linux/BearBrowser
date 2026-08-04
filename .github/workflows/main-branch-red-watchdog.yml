@@ -1,0 +1,72 @@
+name: Watchdog (main-branch red check budget)
+
+# linux-packaging was silently red on `main` for a week because nothing paged
+# on a scheduled/push workflow being red > N hours. Symptom of a bigger class:
+# advisory-red checks that people learn to ignore.
+#
+# This watchdog scans every workflow's last completed run on `main` and files
+# ONE deduplicated issue if any of them have been red for > RED_BUDGET_HOURS.
+# Not per-workflow spam — a single "red budget exceeded" ticket that lists all
+# offenders. Closed automatically when the estate is green.
+
+on:
+  schedule:
+    - cron: '37 */3 * * *'   # every 3h, offset off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+env:
+  RED_BUDGET_HOURS: '6'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enumerate workflows + collect red ones
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Pull every workflow's most recent completed run on main
+          gh api "repos/${{ github.repository }}/actions/workflows?per_page=100" --jq '.workflows[] | select(.state == "active") | {id: .id, name: .name}' > wfs.json
+          RED=()
+          NOW=$(date -u +%s)
+          BUDGET=$((${RED_BUDGET_HOURS} * 3600))
+          jq -c '.' wfs.json | while read wf; do
+            ID=$(echo "$wf" | jq -r .id)
+            NAME=$(echo "$wf" | jq -r .name)
+            RUN=$(gh api "repos/${{ github.repository }}/actions/workflows/$ID/runs?branch=main&per_page=1&status=completed" --jq '.workflow_runs[0]' 2>/dev/null || echo "null")
+            [ "$RUN" = "null" ] && continue
+            CONC=$(echo "$RUN" | jq -r '.conclusion // ""')
+            AT=$(echo "$RUN" | jq -r '.updated_at // ""')
+            URL=$(echo "$RUN" | jq -r '.html_url // ""')
+            [ "$CONC" = "success" -o "$CONC" = "skipped" -o "$CONC" = "" ] && continue
+            AT_S=$(date -u -d "$AT" +%s 2>/dev/null || date -u -jf %Y-%m-%dT%H:%M:%SZ "$AT" +%s 2>/dev/null || echo 0)
+            AGE=$((NOW - AT_S))
+            [ "$AGE" -lt "$BUDGET" ] && continue
+            HOURS=$((AGE / 3600))
+            echo "* **$NAME** — $CONC for ${HOURS}h — $URL" >> red-list.md
+          done
+
+          if [ ! -s red-list.md ]; then
+            echo "estate is green — closing any open red-budget issues"
+            for n in $(gh issue list --repo ${{ github.repository }} --label "watchdog,red-budget" --state open --json number --jq '.[].number'); do
+              gh issue close "$n" --repo ${{ github.repository }} --comment "auto-closed: no workflows are red > ${RED_BUDGET_HOURS}h"
+            done
+            exit 0
+          fi
+
+          BODY="One or more workflows on \`main\` have been red for longer than the ${RED_BUDGET_HOURS}h budget:\n\n$(cat red-list.md)\n\nIf a workflow is knowingly advisory, either fix it or move it off the scan (edit .github/workflows/main-branch-red-watchdog.yml). Do not just ignore."
+          EXISTING=$(gh issue list --repo ${{ github.repository }} --label "watchdog,red-budget" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$EXISTING" ]; then
+            gh issue create --repo ${{ github.repository }} \
+              --title "watchdog: main red-check budget exceeded" \
+              --label "ci,watchdog,red-budget" \
+              --body "$(printf '%b' "$BODY")"
+          else
+            gh issue comment "$EXISTING" --repo ${{ github.repository }} \
+              --body "$(printf 'update at %s:\n\n%b' "$(date -u +%FT%TZ)" "$BODY")"
+          fi

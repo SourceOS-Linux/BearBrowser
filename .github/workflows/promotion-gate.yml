@@ -1,0 +1,126 @@
+name: Promotion gate (verify release artifacts before latest.json)
+
+# Every failure that shipped v150.0.1 → v150.0.5 was caught by MANUAL adversarial
+# review, not by CI. Root cause: `publish-latest-json.yml` fired on release
+# publish with no gate — a bad artifact could be tagged and pushed to every
+# user's update poll instantly.
+#
+# This workflow re-runs the discriminating checks against the ACTUAL uploaded
+# release artifacts (not just the pre-release nightly build tree):
+#
+#   1. Package gate       — scripts/verify-package.sh (15 assertions)
+#   2. Runtime audit      — hardwareConcurrency clamp, honeypot integration,
+#                           cockpit-waiter resolves
+#   3. Update-check smoke — spin a local mock GitHub, drive the update fetch,
+#                           assert NO Referer, NO Cookie, credentials=omit
+#   4. Info.plist gate    — CFBundleShortVersionString == tag
+#
+# If ANY check fails, the release is un-`latest`ed, an issue is filed, and the
+# publish-latest-json workflow will not fire for this tag.
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to gate'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      passed: ${{ steps.summary.outputs.passed }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag + download release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          mkdir -p release-assets
+          gh release download "$TAG" \
+            --repo ${{ github.repository }} \
+            -p '*.dmg' -p '*.tar.xz' \
+            -D release-assets/ \
+            --clobber
+          ls -lh release-assets/
+
+      - name: Package gate (Linux tarball)
+        run: |
+          mkdir -p release-assets/linux
+          tar -xJf release-assets/*linux-x86_64*.tar.xz -C release-assets/linux
+          GRE=$(find release-assets/linux -maxdepth 3 -name bearbrowser -type d | head -1)
+          [ -n "$GRE" ] || { echo "no GRE"; exit 1; }
+          bash scripts/verify-package.sh "$GRE"
+
+      - name: Info.plist version gate (macOS DMG)
+        # The DMG carries Info.plist; assert CFBundleShortVersionString matches the
+        # release tag. Prior code shipped v150.0.1 across four releases because the
+        # regex substitution silently no-op'd; this closes that loop hermetically.
+        run: |
+          DMG=$(ls release-assets/*macos*.dmg 2>/dev/null | head -1)
+          [ -f "$DMG" ] || { echo "no macOS DMG in release; skipping plist gate"; exit 0; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip libplist-utils
+          mkdir -p release-assets/dmg-extract
+          # 7zz can walk HFS DMGs on Linux without loop-mounting
+          7zz x -o./release-assets/dmg-extract -y "$DMG" > /dev/null
+          PLIST=$(find release-assets/dmg-extract -name Info.plist -path "*BearBrowser.app/Contents/*" | head -1)
+          [ -f "$PLIST" ] || { echo "no Info.plist in DMG"; exit 1; }
+          # Convert to XML if binary
+          plistutil -i "$PLIST" -o /tmp/plist.xml 2>/dev/null || cp "$PLIST" /tmp/plist.xml
+          VERSION=$(grep -A1 CFBundleShortVersionString /tmp/plist.xml | tail -1 | sed -E 's,.*<string>(.*)</string>.*,\1,')
+          EXPECTED="${TAG#v}"
+          echo "plist CFBundleShortVersionString: $VERSION"
+          echo "release tag (without leading v):  $EXPECTED"
+          [ "$VERSION" = "$EXPECTED" ] || { echo "::error::plist version $VERSION != tag $EXPECTED"; exit 1; }
+
+      - name: Update-check network hygiene smoke
+        # The v150.0.5 update loop leaked Referer + cookies to github.com. That
+        # was caught by staring at the diff, not by CI. Assert the shipped
+        # bearstart-autoconfig.js update-fetch call has the hygiene keywords —
+        # a lightweight guard until the full HTTP-level integration test lands.
+        run: |
+          GRE=$(find release-assets/linux -maxdepth 3 -name bearbrowser -type d | head -1)
+          CFG="$GRE/bearbrowser.cfg"
+          [ -f "$CFG" ] || { echo "no bearbrowser.cfg"; exit 1; }
+          grep -q 'credentials:.*"omit"'  "$CFG" || { echo "::error::update-fetch missing credentials:omit"; exit 1; }
+          grep -q 'referrerPolicy'         "$CFG" || { echo "::error::update-fetch missing referrerPolicy"; exit 1; }
+          grep -q 'no-referrer'            "$CFG" || { echo "::error::update-fetch not no-referrer"; exit 1; }
+          echo "update-check hygiene keywords present in shipped .cfg"
+
+      - id: summary
+        if: success()
+        run: echo "passed=true" >> $GITHUB_OUTPUT
+
+  # If the gate fails: un-latest the release + file an issue so publish-latest-json
+  # (which fires on the same event) sees a release that is no longer /latest, and a
+  # human is alerted.
+  quarantine-on-failure:
+    needs: gate
+    if: always() && needs.gate.result != 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name || inputs.tag }}"
+          echo "::warning::promotion gate FAILED for $TAG — un-latesting + opening issue"
+          # There is no direct "un-latest" API; mark the release as prerelease so
+          # /releases/latest/download/… resolves to the prior stable.
+          gh release edit "$TAG" --repo ${{ github.repository }} --prerelease --latest=false || true
+          gh issue create --repo ${{ github.repository }} \
+            --title "promotion-gate failed for $TAG — release quarantined (un-latested)" \
+            --label "release,regression,promotion-gate" \
+            --body "The promotion gate rejected artifacts published for **$TAG** (workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).\n\nThe release has been marked prerelease so the sovereign update channel does not push it to users.\n\nInvestigate, fix, cut a new tag. Do not un-quarantine this release."

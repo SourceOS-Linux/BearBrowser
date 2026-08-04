@@ -1,0 +1,72 @@
+name: Watchdog (re-verify /latest is still healthy)
+
+# Continuous verification that whatever `/releases/latest/download/…` currently
+# resolves to STILL passes the promotion gate. Catches:
+#   - A newly-published release that regressed the gate (belt+suspenders to
+#     promotion-gate.yml)
+#   - Silent asset corruption or accidental overwrite
+#   - The gate itself getting stricter after the fact
+#
+# On failure: files an issue AND flips the release to prerelease so the update
+# channel stops handing it out.
+
+on:
+  schedule:
+    - cron: '13 */6 * * *'   # every 6h, offset off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  reverify-latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Resolve what /releases/latest resolves to right now.
+          TAG=$(gh api "repos/${{ github.repository }}/releases/latest" --jq '.tag_name')
+          [ -n "$TAG" ] || { echo "::error::no /latest release exists"; exit 1; }
+          echo "TAG=$TAG" >> $GITHUB_ENV
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "watchdog is re-verifying $TAG"
+
+      - name: Download + re-verify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "$TAG" \
+            --repo ${{ github.repository }} \
+            -p '*.tar.xz' \
+            -D assets/ \
+            --clobber
+          mkdir -p assets/linux
+          tar -xJf assets/*linux-x86_64*.tar.xz -C assets/linux
+          GRE=$(find assets/linux -maxdepth 3 -name bearbrowser -type d | head -1)
+          bash scripts/verify-package.sh "$GRE"
+
+      - name: Quarantine + issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          echo "::error::watchdog: /latest ($TAG) failed re-verification"
+          gh release edit "$TAG" --repo ${{ github.repository }} --prerelease --latest=false || true
+          # Dedupe: only one open watchdog issue at a time.
+          EXISTING=$(gh issue list --repo ${{ github.repository }} --label "watchdog,release" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -z "$EXISTING" ]; then
+            gh issue create --repo ${{ github.repository }} \
+              --title "watchdog: /latest release $TAG regressed the gate — quarantined" \
+              --label "release,regression,watchdog" \
+              --body "Re-verification of $TAG failed — the release has been un-latested. Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            gh issue comment "$EXISTING" --repo ${{ github.repository }} \
+              --body "watchdog: still failing at $(date -u +%FT%TZ) — ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi

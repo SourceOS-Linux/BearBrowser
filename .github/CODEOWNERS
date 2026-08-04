@@ -1,0 +1,28 @@
+# CODEOWNERS — @mdheller owns everything by default. The point of this file
+# right now isn't team assignment (there is no team); it's forcing a review
+# request on the load-bearing gate files below so a PR that touches them
+# CANNOT be merged without an explicit request/approval trail.
+#
+# When contributors join, split ownership by area. Until then: default + gates.
+
+*                                       @mdheller
+
+# ── Load-bearing gates ─────────────────────────────────────────────────────
+# Any change to these files must be reviewed with the adversarial-review
+# checklist in mind. They are the tripwires that catch the classes of bug
+# that shipped in v150.0.1 → v150.0.5. If they're weakened silently, we
+# regress to that era.
+scripts/verify-package.sh               @mdheller
+scripts/bearbrowser-patches.py          @mdheller
+settings/start/bearstart-autoconfig.js  @mdheller
+settings/actors/*.sys.mjs               @mdheller
+packaging/macos/Info.plist.template     @mdheller
+scripts/publish-latest-json.sh          @mdheller
+scripts/tests/**                        @mdheller
+.github/workflows/promotion-gate.yml    @mdheller
+.github/workflows/watchdog-latest-release.yml   @mdheller
+.github/workflows/rs-mirror-preflight.yml       @mdheller
+.github/workflows/main-branch-red-watchdog.yml  @mdheller
+.github/workflows/packaging-and-update-tests.yml @mdheller
+.github/PULL_REQUEST_TEMPLATE.md        @mdheller
+.github/CODEOWNERS                      @mdheller
