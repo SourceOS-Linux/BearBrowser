@@ -49,13 +49,14 @@ jobs:
           echo "listing rs-mirror/ prefix (needs storage.objects.list on bucket + objectViewer/objectAdmin on prefix)"
           gcloud storage ls gs://sourceos-artifacts-socioprophet/rs-mirror/ | head -5
 
-      - name: Rsync dry-run (write path)
-        # Prove we CAN write under rs-mirror/ without actually pushing anything.
-        # gcloud storage rsync has no --dry-run; use --check-hashes with an
-        # empty temp dir which yields "nothing to sync" iff perms are correct.
+      - name: Write-perm smoke (upload + delete a preflight marker)
+        # Prove we CAN write under rs-mirror/ WITHOUT scanning the whole live tree
+        # (rsync of a large destination hangs the runner). Bounded, deterministic:
+        # upload a tiny marker, delete it, done in seconds.
+        timeout-minutes: 3
         run: |
-          mkdir -p /tmp/rs-empty
-          gcloud storage rsync /tmp/rs-empty \
-            gs://sourceos-artifacts-socioprophet/rs-mirror/live/ \
-            --exclude '.*'
-          echo "write-path smoke ok"
+          MARKER="preflight-$(date -u +%Y%m%dT%H%M%S)-${GITHUB_RUN_ID}.txt"
+          echo "rs-mirror-preflight ok at $(date -u +%FT%TZ)" > "/tmp/$MARKER"
+          gcloud storage cp "/tmp/$MARKER" "gs://sourceos-artifacts-socioprophet/rs-mirror/preflight/$MARKER"
+          gcloud storage rm "gs://sourceos-artifacts-socioprophet/rs-mirror/preflight/$MARKER"
+          echo "write-perm smoke ok — WIF can upload + delete under rs-mirror/"
