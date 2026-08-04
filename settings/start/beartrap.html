@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BearTrap — Fingerprint & Vendor Log</title>
+<meta name="referrer" content="no-referrer">
+<style>
+:root {
+  --bg: #0f1114;
+  --panel: #171a20;
+  --border: #262a33;
+  --text: #d8d8dc;
+  --muted: #9096a0;
+  --accent: #d8a15d;
+  --danger: #e57373;
+  --ok: #6fbf6f;
+  --chip-bg: #262a33;
+  --chip-text: #d8d8dc;
+  --code: #202430;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg:#f6f6f8; --panel:#fff; --border:#d5d7de; --text:#1a1d24; --muted:#6b7280; --accent:#8a5a2b; --danger:#c14444; --ok:#3d7a3d; --chip-bg:#e9e9ee; --chip-text:#1a1d24; --code:#eef0f4; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+body { max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.3px; }
+h1 .subtitle { font-weight: 400; font-size: 13px; color: var(--muted); margin-left: 8px; }
+h2 { font-size: 15px; margin: 32px 0 8px; letter-spacing: -0.1px; }
+h2 .count { display: inline-block; background: var(--chip-bg); color: var(--chip-text); border-radius: 999px; padding: 1px 8px; margin-left: 6px; font-size: 11px; font-weight: 500; vertical-align: middle; }
+
+.tabs { display: flex; gap: 6px; margin: 20px 0 0; border-bottom: 1px solid var(--border); }
+.tab { padding: 8px 12px; cursor: pointer; color: var(--muted); font-size: 13px; border-bottom: 2px solid transparent; }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.panel { display: none; padding-top: 16px; }
+.panel.active { display: block; }
+
+.status-line { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.status-line .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
+.status-line.live .dot { background: var(--ok); }
+.status-line.offline .dot { background: var(--danger); }
+
+.event { display: grid; grid-template-columns: 90px 1fr auto; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); margin-bottom: 6px; align-items: center; }
+.event .ts { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; color: var(--muted); }
+.event .body { min-width: 0; overflow: hidden; }
+.event .body .primary { font-weight: 500; font-size: 13px; }
+.event .body .secondary { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event .tag { display: inline-block; background: var(--code); color: var(--text); border-radius: 4px; padding: 1px 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; }
+.event .tag.fp { color: var(--accent); }
+.event .tag.vendor { color: var(--danger); }
+.event .tag.canary { color: var(--ok); }
+
+.empty { color: var(--muted); font-size: 13px; padding: 24px 0; text-align: center; }
+.explain { color: var(--muted); font-size: 13px; margin: 8px 0 16px; }
+
+.header-actions { float: right; margin-top: -22px; }
+.header-actions button { background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+.header-actions button:hover { color: var(--text); border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="header-actions">
+  <button id="clearBtn" title="Clear the local view (does not reset counters)">Clear view</button>
+</div>
+
+<h1>BearTrap <span class="subtitle">what the honeypot has caught this session</span></h1>
+
+<div id="status" class="status-line offline"><span class="dot"></span><span id="statusText">connecting to loopback sidecar…</span></div>
+
+<div class="tabs" role="tablist">
+  <div class="tab active" data-tab="beartrap"  role="tab">Fingerprint probes <span class="count" id="c_beartrap">0</span></div>
+  <div class="tab"        data-tab="bearwall"  role="tab">Blocked vendors    <span class="count" id="c_bearwall">0</span></div>
+  <div class="tab"        data-tab="canary"    role="tab">Canary tokens      <span class="count" id="c_canary">0</span></div>
+</div>
+
+<div id="p_beartrap" class="panel active">
+  <p class="explain">Every fingerprinting probe the browser sees is caught here — Canvas, WebGL, AudioContext, font enumeration, timing, hardware-concurrency, and more. The origin that ran the probe is recorded so you can see who is trying to identify you.</p>
+  <div id="list_beartrap"><div class="empty">No fingerprint probes caught yet in this session.</div></div>
+</div>
+
+<div id="p_bearwall" class="panel">
+  <p class="explain">BearWall enforces a hard denylist of upstream telemetry / update / crash / metrics endpoints. When it blocks a request, the host + count is logged here. If the honeypot sink is enabled, blocked requests are redirected to a loopback endpoint that returns 204 — recorded here.</p>
+  <div id="list_bearwall"><div class="empty">No vendor requests blocked yet in this session.</div></div>
+</div>
+
+<div id="p_canary" class="panel">
+  <p class="explain">Canary tokens are per-origin sentinel strings BearTrap injects into hidden fields. If a request body contains one, a script scraped the field and is exfiltrating — the origin, destination, and matched token are recorded here.</p>
+  <div id="list_canary"><div class="empty">No canary-token exfiltrations detected in this session.</div></div>
+</div>
+
+<script>
+(() => {
+  const SIDECAR = "http://127.0.0.1:8093";
+  const POLL_MS = 2000;
+  const MAX_ROWS = 200;
+  const status = document.getElementById("status");
+  const statusText = document.getElementById("statusText");
+  const seen = new Set(); // dedupe key = kind|ts|dest|origin
+  const rows = { fingerprint: [], "vendor-blocked": [], canary: [] };
+
+  // Tabs
+  const tabs = document.querySelectorAll(".tab");
+  const panels = { beartrap: document.getElementById("p_beartrap"),
+                   bearwall: document.getElementById("p_bearwall"),
+                   canary:   document.getElementById("p_canary") };
+  tabs.forEach(t => t.addEventListener("click", () => {
+    tabs.forEach(x => x.classList.toggle("active", x === t));
+    const which = t.dataset.tab;
+    for (const [k, p] of Object.entries(panels)) p.classList.toggle("active", k === which);
+  }));
+
+  document.getElementById("clearBtn").addEventListener("click", () => {
+    for (const k of Object.keys(rows)) rows[k] = [];
+    seen.clear();
+    render();
+  });
+
+  const fmtTime = ts => {
+    const d = new Date(ts * 1000 || ts);
+    if (isNaN(d.getTime())) return "";
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    const s = String(d.getSeconds()).padStart(2, "0");
+    return `${h}:${m}:${s}`;
+  };
+
+  const eventNode = (e, kindClass, tag) => {
+    const wrap = document.createElement("div");
+    wrap.className = "event";
+    const ts = e.ts || e.time || e.timestamp || Math.floor(Date.now() / 1000);
+    const primary = e.origin || e.dest || e.host || "(unknown)";
+    const secondary = e.dest && e.origin && e.dest !== e.origin ? "→ " + e.dest
+                    : e.probe ? "probe: " + e.probe
+                    : e.token ? "token: " + e.token
+                    : e.path ? e.path
+                    : "";
+    wrap.innerHTML = `
+      <div class="ts">${fmtTime(ts)}</div>
+      <div class="body">
+        <div class="primary">${escapeHTML(primary)}</div>
+        <div class="secondary">${escapeHTML(secondary)}</div>
+      </div>
+      <div class="tag ${kindClass}">${tag}</div>
+    `;
+    return wrap;
+  };
+
+  const escapeHTML = s => String(s).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  const renderList = (containerId, items, kindClass, tag, emptyText) => {
+    const el = document.getElementById(containerId);
+    el.innerHTML = "";
+    if (!items.length) {
+      const em = document.createElement("div");
+      em.className = "empty";
+      em.textContent = emptyText;
+      el.appendChild(em);
+      return;
+    }
+    // newest first
+    const view = items.slice(-MAX_ROWS).reverse();
+    for (const e of view) el.appendChild(eventNode(e, kindClass, tag));
+  };
+
+  const render = () => {
+    document.getElementById("c_beartrap").textContent = rows.fingerprint.length;
+    document.getElementById("c_bearwall").textContent = rows["vendor-blocked"].length;
+    document.getElementById("c_canary").textContent = rows.canary.length;
+    renderList("list_beartrap", rows.fingerprint, "fp", "probe",
+      "No fingerprint probes caught yet in this session.");
+    renderList("list_bearwall", rows["vendor-blocked"], "vendor", "blocked",
+      "No vendor requests blocked yet in this session.");
+    renderList("list_canary", rows.canary, "canary", "exfil",
+      "No canary-token exfiltrations detected in this session.");
+  };
+
+  const ingest = e => {
+    if (!e || typeof e !== "object") return;
+    const kind = e.kind || "fingerprint";
+    const key = kind + "|" + (e.ts || e.time || "") + "|" + (e.origin || "") + "|" + (e.dest || e.host || e.probe || "");
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (!rows[kind]) rows[kind] = [];
+    rows[kind].push(e);
+    if (rows[kind].length > MAX_ROWS) rows[kind] = rows[kind].slice(-MAX_ROWS);
+  };
+
+  const setStatus = (state, text) => {
+    status.className = "status-line " + state;
+    statusText.textContent = text;
+  };
+
+  const poll = async () => {
+    try {
+      const r = await fetch(SIDECAR + "/honeypot", { cache: "no-store", credentials: "omit" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      const list = Array.isArray(data) ? data : Array.isArray(data.events) ? data.events : [];
+      for (const e of list) ingest(e);
+      setStatus("live", `live · ${rows.fingerprint.length + rows["vendor-blocked"].length + rows.canary.length} events`);
+      render();
+    } catch (err) {
+      setStatus("offline", "loopback sidecar unreachable (BearNet may be offline)");
+    }
+  };
+
+  poll();
+  setInterval(poll, POLL_MS);
+
+  // Deep-link support: #bearwall or #canary jumps straight to that tab
+  const hash = (location.hash || "").replace("#", "");
+  if (hash === "bearwall" || hash === "canary" || hash === "beartrap") {
+    document.querySelector(`.tab[data-tab="${hash}"]`).click();
+  }
+})();
+</script>
+
+</body>
+</html>
