@@ -135,5 +135,22 @@ jobs:
           & $signtool sign /f $env:REHEARSAL_PFX /p "rehearsal" `
                      /fd SHA256 /td SHA256 /tr http://timestamp.digicert.com `
                      $exe.FullName
-          & $signtool verify /pa $exe.FullName
+          if ($LASTEXITCODE -ne 0) { Write-Error "signtool sign failed"; exit 1 }
+          # Do NOT use `signtool verify /pa` — that requires the cert to chain
+          # to a machine-trusted root, which a self-signed rehearsal cert
+          # cannot do by definition. The meaningful assertion is: a signature
+          # is now present on the exe. Get-AuthenticodeSignature reports the
+          # signer info even when the chain is untrusted, which is exactly
+          # what we need for rehearsal — proof signtool ran end-to-end.
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          Write-Host "signature status: $($sig.Status)"
+          Write-Host "signer subject:   $($sig.SignerCertificate.Subject)"
+          if (-not $sig.SignerCertificate) {
+            Write-Error "no signer certificate attached — sign step did not produce a signature"
+            exit 1
+          }
+          if ($sig.SignerCertificate.Subject -notlike "*BearBrowser Rehearsal*") {
+            Write-Error "signer subject does not match rehearsal cert: $($sig.SignerCertificate.Subject)"
+            exit 1
+          }
           Write-Host "rehearsal OK — pipeline can sign a real EXE when secrets arrive"
