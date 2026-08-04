@@ -183,6 +183,12 @@ try {
 // %LOCALE% per install. Our version: fetch a static latest.json from the release
 // page ONCE PER WEEK, compare, notify via observer if newer. No auto-download.
 // One GitHub HTTPS request per user per week, no fingerprint-bearing template.
+//
+// Channel selection: `bearbrowser.update.channel` (string) → "stable" (default)
+// or "canary". Canary users get latest-canary.json — a release soaks on canary
+// for 24-72h before being promoted to stable. This contains regressions (like
+// the v150.0.5 Referer leak or the semver rc-suffix parse break) to a small
+// opt-in population instead of every user's next weekly poll.
 try {
   const LAST_KEY = "bearbrowser.update.last_check";
   const WEEK_MS = 7 * 24 * 3600 * 1000;
@@ -192,7 +198,12 @@ try {
     Services.prefs.setIntPref(LAST_KEY, now);
     // 30s delay so this never adds to startup latency
     setTimeout(() => {
-      fetch("https://github.com/SourceOS-Linux/BearBrowser/releases/latest/download/latest.json",
+      const channel = Services.prefs.getCharPref(
+        "bearbrowser.update.channel", "stable"
+      );
+      const manifest = channel === "canary" ? "latest-canary.json" : "latest.json";
+      const url = "https://github.com/SourceOS-Linux/BearBrowser/releases/latest/download/" + manifest;
+      fetch(url,
             { cache: "no-store",
               credentials: "omit",          // never send GitHub any cookie
               referrer: "",                 // no Referer header at all

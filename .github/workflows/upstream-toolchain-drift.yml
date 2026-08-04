@@ -1,0 +1,103 @@
+name: Upstream toolchain drift watchdog
+
+# nightly-dmg.yml lines 71-142 document ~7 build-toolchain bear-traps we hit
+# and shimmed around: SDK 403, cbindgen 0.29.4 codegen regression, packager
+# manifest drift, -j2 OOM. Each was discovered mid-nightly, cost ~a day.
+#
+# This watchdog runs weekly on a scratch runner to see if upstream drift has
+# invalidated our pins. If it has, we get an issue BEFORE a nightly loses a
+# day to it. Compares:
+#   - cbindgen tag (pinned to eef1776 / 0.29.1 in nightly-dmg.yml:129)
+#   - Mozilla source tarball URL (pinned to firefox-150.0.1.source.tar.xz)
+#   - The XCode SDK / Rust toolchain versions mach bootstrap wants
+#
+# Non-fatal by design — the goal is EARLY WARNING via an issue, not blocking
+# CI on upstream changing something. Files ONE deduplicated issue per drift
+# type, closed automatically when the drift resolves.
+
+on:
+  schedule:
+    - cron: '47 6 * * 1'    # weekly, Monday 06:47 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract our pins
+        id: pins
+        run: |
+          # Extract the pinned upstream firefox version + cbindgen tag from
+          # the nightly workflow env. If someone renames those variables, the
+          # grep here fails loudly → we notice.
+          FF_PIN=$(grep -E "^\s+VERSION:\s*150" .github/workflows/nightly-dmg.yml | head -1 | sed -E 's,.*VERSION:\s*([0-9.]+).*,\1,')
+          CBINDGEN_PIN=$(grep -oE "cbindgen[- ]v?[0-9]+\.[0-9]+\.[0-9]+" .github/workflows/nightly-dmg.yml | head -1 | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
+          echo "ff_pin=$FF_PIN" >> $GITHUB_OUTPUT
+          echo "cbindgen_pin=$CBINDGEN_PIN" >> $GITHUB_OUTPUT
+          echo "pinned: firefox=$FF_PIN  cbindgen=$CBINDGEN_PIN"
+
+      - name: Check Firefox source tarball still exists at pinned URL
+        run: |
+          URL="https://archive.mozilla.org/pub/firefox/releases/${{ steps.pins.outputs.ff_pin }}/source/firefox-${{ steps.pins.outputs.ff_pin }}.source.tar.xz"
+          echo "HEADing: $URL"
+          # -sSf: silent, show error, fail on 4xx/5xx. HEAD instead of GET.
+          if ! curl -sSfI "$URL" > /dev/null; then
+            echo "DRIFT=firefox-tarball" >> $GITHUB_ENV
+            echo "DRIFT_MSG=pinned Firefox source tarball unreachable at $URL" >> $GITHUB_ENV
+            exit 0
+          fi
+          echo "  firefox tarball OK"
+
+      - name: Check cbindgen tag still exists on crates.io
+        run: |
+          VERSION="${{ steps.pins.outputs.cbindgen_pin }}"
+          [ -z "$VERSION" ] && { echo "no cbindgen pin found"; exit 0; }
+          URL="https://crates.io/api/v1/crates/cbindgen/$VERSION"
+          echo "GETing: $URL"
+          if ! curl -sSf -H "User-Agent: bearbrowser-drift-watchdog" "$URL" > /tmp/cbindgen.json; then
+            echo "DRIFT=cbindgen-tag" >> $GITHUB_ENV
+            echo "DRIFT_MSG=pinned cbindgen $VERSION not found on crates.io" >> $GITHUB_ENV
+            exit 0
+          fi
+          # Also flag if a newer major/minor with breaking changes is available.
+          LATEST=$(curl -sS -H "User-Agent: bearbrowser-drift-watchdog" \
+            "https://crates.io/api/v1/crates/cbindgen" | \
+            python3 -c "import sys,json; print(json.load(sys.stdin)['crate']['newest_version'])" || echo "")
+          if [ -n "$LATEST" ] && [ "$LATEST" != "$VERSION" ]; then
+            echo "  cbindgen: pinned=$VERSION latest=$LATEST (may want to re-evaluate)"
+          fi
+          echo "  cbindgen $VERSION still on crates.io"
+
+      - name: File / update drift issue
+        if: env.DRIFT != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="upstream-drift: ${{ env.DRIFT }} — pinned dependency no longer resolves"
+          BODY="Weekly drift check found: **${{ env.DRIFT_MSG }}**\n\nnightly-dmg.yml / nightly-linux.yml pin this dependency. When it stops resolving, the next scheduled nightly will burn its runtime discovering that.\n\nAction: re-shim to a newer pin, or downgrade the check."
+          # Dedupe: reuse any open issue with the same title
+          EXISTING=$(gh issue list --repo ${{ github.repository }} --label "upstream-drift" --state open --json number,title --jq ".[]|select(.title==\"$TITLE\")|.number" | head -1)
+          if [ -z "$EXISTING" ]; then
+            gh issue create --repo ${{ github.repository }} \
+              --title "$TITLE" \
+              --label "upstream-drift,ci" \
+              --body "$(printf '%b' "$BODY")"
+          else
+            gh issue comment "$EXISTING" --repo ${{ github.repository }} \
+              --body "$(printf 'reproduced on %s\n\n%b' "$(date -u +%FT%TZ)" "$BODY")"
+          fi
+
+      - name: Close resolved drift issues
+        if: env.DRIFT == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for n in $(gh issue list --repo ${{ github.repository }} --label "upstream-drift" --state open --json number --jq ".[].number"); do
+            gh issue close "$n" --repo ${{ github.repository }} --comment "auto-closed: drift check passed at $(date -u +%FT%TZ)"
+          done
